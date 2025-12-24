@@ -18,6 +18,26 @@ inputs:
     description: Build artifacts directory
     required: false
     default: build
+  strict:
+    description: Run mkdocs build with --strict
+    required: false
+    default: 'true'
+  copy_artifacts_into_docs:
+    description: Copy EPUB + combined markdown into docs_dir/assets before mkdocs build
+    required: false
+    default: 'true'
+  cover_image:
+    description: Optional cover image path (relative to content repo)
+    required: false
+    default: ''
+  create_root_redirect:
+    description: Create public/index.html redirecting to /ru/
+    required: false
+    default: 'true'
+  redirect_target:
+    description: Redirect target for public/index.html
+    required: false
+    default: /ru/
 
 outputs:
   combined_md:
@@ -46,7 +66,7 @@ runs:
       with:
         python-version: '3.11'
 
-    - name: Install MkDocs + plugins
+    - name: Install Python deps (MkDocs + PyYAML)
       shell: bash
       run: |
         set -euo pipefail
@@ -63,9 +83,110 @@ runs:
     - name: Set up Pandoc
       uses: r-lib/actions/setup-pandoc@v2
 
-    - name: Build outputs (placeholder)
+    - name: Provide MkDocs hook (if missing)
       shell: bash
       run: |
         set -euo pipefail
-        echo "text-forge action skeleton is installed." 
-        echo "Next: port the pipeline scripts/assets from bongiozzo/whattodo and run combine → lua filter → epub → mkdocs build."
+        mkdir -p mkdocs/hooks
+        if [ ! -f "mkdocs/hooks/nobr_emoticons.py" ] && [ -f "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" ]; then
+          cp "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" "mkdocs/hooks/nobr_emoticons.py"
+        fi
+        # If the content repo's mkdocs.yml uses custom_dir: mkdocs/overrides, ensure the directory exists.
+        mkdir -p mkdocs/overrides
+
+    - name: Stage 1 - Combine markdown from mkdocs.yml
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${{ inputs.build_dir }}"
+        python "${{ github.action_path }}/scripts/mkdocs-combine.py" "${{ inputs.mkdocs_config }}" > "${{ inputs.build_dir }}/text_combined.txt"
+
+    - name: Stage 2 - Convert PyMdown blocks to Pandoc markdown
+      shell: bash
+      run: |
+        set -euo pipefail
+        pandoc -f markdown+smart "${{ inputs.build_dir }}/text_combined.txt" \
+          --lua-filter="${{ github.action_path }}/scripts/pymdown-pandoc.lua" \
+          --wrap=preserve \
+          -t markdown \
+          -o "${{ inputs.build_dir }}/pandoc.md"
+
+    - name: Process EPUB metadata placeholders
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${{ inputs.build_dir }}"
+        GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
+        GIT_DATE=$(git log -1 --format=%cd --date=format:%Y-%m-%d)
+        GIT_DATE_DISPLAY=$(echo "$GIT_DATE" | python - <<'PY'
+import sys, datetime
+months = {
+  'January': 'января', 'February': 'февраля', 'March': 'марта', 'April': 'апреля',
+  'May': 'мая', 'June': 'июня', 'July': 'июля', 'August': 'августа',
+  'September': 'сентября', 'October': 'октября', 'November': 'ноября', 'December': 'декабря'
+}
+d = datetime.datetime.strptime(sys.stdin.read().strip(), '%Y-%m-%d')
+s = d.strftime('%d %B %Y')
+for en, ru in months.items():
+  s = s.replace(en, ru)
+print(s)
+PY
+)
+        EDITION="$GIT_TAG, $GIT_DATE_DISPLAY"
+        sed -e "s/\[edition\]/$EDITION/" -e "s/\[date\]/$GIT_DATE/" \
+          "${{ github.action_path }}/epub/book_meta.yml" > "${{ inputs.build_dir }}/book_meta_processed.yml"
+
+    - name: Stage 3 - Generate EPUB
+      shell: bash
+      run: |
+        set -euo pipefail
+        COVER=""
+        if [ -n "${{ inputs.cover_image }}" ] && [ -f "${{ inputs.cover_image }}" ]; then
+          COVER="${{ inputs.cover_image }}"
+        elif [ -f "epub/cover.jpg" ]; then
+          COVER="epub/cover.jpg"
+        fi
+        COVER_ARG=""
+        if [ -n "$COVER" ]; then
+          COVER_ARG="--epub-cover-image=$COVER"
+        fi
+        pandoc -f markdown+smart "${{ inputs.build_dir }}/pandoc.md" \
+          -o "${{ inputs.build_dir }}/text_book.epub" \
+          --standalone \
+          --toc \
+          --toc-depth=2 \
+          --metadata-file="${{ inputs.build_dir }}/book_meta_processed.yml" \
+          --resource-path="${{ inputs.docs_dir }}" \
+          --css="${{ github.action_path }}/epub/epub.css" \
+          $COVER_ARG \
+          -t epub3
+
+    - name: Copy artifacts into docs assets
+      if: ${{ inputs.copy_artifacts_into_docs == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${{ inputs.docs_dir }}/assets"
+        cp "${{ inputs.build_dir }}/text_book.epub" "${{ inputs.docs_dir }}/assets/" 
+        cp "${{ inputs.build_dir }}/text_combined.txt" "${{ inputs.docs_dir }}/assets/"
+
+    - name: Build MkDocs site
+      shell: bash
+      run: |
+        set -euo pipefail
+        STRICT=""
+        if [ "${{ inputs.strict }}" = "true" ]; then
+          STRICT="--strict"
+        fi
+        mkdocs build --config-file="${{ inputs.mkdocs_config }}" --site-dir="${{ inputs.site_dir }}" $STRICT
+
+    - name: Create root redirect
+      if: ${{ inputs.create_root_redirect == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        PUBLIC_DIR=$(dirname "${{ inputs.site_dir }}")
+        mkdir -p "$PUBLIC_DIR"
+        cat > "$PUBLIC_DIR/index.html" <<HTML
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=${{ inputs.redirect_target }}"><link rel="canonical" href="${{ inputs.redirect_target }}"><title>Redirecting to ${{ inputs.redirect_target }}</title></head><body><p>Redirecting to <a href="${{ inputs.redirect_target }}">${{ inputs.redirect_target }}</a>...</p><script>window.location.href="${{ inputs.redirect_target }}";</script></body></html>
+HTML
