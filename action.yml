@@ -140,6 +140,9 @@ PY
       shell: bash
       run: |
         set -euo pipefail
+        if [ -n "${{ inputs.cover_image }}" ] && [ ! -f "${{ inputs.cover_image }}" ]; then
+          echo "::warning::cover_image was set to '${{ inputs.cover_image }}' but file was not found; falling back to epub/cover.jpg if present, otherwise building without cover."
+        fi
         COVER=""
         if [ -n "${{ inputs.cover_image }}" ] && [ -f "${{ inputs.cover_image }}" ]; then
           COVER="${{ inputs.cover_image }}"
