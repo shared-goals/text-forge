@@ -23,6 +23,17 @@ Use from a content repo:
 
 Example full workflow: `examples/content-repo-publish.yml`.
 
+## Comments (Giscus)
+This repo intentionally does **not** ship a preconfigured `mkdocs/overrides/partials/comments.html`.
+
+Reason: Giscus config must point to the *current* content repo (and its discussion category ids). Hardcoding a repo (like `bongiozzo/whattodo`) breaks forks/templates.
+
+Recommended approach (Option A): configure comments in each content repo, or skip them.
+
+## EPUB cover
+- Cover image is optional.
+- If you provide `cover_image` and the file exists, the action uses it.
+- If it’s missing, the action builds the EPUB **without** a cover (and emits a warning).
+
 ## Notes
 - Pipeline logic is ported from `bongiozzo/whattodo` (`scripts/` + `epub/`).
-- Cover image is optional: provide it in the content repo (recommended) and pass `cover_image`, or omit it.
