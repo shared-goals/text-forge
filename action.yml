@@ -1,0 +1,71 @@
+name: text-forge
+description: Build/publish a Markdown chapter collection into multiple formats (MkDocs site, EPUB, combined markdown)
+
+inputs:
+  mkdocs_config:
+    description: Path to mkdocs.yml
+    required: false
+    default: mkdocs.yml
+  docs_dir:
+    description: MkDocs docs_dir (where markdown lives)
+    required: false
+    default: text/ru
+  site_dir:
+    description: Output directory for MkDocs site
+    required: false
+    default: public/ru
+  build_dir:
+    description: Build artifacts directory
+    required: false
+    default: build
+
+outputs:
+  combined_md:
+    description: Path to combined markdown output
+    value: ${{ steps.paths.outputs.combined_md }}
+  pandoc_md:
+    description: Path to pandoc-normalized markdown output
+    value: ${{ steps.paths.outputs.pandoc_md }}
+  epub:
+    description: Path to generated EPUB
+    value: ${{ steps.paths.outputs.epub }}
+
+runs:
+  using: composite
+  steps:
+    - id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "combined_md=${{ inputs.build_dir }}/text_combined.txt" >> "$GITHUB_OUTPUT"
+        echo "pandoc_md=${{ inputs.build_dir }}/pandoc.md" >> "$GITHUB_OUTPUT"
+        echo "epub=${{ inputs.build_dir }}/text_book.epub" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install MkDocs + plugins
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+        python -m pip install \
+          mkdocs==1.6.1 \
+          mkdocs-material==9.6.22 \
+          mkdocs-git-committers-plugin-2==2.5.0 \
+          mkdocs-git-revision-date-localized-plugin==1.5.0 \
+          pyyaml==6.0.3 \
+          click==8.1.7 \
+          livereload==2.7.1
+
+    - name: Set up Pandoc
+      uses: r-lib/actions/setup-pandoc@v2
+
+    - name: Build outputs (placeholder)
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "text-forge action skeleton is installed." 
+        echo "Next: port the pipeline scripts/assets from bongiozzo/whattodo and run combine → lua filter → epub → mkdocs build."
