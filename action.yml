@@ -119,19 +119,19 @@ runs:
         GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
         GIT_DATE=$(git log -1 --format=%cd --date=format:%Y-%m-%d)
         GIT_DATE_DISPLAY=$(echo "$GIT_DATE" | python - <<'PY'
-import sys, datetime
-months = {
-  'January': 'января', 'February': 'февраля', 'March': 'марта', 'April': 'апреля',
-  'May': 'мая', 'June': 'июня', 'July': 'июля', 'August': 'августа',
-  'September': 'сентября', 'October': 'октября', 'November': 'ноября', 'December': 'декабря'
-}
-d = datetime.datetime.strptime(sys.stdin.read().strip(), '%Y-%m-%d')
-s = d.strftime('%d %B %Y')
-for en, ru in months.items():
-  s = s.replace(en, ru)
-print(s)
-PY
-)
+        import sys, datetime
+        months = {
+          'January': 'января', 'February': 'февраля', 'March': 'марта', 'April': 'апреля',
+          'May': 'мая', 'June': 'июня', 'July': 'июля', 'August': 'августа',
+          'September': 'сентября', 'October': 'октября', 'November': 'ноября', 'December': 'декабря'
+        }
+        d = datetime.datetime.strptime(sys.stdin.read().strip(), '%Y-%m-%d')
+        s = d.strftime('%d %B %Y')
+        for en, ru in months.items():
+          s = s.replace(en, ru)
+        print(s)
+        PY
+        )
         EDITION="$GIT_TAG, $GIT_DATE_DISPLAY"
         sed -e "s/\[edition\]/$EDITION/" -e "s/\[date\]/$GIT_DATE/" \
           "${{ github.action_path }}/epub/book_meta.yml" > "${{ inputs.build_dir }}/book_meta_processed.yml"
@@ -191,5 +191,5 @@ PY
         PUBLIC_DIR=$(dirname "${{ inputs.site_dir }}")
         mkdir -p "$PUBLIC_DIR"
         cat > "$PUBLIC_DIR/index.html" <<HTML
-<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=${{ inputs.redirect_target }}"><link rel="canonical" href="${{ inputs.redirect_target }}"><title>Redirecting to ${{ inputs.redirect_target }}</title></head><body><p>Redirecting to <a href="${{ inputs.redirect_target }}">${{ inputs.redirect_target }}</a>...</p><script>window.location.href="${{ inputs.redirect_target }}";</script></body></html>
-HTML
+        <!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=${{ inputs.redirect_target }}"><link rel="canonical" href="${{ inputs.redirect_target }}"><title>Redirecting to ${{ inputs.redirect_target }}</title></head><body><p>Redirecting to <a href="${{ inputs.redirect_target }}">${{ inputs.redirect_target }}</a>...</p><script>window.location.href="${{ inputs.redirect_target }}";</script></body></html>
+        HTML
