@@ -116,22 +116,34 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p "${{ inputs.build_dir }}"
+
         GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
-        GIT_DATE=$(git log -1 --format=%cd --date=format:%Y-%m-%d)
+
+        # Prefer a stable YYYY-MM-DD from git; fall back to current UTC date if unavailable.
+        GIT_DATE=$(git log -1 --format=%cs 2>/dev/null || true)
+        if [ -z "$GIT_DATE" ]; then
+          GIT_DATE=$(date -u +%Y-%m-%d)
+        fi
+
         GIT_DATE_DISPLAY=$(echo "$GIT_DATE" | python - <<'PY'
         import sys, datetime
+        s = sys.stdin.read().strip()
+        if not s:
+          print('')
+          raise SystemExit(0)
         months = {
           'January': 'января', 'February': 'февраля', 'March': 'марта', 'April': 'апреля',
           'May': 'мая', 'June': 'июня', 'July': 'июля', 'August': 'августа',
           'September': 'сентября', 'October': 'октября', 'November': 'ноября', 'December': 'декабря'
         }
-        d = datetime.datetime.strptime(sys.stdin.read().strip(), '%Y-%m-%d')
-        s = d.strftime('%d %B %Y')
+        d = datetime.datetime.strptime(s, '%Y-%m-%d')
+        out = d.strftime('%d %B %Y')
         for en, ru in months.items():
-          s = s.replace(en, ru)
-        print(s)
+          out = out.replace(en, ru)
+        print(out)
         PY
         )
+
         EDITION="$GIT_TAG, $GIT_DATE_DISPLAY"
         sed -e "s/\[edition\]/$EDITION/" -e "s/\[date\]/$GIT_DATE/" \
           "${{ github.action_path }}/epub/book_meta.yml" > "${{ inputs.build_dir }}/book_meta_processed.yml"
