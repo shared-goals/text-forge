@@ -215,7 +215,7 @@ runs:
 
         IS_SHALLOW=$(git rev-parse --is-shallow-repository 2>/dev/null || echo false)
         if [ "$IS_SHALLOW" = "true" ]; then
-          echo "::notice::Repository is shallow; fetching full history for accurate revision dates."
+          echo "Repository is shallow; fetching full history for accurate revision dates."
           git fetch --prune --unshallow --tags || true
         fi
 
