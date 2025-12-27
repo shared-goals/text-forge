@@ -23,6 +23,31 @@ Use from a content repo:
 
 Example full workflow: `examples/content-repo-publish.yml`.
 
+## Advanced: git-committers token
+
+If your MkDocs config enables `mkdocs-git-committers-plugin-2`, the plugin may need a GitHub token to avoid API rate limits.
+
+This action keeps the “entry level” low by exporting `github.token` as `MKDOCS_GIT_COMMITTERS_APIKEY` by default.
+
+Override/disable options:
+
+```yaml
+- uses: shared-goals/text-forge@v1
+  with:
+    # Use a PAT (recommended if you hit rate limits)
+    committers_token: ${{ secrets.COMMITTERS_TOKEN }}
+
+    # Or disable automatic token export entirely
+    use_github_token_for_committers: 'false'
+```
+
+## Git history (revision date accuracy)
+
+`mkdocs-git-revision-date-localized-plugin` can warn (and sometimes produce incorrect dates) if the repo is checked out shallowly.
+
+This action tries to detect shallow checkouts and runs a best-effort `git fetch --unshallow` before the MkDocs build.
+For best performance you can also set `fetch-depth: 0` in your `actions/checkout@v4` step.
+
 ## Comments (Giscus)
 This repo intentionally does **not** ship a preconfigured `mkdocs/overrides/partials/comments.html`.
 

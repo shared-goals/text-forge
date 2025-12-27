@@ -38,6 +38,18 @@ inputs:
     description: Redirect target for public/index.html
     required: false
     default: /ru/
+  ensure_full_git_history:
+    description: Fetch full git history if checkout is shallow (improves revision date accuracy)
+    required: false
+    default: 'true'
+  use_github_token_for_committers:
+    description: Export github.token as MKDOCS_GIT_COMMITTERS_APIKEY for mkdocs-git-committers-plugin-2
+    required: false
+    default: 'true'
+  committers_token:
+    description: Optional token to use for mkdocs-git-committers-plugin-2 (overrides github.token)
+    required: false
+    default: ''
 
 outputs:
   combined_md:
@@ -184,6 +196,26 @@ runs:
         mkdir -p "${{ inputs.docs_dir }}/assets"
         cp "${{ inputs.build_dir }}/text_book.epub" "${{ inputs.docs_dir }}/assets/" 
         cp "${{ inputs.build_dir }}/text_combined.txt" "${{ inputs.docs_dir }}/assets/"
+
+    - name: Configure git-committers token
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -n "${{ inputs.committers_token }}" ]; then
+          echo "MKDOCS_GIT_COMMITTERS_APIKEY=${{ inputs.committers_token }}" >> "$GITHUB_ENV"
+        elif [ "${{ inputs.use_github_token_for_committers }}" = "true" ]; then
+          echo "MKDOCS_GIT_COMMITTERS_APIKEY=${{ github.token }}" >> "$GITHUB_ENV"
+        fi
+
+    - name: Ensure full git history
+      if: ${{ inputs.ensure_full_git_history == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -f .git/shallow ]; then
+          echo "::notice::Repository is shallow; fetching full history for accurate revision dates."
+          git fetch --prune --unshallow --tags || true
+        fi
 
     - name: Build MkDocs site
       shell: bash
