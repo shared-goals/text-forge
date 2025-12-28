@@ -213,13 +213,25 @@ runs:
         site_url = str(mk.get('site_url', '') or '').strip()
         copyright_ = str(mk.get('copyright', '') or '').strip()
 
-        title = env('EPUB_TITLE', site_name or 'Book')
-        subtitle = env('EPUB_SUBTITLE', site_desc)
-        author = env('EPUB_AUTHOR', site_author)
-        identifier = env('EPUB_IDENTIFIER', site_url or 'urn:book')
-        publisher = env('EPUB_PUBLISHER', site_author or 'Publisher')
+        extra = mk.get('extra') or {}
+        epub = (extra.get('epub') or {}) if isinstance(extra, dict) else {}
+        epub_title = str(epub.get('title', '') or '').strip()
+        epub_subtitle = str(epub.get('subtitle', '') or '').strip()
+        epub_author = str(epub.get('author', '') or '').strip()
+        epub_identifier = str(epub.get('identifier', '') or '').strip()
+        epub_publisher = str(epub.get('publisher', '') or '').strip()
+        epub_rights = str(epub.get('rights', '') or '').strip()
 
-        default_rights = copyright_ if copyright_ else (f"<a href=\"{site_url}\">{site_url}\</a>" if site_url else '')
+        title = env('EPUB_TITLE', epub_title or site_name or 'Book')
+        subtitle = env('EPUB_SUBTITLE', epub_subtitle or site_desc)
+        author = env('EPUB_AUTHOR', epub_author or site_author)
+        identifier = env('EPUB_IDENTIFIER', epub_identifier or site_url or 'urn:book')
+        publisher = env('EPUB_PUBLISHER', epub_publisher or site_author or 'Publisher')
+
+        default_rights = (
+          epub_rights
+          or (copyright_ if copyright_ else (f"<a href=\"{site_url}\">{site_url}\</a>" if site_url else ''))
+        )
         rights = env('EPUB_RIGHTS', default_rights)
 
         text = meta_template_path.read_text(encoding='utf-8')
