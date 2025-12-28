@@ -171,7 +171,12 @@ runs:
 
         EDITION="$GIT_TAG, $GIT_DATE_DISPLAY"
 
-        python - <<'PY'
+  EDITION="$EDITION" \
+  DATE_ISO="$GIT_DATE" \
+  MKDOCS_CONFIG="${{ inputs.mkdocs_config }}" \
+  META_TEMPLATE="${{ github.action_path }}/epub/book_meta.yml" \
+  META_OUT="${{ inputs.build_dir }}/book_meta_processed.yml" \
+  python - <<'PY'
         import os
         import re
         from pathlib import Path
@@ -230,7 +235,7 @@ runs:
 
         default_rights = (
           epub_rights
-          or (copyright_ if copyright_ else (f"<a href=\"{site_url}\">{site_url}\</a>" if site_url else ''))
+          or (copyright_ if copyright_ else (f"<a href=\"{site_url}\">{site_url}</a>" if site_url else ''))
         )
         rights = env('EPUB_RIGHTS', default_rights)
 
@@ -256,11 +261,6 @@ runs:
 
         out_path.write_text(text, encoding='utf-8')
         PY
-        EDITION="$EDITION" \
-        DATE_ISO="$GIT_DATE" \
-        MKDOCS_CONFIG="${{ inputs.mkdocs_config }}" \
-        META_TEMPLATE="${{ github.action_path }}/epub/book_meta.yml" \
-        META_OUT="${{ inputs.build_dir }}/book_meta_processed.yml"
 
     - name: Stage 3 - Generate EPUB
       shell: bash
