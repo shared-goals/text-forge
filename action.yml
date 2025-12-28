@@ -171,12 +171,12 @@ runs:
 
         EDITION="$GIT_TAG, $GIT_DATE_DISPLAY"
 
-  EDITION="$EDITION" \
-  DATE_ISO="$GIT_DATE" \
-  MKDOCS_CONFIG="${{ inputs.mkdocs_config }}" \
-  META_TEMPLATE="${{ github.action_path }}/epub/book_meta.yml" \
-  META_OUT="${{ inputs.build_dir }}/book_meta_processed.yml" \
-  python - <<'PY'
+          EDITION="$EDITION" \
+          DATE_ISO="$GIT_DATE" \
+          MKDOCS_CONFIG="${{ inputs.mkdocs_config }}" \
+          META_TEMPLATE="${{ github.action_path }}/epub/book_meta.yml" \
+          META_OUT="${{ inputs.build_dir }}/book_meta_processed.yml" \
+          python - <<'PY'
         import os
         import re
         from pathlib import Path
