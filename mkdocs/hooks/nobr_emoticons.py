@@ -1,5 +1,9 @@
-"""
-MkDocs hook to wrap emoticons in <span class="nobr"> to prevent line breaks.
+"""MkDocs hook: wrap ASCII emoticons in ``<span class="md-nobr">…</span>``.
+
+This prevents emoticons like :-) / ;-) from breaking across lines.
+
+Content repos can override/customize behavior by pointing `hooks:` in mkdocs.yml
+to their own hook file instead of this one.
 """
 import re
 from mkdocs.config.defaults import MkDocsConfig

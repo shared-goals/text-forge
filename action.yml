@@ -99,12 +99,25 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mkdir -p mkdocs/hooks
-        if [ ! -f "mkdocs/hooks/nobr_emoticons.py" ] && [ -f "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" ]; then
-          cp "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" "mkdocs/hooks/nobr_emoticons.py"
+        # Content repos reference shared hooks/overrides via paths like:
+        #   hooks: [text-forge/mkdocs/hooks/nobr_emoticons.py]
+        #   theme.custom_dir: text-forge/mkdocs/overrides
+        # This step makes builds work even without a git submodule checkout.
+
+        mkdir -p text-forge/mkdocs/hooks text-forge/mkdocs/overrides/partials
+
+        # Hook
+        if [ -f "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" ]; then
+          cp -f "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" "text-forge/mkdocs/hooks/nobr_emoticons.py"
         fi
-        # If the content repo's mkdocs.yml uses custom_dir: mkdocs/overrides, ensure the directory exists.
-        mkdir -p mkdocs/overrides
+
+        # Theme overrides
+        if [ -f "${{ github.action_path }}/mkdocs/overrides/partials/comments.html" ]; then
+          cp -f "${{ github.action_path }}/mkdocs/overrides/partials/comments.html" "text-forge/mkdocs/overrides/partials/comments.html"
+        fi
+        if [ -f "${{ github.action_path }}/mkdocs/overrides/partials/source-file.html" ]; then
+          cp -f "${{ github.action_path }}/mkdocs/overrides/partials/source-file.html" "text-forge/mkdocs/overrides/partials/source-file.html"
+        fi
 
     - name: Stage 1 - Combine markdown from mkdocs.yml
       shell: bash

@@ -11,6 +11,11 @@
   2) **Normalize**: Pandoc runs `scripts/pymdown-pandoc.lua` to convert PyMdown-style `///` blocks into Pandoc `Div`s and to sanitize image attributes.
   3) **Publish artifacts**: Pandoc generates EPUB using `epub/book_meta.yml` (+ placeholder processing) and MkDocs builds the site.
 
+- Content repos may reference shared MkDocs assets from this repo via paths like:
+  - `hooks: [text-forge/mkdocs/hooks/nobr_emoticons.py]`
+  - `theme.custom_dir: text-forge/mkdocs/overrides`
+  The action provisions these paths at runtime so CI builds work even without a git submodule checkout.
+
 ## Key conventions baked into the build
 - `scripts/mkdocs-combine.py` (mkdocs.yml mode) requires `mkdocs.yml` to define: `docs_dir`, `nav`, and `site_url`.
 - Link rewriting in the combined doc:
@@ -22,7 +27,9 @@
 - MkDocs hook `mkdocs/hooks/nobr_emoticons.py` wraps emoticons in `<span class="md-nobr">…</span>` to prevent line breaks.
 
 ## Local dev workflow (mirrors the action)
-This repo does not ship a Python project/lockfile; local runs should mimic [action.yml](action.yml).
+Local runs should mirror [action.yml](action.yml).
+
+- Recommended: use `uv` (see `pyproject.toml` / `uv.lock`) and run via `uv run ...`.
 
 - Create combined markdown:
   - `python scripts/mkdocs-combine.py mkdocs.yml > build/text_combined.txt`

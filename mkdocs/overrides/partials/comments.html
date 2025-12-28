@@ -1,0 +1,79 @@
+{#
+  Shared template (text-forge).
+
+  Notes:
+  - Rendered only when page.meta.comments is truthy.
+  - Giscus repo identifiers are provided by the content repo via mkdocs.yml:
+      extra.giscus.repo
+      extra.giscus.repo_id
+      extra.giscus.category
+      extra.giscus.category_id
+  - If identifiers are not provided (e.g., env vars not set), comments are hidden.
+#}
+{% if page.meta.comments %}
+  {% set giscus = config.extra.get("giscus", {}) %}
+  {% set repo = giscus.get("repo") %}
+  {% set repo_id = giscus.get("repo_id") %}
+  {% set category = giscus.get("category") %}
+  {% set category_id = giscus.get("category_id") %}
+
+  {% if repo and repo_id and category and category_id %}
+    <h2 id="__comments">{{ lang.t("meta.comments") }}</h2>
+
+    <script src="https://giscus.app/client.js"
+            data-repo="{{ repo }}"
+            data-repo-id="{{ repo_id }}"
+            data-category="{{ category }}"
+            data-category-id="{{ category_id }}"
+            data-mapping="title"
+            data-strict="0"
+            data-reactions-enabled="1"
+            data-emit-metadata="1"
+            data-input-position="top"
+            data-theme="preferred_color_scheme"
+            data-lang="ru"
+            crossorigin="anonymous"
+            async>
+    </script>
+
+    {# Synchronize Giscus theme with Material palette #}
+    <script>
+      var giscus = document.querySelector("script[src*=giscus]")
+
+      // Set palette on initial load
+      var palette = __md_get("__palette")
+      if (palette && typeof palette.color === "object") {
+        var theme = palette.color.scheme === "slate"
+          ? "transparent_dark"
+          : "light"
+
+        // Instruct Giscus to set theme
+        giscus.setAttribute("data-theme", theme)
+      }
+
+      // Register event handlers after document loaded
+      document.addEventListener("DOMContentLoaded", function() {
+        var ref = document.querySelector("[data-md-component=palette]")
+        if (!ref) return
+
+        ref.addEventListener("change", function() {
+          var palette = __md_get("__palette")
+          if (palette && typeof palette.color === "object") {
+            var theme = palette.color.scheme === "slate"
+              ? "transparent_dark"
+              : "light"
+
+            // Instruct Giscus to change theme
+            var frame = document.querySelector(".giscus-frame")
+            if (!frame) return
+
+            frame.contentWindow.postMessage(
+              { giscus: { setConfig: { theme } } },
+              "https://giscus.app"
+            )
+          }
+        })
+      })
+    </script>
+  {% endif %}
+{% endif %}
