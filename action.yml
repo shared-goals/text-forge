@@ -124,7 +124,7 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p "${{ inputs.build_dir }}"
-        python "${{ github.action_path }}/scripts/mkdocs-combine.py" "${{ inputs.mkdocs_config }}" > "${{ inputs.build_dir }}/text_combined.txt"
+        python3 "${{ github.action_path }}/scripts/mkdocs-combine.py" "${{ inputs.mkdocs_config }}" > "${{ inputs.build_dir }}/text_combined.txt"
 
     - name: Stage 2 - Convert PyMdown blocks to Pandoc markdown
       shell: bash
@@ -150,7 +150,7 @@ runs:
           GIT_DATE=$(date -u +%Y-%m-%d)
         fi
 
-        GIT_DATE_DISPLAY=$(echo "$GIT_DATE" | python - <<'PY'
+        GIT_DATE_DISPLAY=$(echo "$GIT_DATE" | python3 - <<'PY'
         import sys, datetime
         s = sys.stdin.read().strip()
         if not s:
@@ -169,9 +169,13 @@ runs:
         PY
         )
 
+        if [ -z "$GIT_DATE_DISPLAY" ]; then
+          GIT_DATE_DISPLAY="$GIT_DATE"
+        fi
+
         EDITION="$GIT_TAG, $GIT_DATE_DISPLAY"
 
-        python "${{ github.action_path }}/scripts/process-epub-meta.py" \
+        python3 "${{ github.action_path }}/scripts/process-epub-meta.py" \
           --mkdocs-config "${{ inputs.mkdocs_config }}" \
           --template "${{ github.action_path }}/epub/book_meta.yml" \
           --out "${{ inputs.build_dir }}/book_meta_processed.yml" \
