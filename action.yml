@@ -170,8 +170,85 @@ runs:
         )
 
         EDITION="$GIT_TAG, $GIT_DATE_DISPLAY"
-        sed -e "s/\[edition\]/$EDITION/" -e "s/\[date\]/$GIT_DATE/" \
-          "${{ github.action_path }}/epub/book_meta.yml" > "${{ inputs.build_dir }}/book_meta_processed.yml"
+
+        python - <<'PY'
+        import os
+        import re
+        from pathlib import Path
+
+        import yaml
+
+        class _IgnoreUnknownTagsLoader(yaml.SafeLoader):
+          pass
+
+        def _unknown(loader, tag_suffix, node):
+          # Handle mkdocs.yml custom tags like !ENV by returning the underlying scalar/sequence.
+          if isinstance(node, yaml.ScalarNode):
+            return loader.construct_scalar(node)
+          if isinstance(node, yaml.SequenceNode):
+            return loader.construct_sequence(node)
+          if isinstance(node, yaml.MappingNode):
+            return loader.construct_mapping(node)
+          return None
+
+        _IgnoreUnknownTagsLoader.add_multi_constructor('!', _unknown)
+
+        mkdocs_path = Path(os.environ['MKDOCS_CONFIG'])
+        meta_template_path = Path(os.environ['META_TEMPLATE'])
+        out_path = Path(os.environ['META_OUT'])
+        edition = os.environ['EDITION']
+        date_iso = os.environ['DATE_ISO']
+
+        mk = {}
+        if mkdocs_path.exists():
+          mk = yaml.load(mkdocs_path.read_text(encoding='utf-8'), Loader=_IgnoreUnknownTagsLoader) or {}
+
+        def env(name: str, default: str) -> str:
+          v = os.environ.get(name, '').strip()
+          return v if v else default
+
+        site_name = str(mk.get('site_name', '') or '').strip()
+        site_desc = str(mk.get('site_description', '') or '').strip()
+        site_author = str(mk.get('site_author', '') or '').strip()
+        site_url = str(mk.get('site_url', '') or '').strip()
+        copyright_ = str(mk.get('copyright', '') or '').strip()
+
+        title = env('EPUB_TITLE', site_name or 'Book')
+        subtitle = env('EPUB_SUBTITLE', site_desc)
+        author = env('EPUB_AUTHOR', site_author)
+        identifier = env('EPUB_IDENTIFIER', site_url or 'urn:book')
+        publisher = env('EPUB_PUBLISHER', site_author or 'Publisher')
+
+        default_rights = copyright_ if copyright_ else (f"<a href=\"{site_url}\">{site_url}\</a>" if site_url else '')
+        rights = env('EPUB_RIGHTS', default_rights)
+
+        text = meta_template_path.read_text(encoding='utf-8')
+        replacements = {
+          '[title]': title,
+          '[subtitle]': subtitle,
+          '[author]': author,
+          '[identifier]': identifier,
+          '[publisher]': publisher,
+          '[rights]': rights,
+          '[edition]': edition,
+          '[date]': date_iso,
+        }
+
+        for k, v in replacements.items():
+          text = text.replace(k, v)
+
+        # Sanity: avoid leaving placeholders behind (helps catch template drift).
+        leftovers = sorted(set(re.findall(r'\[[a-z_]+\]', text)))
+        if leftovers:
+          raise SystemExit(f"Unreplaced placeholders in book_meta: {', '.join(leftovers)}")
+
+        out_path.write_text(text, encoding='utf-8')
+        PY
+        EDITION="$EDITION" \
+        DATE_ISO="$GIT_DATE" \
+        MKDOCS_CONFIG="${{ inputs.mkdocs_config }}" \
+        META_TEMPLATE="${{ github.action_path }}/epub/book_meta.yml" \
+        META_OUT="${{ inputs.build_dir }}/book_meta_processed.yml"
 
     - name: Stage 3 - Generate EPUB
       shell: bash

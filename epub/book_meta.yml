@@ -1,18 +1,18 @@
 title:
 - type: main
-  text: Что мне делать? :-)
+  text: [title]
 - type: subtitle
-  text: Текст в концепции «Общие Цели»
+  text: [subtitle]
 - type: edition
   text: [edition]
 creator:
 - role: author
-  text: Сергей Поляков
+  text: [author]
 date: [date]
 identifier: 
 - scheme: URN
-  text: https://text.sharedgoals.ru
-publisher: Shared Goals
-rights: <a href="https://text.sharedgoals.ru">text.sharedgoals.ru</a>
+  text: [identifier]
+publisher: [publisher]
+rights: [rights]
 lang: ru-RU
 toc-title: Содержание
