@@ -101,9 +101,12 @@ $(BOOK_META_PROCESSED): $(BOOK_META)
 	if [ -z "$$GIT_DATE" ]; then GIT_DATE=$$(date -u +%Y-%m-%d); fi; \
 	GIT_DATE_DISPLAY=$$(echo "$$GIT_DATE" | $(PYTHON) -c "import sys, datetime; d = datetime.datetime.strptime(sys.stdin.read().strip(), '%Y-%m-%d'); print(d.strftime('%d %B %Y').replace('January', 'января').replace('February', 'февраля').replace('March', 'марта').replace('April', 'апреля').replace('May', 'мая').replace('June', 'июня').replace('July', 'июля').replace('August', 'августа').replace('September', 'сентября').replace('October', 'октября').replace('November', 'ноября').replace('December', 'декабря'))"); \
 	EDITION="$$GIT_TAG, $$GIT_DATE_DISPLAY"; \
-	sed -e "s/\[edition\]/$$EDITION/" \
-	    -e "s/\[date\]/$$GIT_DATE/" \
-	    $(BOOK_META) > $@
+	$(PYTHON) $(SCRIPTS_DIR)/process-epub-meta.py \
+		--mkdocs-config "$(MKDOCS_CONFIG)" \
+		--template "$(BOOK_META)" \
+		--out "$@" \
+		--edition "$$EDITION" \
+		--date "$$GIT_DATE"
 	@echo "✓ Metadata processed: $@"
 
 $(EPUB_OUT): $(PANDOC_MD) $(BOOK_META_PROCESSED) $(CSS_FILE)
