@@ -41,6 +41,10 @@ LUA_FILTER := $(SCRIPTS_DIR)/pymdown-pandoc.lua
 BOOK_META := $(EPUB_DIR)/book_meta.yml
 CSS_FILE := $(EPUB_DIR)/epub.css
 
+# Optional MkDocs extra.css (copied into docs_dir only if missing)
+EXTRA_CSS_SRC := $(TEXT_FORGE_DIR)/mkdocs/assets/css/extra.css
+EXTRA_CSS_DST := $(DOCS_DIR)/assets/css/extra.css
+
 # Content assets
 COVER_IMAGE ?= $(DOCS_DIR)/img/cover.jpg
 
@@ -50,7 +54,7 @@ PANDOC_MD := $(BUILD_DIR)/pandoc.md
 EPUB_OUT := $(BUILD_DIR)/text_book.epub
 BOOK_META_PROCESSED := $(BUILD_DIR)/book_meta_processed.yml
 
-.PHONY: all epub site serve test clean help info install
+.PHONY: all epub site serve test clean help info install ensure_extra_css
 
 help:
 	@echo "text-forge pipeline (called from content repo)"
@@ -73,7 +77,15 @@ install:
 	@$(UV) sync
 
 # Fast preview — the content repo can disable git-committers via env var.
-serve:
+
+ensure_extra_css:
+	@mkdir -p $(DOCS_DIR)/assets/css
+	@if [ ! -f "$(EXTRA_CSS_DST)" ] && [ -f "$(EXTRA_CSS_SRC)" ]; then \
+		cp "$(EXTRA_CSS_SRC)" "$(EXTRA_CSS_DST)"; \
+		echo "✓ extra.css staged to $(EXTRA_CSS_DST)"; \
+	fi
+
+serve: ensure_extra_css
 	cd $(CONTENT_ROOT) && MKDOCS_GIT_COMMITTERS_ENABLED=$(MKDOCS_GIT_COMMITTERS_ENABLED) $(MKDOCS) serve --config-file=$(MKDOCS_CONFIG)
 
 epub: $(EPUB_OUT)
@@ -130,7 +142,7 @@ $(EPUB_OUT): $(PANDOC_MD) $(BOOK_META_PROCESSED) $(CSS_FILE)
 		-t epub3
 	@echo "✓ EPUB generated: $@"
 
-site: epub
+site: epub ensure_extra_css
 	@echo "==> Copying artifacts for MkDocs..."
 	@mkdir -p $(DOCS_DIR)/assets
 	cp $(EPUB_OUT) $(DOCS_DIR)/assets/

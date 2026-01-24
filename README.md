@@ -46,6 +46,12 @@ git push
 
 После `push` GitHub Actions сам соберёт сайт и EPUB.
 
+### Обложка EPUB
+
+- Обложка необязательна.
+- Если передать `cover_image` и cover.jpg существует, action использует его.
+- Если файла нет, EPUB собирается **без** обложки и выведет предупреждение.
+
 ### Через VS Code
 
 Откройте вкладку **Source Control** → выберите файлы → напишите сообщение → **Commit** → **Sync/Push**.
@@ -77,39 +83,3 @@ make site           # собрать сайт (EPUB будет построен 
 `make serve` не строит EPUB и не требует `pandoc`; он также отключает `git-committers` плагин через `MKDOCS_GIT_COMMITTERS_ENABLED=false`, чтобы упростить локальный вывод.
 Если submodule не инициализирован, команды сборки не найдут tooling (`text-forge`).
 
-## Advanced: git-committers token
-
-If your MkDocs config enables `mkdocs-git-committers-plugin-2`, the plugin may need a GitHub token to avoid API rate limits.
-
-This action keeps the “entry level” low by exporting `github.token` as `MKDOCS_GIT_COMMITTERS_APIKEY` by default.
-
-Override/disable options:
-
-```yaml
-- uses: shared-goals/text-forge@v1
-  with:
-    # Use a PAT (recommended if you hit rate limits)
-    committers_token: ${{ secrets.COMMITTERS_TOKEN }}
-
-    # Or disable automatic token export entirely
-    use_github_token_for_committers: 'false'
-```
-
-## Git history (revision date accuracy)
-
-`mkdocs-git-revision-date-localized-plugin` can warn (and sometimes produce incorrect dates) if the repo is checked out shallowly.
-
-This action tries to detect shallow checkouts and runs a best-effort `git fetch --unshallow` before the MkDocs build.
-For best performance you can also set `fetch-depth: 0` in your `actions/checkout@v4` step.
-
-## Comments (Giscus)
-This repo intentionally does **not** ship a preconfigured `mkdocs/overrides/partials/comments.html`.
-
-Reason: Giscus config must point to the *current* content repo (and its discussion category ids). Hardcoding a repo (like `bongiozzo/whattodo`) breaks forks/templates.
-
-Recommended approach (Option A): configure comments in each content repo, or skip them.
-
-## EPUB cover
-- Cover image is optional.
-- If you provide `cover_image` and the file exists, the action uses it.
-- If it’s missing, the action builds the EPUB **without** a cover (and emits a warning).

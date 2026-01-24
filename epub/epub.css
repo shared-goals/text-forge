@@ -190,12 +190,12 @@ section.titlepage p.author {
   margin: 0; /* tighter spacing since container already has margins */
 }
 
-/* Thematic blocks (EPUB-safe): abstract, tip, quote, warning, success, details, music, define
+/* Thematic blocks (EPUB-safe): situation, abstract, quote, note, rule, details, music, define
    - Background color with left border
    - Caption as h6 heading with matching color
    - Clean visual separation
 */
-.abstract, .tip, .quote, .warning, .success, .details, .music, .define {
+.situation, .abstract, .quote, .note, .rule, .details, .music, .define {
   margin: 1.5em 0;
   padding: 1em;
   background-color: #f9f9f9;
@@ -203,11 +203,11 @@ section.titlepage p.author {
 }
 
 /* Caption heading (h6) inside blocks */
+.situation h6.block-caption,
 .abstract h6.block-caption,
-.tip h6.block-caption,
 .quote h6.block-caption,
-.warning h6.block-caption,
-.success h6.block-caption,
+.note h6.block-caption,
+.rule h6.block-caption,
 .details h6.block-caption,
 .music h6.block-caption,
 .define h6.block-caption {
@@ -219,20 +219,21 @@ section.titlepage p.author {
 }
 
 /* Remove heading level styling inside blocks */
-.abstract h6, .tip h6, .quote h6, .warning h6, .success h6, .details h6, .music h6, .define h6 {
+.situation h6, .abstract h6, .quote h6, .note h6, .rule h6, .details h6, .music h6, .define h6 {
   margin: 0 0 0.5em 0;
   font-weight: bold;
   font-size: 1em;
 }
 
 /* --- Type-specific colors --- */
+
+/* situation: teal */
+.situation { border-left-color: rgb(0, 121, 107); }
+.situation h6.block-caption { color: rgb(0, 121, 107); }
+
 /* abstract: light blue */
 .abstract { border-left-color: rgb(2, 136, 209); }
 .abstract h6.block-caption { color: rgb(2, 136, 209); }
-
-/* tip: teal */
-.tip { border-left-color: rgb(0, 121, 107); }
-.tip h6.block-caption { color: rgb(0, 121, 107); }
 
 /* quote: grey and italic content */
 .quote { 
@@ -241,13 +242,13 @@ section.titlepage p.author {
 }
 .quote h6.block-caption { color: #9e9e9e; font-style: normal; }
 
-/* warning: orange */
-.warning { border-left-color: rgb(255, 145, 0); }
-.warning h6.block-caption { color: rgb(255, 145, 0); }
+/* note: blue (Material blue A200) */
+.note { border-left-color: rgb(68, 138, 255); }
+.note h6.block-caption { color: rgb(68, 138, 255); }
 
-/* success: green */
-.success { border-left-color: rgb(0, 200, 83); }
-.success h6.block-caption { color: rgb(0, 200, 83); }
+/* rule: green */
+.rule { border-left-color: rgb(0, 200, 83); }
+.rule h6.block-caption { color: rgb(0, 200, 83); }
 
 /* details: deep purple */
 .details { border-left-color: rgb(103, 58, 183); }

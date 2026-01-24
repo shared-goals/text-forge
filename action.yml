@@ -119,6 +119,17 @@ runs:
           cp -f "${{ github.action_path }}/mkdocs/overrides/partials/source-file.html" "text-forge/mkdocs/overrides/partials/source-file.html"
         fi
 
+    - name: Provide extra.css (if missing)
+      shell: bash
+      run: |
+        set -euo pipefail
+        SRC="${{ github.action_path }}/mkdocs/assets/css/extra.css"
+        DST="${{ inputs.docs_dir }}/assets/css/extra.css"
+        if [ -f "$SRC" ] && [ ! -f "$DST" ]; then
+          mkdir -p "$(dirname "$DST")"
+          cp -f "$SRC" "$DST"
+        fi
+
     - name: Stage 1 - Combine markdown from mkdocs.yml
       shell: bash
       run: |

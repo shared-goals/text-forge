@@ -141,11 +141,28 @@ def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
     - updated_date: date of most recent commit
     """
     import subprocess
+    import os
 
     try:
+        # Determine git repository root (file's parent, or walk up to find .git)
+        # Since file_path might be in a different repo than cwd, we need to find
+        # the repo that contains this file
+        git_dir = file_path.parent
+        while git_dir.parent != git_dir:  # not at filesystem root
+            if (git_dir / '.git').exists():
+                break
+            git_dir = git_dir.parent
+        
+        # Make file path relative to git root
+        try:
+            rel_path = file_path.relative_to(git_dir)
+        except ValueError:
+            # File is not under git_dir, can't get git dates
+            return '', ''
+
         # Get creation date (first commit following file history)
         result_created = subprocess.run(
-            ['git', 'log', '--follow', '--diff-filter=A', '--format=%ai', '--reverse', '--', str(file_path)],
+            ['git', '-C', str(git_dir), 'log', '--follow', '--diff-filter=A', '--format=%ai', '--reverse', '--', str(rel_path)],
             capture_output=True,
             text=True,
             timeout=5
@@ -161,7 +178,7 @@ def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
 
         # Get update date (most recent commit)
         result_updated = subprocess.run(
-            ['git', 'log', '--follow', '--format=%ai', '--max-count=1', '--', str(file_path)],
+            ['git', '-C', str(git_dir), 'log', '--follow', '--format=%ai', '--max-count=1', '--', str(rel_path)],
             capture_output=True,
             text=True,
             timeout=5

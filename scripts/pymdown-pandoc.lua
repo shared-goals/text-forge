@@ -44,6 +44,154 @@ local function extract_image_attributes(para, start_index)
   return new_attributes
 end
 
+-- Load default captions for /// blocks from mkdocs.yml (if provided)
+local default_titles = nil
+
+local function trim(s)
+  return (s or ""):match("^%s*(.-)%s*$")
+end
+
+local function strip_quotes(s)
+  local t = trim(s)
+  if t:match("^'.*'$" ) or t:match('^".*"$') then
+    return t:sub(2, -2)
+  end
+  return t
+end
+
+local function file_exists(path)
+  local f = io.open(path, "r")
+  if f then
+    f:close()
+    return true
+  end
+  return false
+end
+
+local function detect_mkdocs_config()
+  local env = os.getenv("MKDOCS_CONFIG")
+  if env and file_exists(env) then
+    return env
+  end
+  if file_exists("mkdocs.yml") then
+    return "mkdocs.yml"
+  end
+  if file_exists("../mkdocs.yml") then
+    return "../mkdocs.yml"
+  end
+  return nil
+end
+
+local function parse_admonition_titles(path)
+  local map = {}
+  local f = io.open(path, "r")
+  if not f then
+    return map
+  end
+
+  local in_admonition = false
+  local in_types = false
+  local admonition_indent = 0
+  local types_indent = 0
+  local current_name = nil
+
+  for line in f:lines() do
+    local indent = line:match("^(%s*)") or ""
+    local level = #indent
+    local stripped = line:gsub("^%s+", "")
+
+    if not in_admonition then
+      if stripped:match("^%-?%s*pymdownx%.blocks%.admonition:%s*$") then
+        in_admonition = true
+        admonition_indent = level
+      end
+    else
+      if level <= admonition_indent and not stripped:match("^%-") then
+        in_admonition = false
+        in_types = false
+        current_name = nil
+      else
+        if not in_types then
+          if stripped:match("^types:%s*$") then
+            in_types = true
+            types_indent = level
+          end
+        else
+          if level <= types_indent then
+            in_types = false
+            current_name = nil
+          else
+            if stripped:match("^%-") then
+              current_name = nil
+
+              -- Try inline format first: - name: xxx, title: yyy OR - name: xxx OR - xxx
+              -- Strip comments before parsing
+              local no_comment = stripped:gsub("%s*#.*$", "")
+              local name_inline = no_comment:match("^%-%s*name:%s*([^,}%]]+)")
+              local title_inline = no_comment:match("title:%s*([^,}%]]+)")
+              local caption_inline = no_comment:match("caption:%s*([^,}%]]+)")
+
+              if name_inline then
+                local name = strip_quotes(name_inline)
+                current_name = name
+                local t = title_inline or caption_inline
+                if t then
+                  map[name] = strip_quotes(t)
+                end
+              else
+                -- Try simple format: - xxx (where xxx is the type name)
+                local simple = no_comment:match("^%-%s*([^%s#:]+)")
+                if simple then
+                  current_name = strip_quotes(simple)
+                end
+              end
+            else
+              -- Multi-line format: name: or title: on separate lines
+              if current_name then
+                local t = stripped:match("^title:%s*(.+)$") or stripped:match("^caption:%s*(.+)$")
+                if t then
+                  -- Strip comments from title/caption
+                  t = t:gsub("%s*#.*$", "")
+                  map[current_name] = strip_quotes(t)
+                end
+              else
+                -- Check if this is a name: line without dash prefix (multiline format)
+                local name_val = stripped:match("^name:%s*(.+)$")
+                if name_val then
+                  -- Strip comments from name
+                  name_val = name_val:gsub("%s*#.*$", "")
+                  current_name = strip_quotes(name_val)
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  f:close()
+  return map
+end
+
+local function get_default_titles()
+  if default_titles ~= nil then
+    return default_titles
+  end
+  local mkdocs_path = detect_mkdocs_config()
+  if mkdocs_path then
+    default_titles = parse_admonition_titles(mkdocs_path)
+  else
+    default_titles = {}
+  end
+  return default_titles
+end
+
+local function default_title_for(block_type)
+  local titles = get_default_titles()
+  return titles[block_type]
+end
+
 -- Process images: extract attributes and keep only width/height
 function Para(para)
   if not para.c or #para.c < 1 or para.c[1].t ~= 'Image' then
@@ -142,6 +290,13 @@ function Blocks(blocks)
             local opening_line = lines[1]
             local block_type_inline, caption_inline = opening_line:match("^///[%s]*([^%s|]+)[%s]*|?[%s]*(.*)")
             if block_type_inline and block_type_inline ~= '' then
+              local caption_text = trim(caption_inline)
+              if caption_text == "" then
+                local fallback = default_title_for(block_type_inline)
+                if fallback and fallback ~= "" then
+                  caption_text = fallback
+                end
+              end
               -- Gather content between opening and closing lines
               local content_lines = {}
               for idx = 2, close_idx - 1 do
@@ -153,8 +308,8 @@ function Blocks(blocks)
               parsed_doc = parsed_doc:walk({ Blocks = Blocks, Para = Para })
 
               -- If caption present, prepend as h6 heading
-              if caption_inline and caption_inline ~= "" then
-                local caption_heading = pandoc.Header(6, pandoc.Str(caption_inline))
+              if caption_text and caption_text ~= "" then
+                local caption_heading = pandoc.Header(6, pandoc.Str(caption_text))
                 caption_heading.attr = pandoc.Attr("", {"block-caption"}, {})
                 table.insert(parsed_doc.blocks, 1, caption_heading)
               end
@@ -207,8 +362,16 @@ function Blocks(blocks)
               content_blocks = Blocks(content_blocks)
 
               -- If caption present, prepend as h6 heading
-              if caption and caption ~= "" then
-                local caption_heading = pandoc.Header(6, pandoc.Str(caption))
+              local caption_text = trim(caption)
+              if caption_text == "" then
+                local fallback = default_title_for(block_type)
+                if fallback and fallback ~= "" then
+                  caption_text = fallback
+                end
+              end
+
+              if caption_text and caption_text ~= "" then
+                local caption_heading = pandoc.Header(6, pandoc.Str(caption_text))
                 caption_heading.attr = pandoc.Attr("", {"block-caption"}, {})
                 table.insert(content_blocks, 1, caption_heading)
               end
