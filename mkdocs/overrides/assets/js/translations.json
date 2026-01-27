@@ -1,0 +1,15 @@
+{
+  "editor_title": "Редактор Markdown",
+  "editor_loading": "Загрузка редактора...",
+  "editor_download": "Скачать исходник",
+  "editor_status_ready": "Готов",
+  "editor_status_loading_pyodide": "Загрузка Pyodide...",
+  "editor_status_ready_to_render": "Готов к рендеру",
+  "editor_status_rendering_error": "Ошибка рендеринга",
+  "editor_status_load_failed": "Загрузка не удалась",
+  "editor_empty_document": "Пустой документ",
+  "editor_error_mkdocs_fetch": "Не удалось загрузить mkdocs.yml (HTTP {status}). Пример конфигурации: https://github.com/bongiozzo/whattodo/blob/master/mkdocs.yml",
+  "editor_error_mkdocs_not_found": "Не удалось загрузить mkdocs.yml. Пример конфигурации: https://github.com/bongiozzo/whattodo/blob/master/mkdocs.yml",
+  "editor_error_config_section": "Не найдена секция markdown_extensions в mkdocs.yml. Пример: https://github.com/bongiozzo/whattodo/blob/master/mkdocs.yml",
+  "editor_error_no_extensions": "Не найдены markdown расширения в mkdocs.yml. Пример: https://github.com/bongiozzo/whattodo/blob/master/mkdocs.yml"
+}

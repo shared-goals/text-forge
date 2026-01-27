@@ -4,9 +4,9 @@
   Content repos may override by replacing their symlink/file in mkdocs/overrides,
   or by switching theme.custom_dir.
 
-  Optional content-repo config (mkdocs.yml -> extra:):
-    source_file:
-      published_title: "Опубликовано"
+  Configuration is provided by text-forge plugin:
+    - text-forge:
+        source_file_published_title: "Опубликовано"
 #}
 <!--
   Copyright (c) 2016-2025 Martin Donath <martin.donath@squidfunk.com>
@@ -32,9 +32,6 @@
 
 {# ---------------------------------------------------------------------- #}
 
-{% set source_file_cfg = config.extra.get("source_file", {}) %}
-{% set published_title = source_file_cfg.get("published_title", "Published") %}
-
 <!-- Render date of creation -->
 {% macro render_created(date) %}
 <span class="md-source-file__fact">
@@ -46,7 +43,7 @@
 <!-- Render date of publication -->
 {% macro render_published(date) %}
 <span class="md-source-file__fact">
-  <span class="md-icon" title="{{ published_title }}">
+  <span class="md-icon" title="{{ text_forge_source_file_published_title }}">
     {% include ".icons/material/clock-check-outline.svg" %}
   </span>{{ date }}</span>
 {% endmacro %}

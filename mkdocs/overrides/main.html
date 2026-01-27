@@ -1,0 +1,27 @@
+{#
+  Main template override (text-forge).
+  
+  Extends Material theme's main.html to inject editor partial.
+#}
+{% extends "base.html" %}
+
+{# Inject text-forge CSS in styles block #}
+{% block styles %}
+  {{ super() }}
+  {# Load text-forge custom CSS #}
+  <link rel="stylesheet" href="{{ 'assets/stylesheets/text-forge.css' | url }}">
+  
+  {# Load editor CSS if enabled #}
+  {% if text_forge_editor_enabled %}
+    <link rel="stylesheet" href="{{ 'assets/stylesheets/editor.css' | url }}">
+  {% endif %}
+{% endblock %}
+
+{# Inject editor UI and JS after content #}
+{% block scripts %}
+  {{ super() }}
+  {% include "partials/editor.html" %}
+  {% if text_forge_editor_enabled and page and page.content %}
+    <script src="{{ 'assets/js/editor.js' | url }}"></script>
+  {% endif %}
+{% endblock %}

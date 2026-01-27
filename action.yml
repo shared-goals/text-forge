@@ -95,41 +95,6 @@ runs:
     - name: Set up Pandoc
       uses: r-lib/actions/setup-pandoc@v2
 
-    - name: Provide MkDocs hook (if missing)
-      shell: bash
-      run: |
-        set -euo pipefail
-        # Content repos reference shared hooks/overrides via paths like:
-        #   hooks: [text-forge/mkdocs/hooks/nobr_emoticons.py]
-        #   theme.custom_dir: text-forge/mkdocs/overrides
-        # This step makes builds work even without a git submodule checkout.
-
-        mkdir -p text-forge/mkdocs/hooks text-forge/mkdocs/overrides/partials
-
-        # Hook
-        if [ -f "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" ]; then
-          cp -f "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" "text-forge/mkdocs/hooks/nobr_emoticons.py"
-        fi
-
-        # Theme overrides
-        if [ -f "${{ github.action_path }}/mkdocs/overrides/partials/comments.html" ]; then
-          cp -f "${{ github.action_path }}/mkdocs/overrides/partials/comments.html" "text-forge/mkdocs/overrides/partials/comments.html"
-        fi
-        if [ -f "${{ github.action_path }}/mkdocs/overrides/partials/source-file.html" ]; then
-          cp -f "${{ github.action_path }}/mkdocs/overrides/partials/source-file.html" "text-forge/mkdocs/overrides/partials/source-file.html"
-        fi
-
-    - name: Provide extra.css (if missing)
-      shell: bash
-      run: |
-        set -euo pipefail
-        SRC="${{ github.action_path }}/mkdocs/assets/css/extra.css"
-        DST="${{ inputs.docs_dir }}/assets/css/extra.css"
-        if [ -f "$SRC" ] && [ ! -f "$DST" ]; then
-          mkdir -p "$(dirname "$DST")"
-          cp -f "$SRC" "$DST"
-        fi
-
     - name: Stage 1 - Combine markdown from mkdocs.yml
       shell: bash
       run: |
