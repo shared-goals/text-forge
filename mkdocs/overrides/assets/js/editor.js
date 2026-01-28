@@ -47,7 +47,9 @@
       editor: document.getElementById('md-editor'),
       toggle: document.getElementById('md-editor-toggle'),
       close: document.getElementById('md-editor-close'),
-      download: document.getElementById('md-editor-download'),
+      save: document.getElementById('md-editor-save'),
+      sync: document.getElementById('md-editor-sync'),
+      sync: document.getElementById('md-editor-sync'),
       source: document.getElementById('md-editor-source'),
       preview: document.getElementById('md-editor-preview'),
       status: document.getElementById('md-editor-status')
@@ -91,11 +93,10 @@
       // Install required packages
       await pyodide.loadPackage('micropip');
       const micropip = pyodide.pyimport('micropip');
-      await micropip.install(['markdown', 'pymdown-extensions', 'pyyaml']);
+      await micropip.install(['markdown', 'pymdown-extensions']);
 
-      // Fetch and parse mkdocs.yml for markdown extensions config
-      const mkdocsConfig = await fetchMkdocsConfig();
-      const pythonConfig = generatePythonMarkdownConfig(mkdocsConfig);
+      // Use embedded markdown extensions config from page
+      const pythonConfig = generatePythonMarkdownConfig(config.markdownExtensions, config.extensionConfigs);
 
       // Initialize Python markdown renderer with dynamic config
       await pyodide.runPythonAsync(`
@@ -182,59 +183,64 @@ def render_markdown(text):
   }
 
   /**
-   * Generate Python markdown configuration from mkdocs.yml
+   * Generate Python markdown configuration from extensions array
    */
-  function generatePythonMarkdownConfig(mkdocsYaml) {
-    if (!mkdocsYaml) {
-      throw new Error(t('editor_error_mkdocs_not_found'));
-    }
-
-    // Extract markdown_extensions section from mkdocs.yml
-    // Find the markdown_extensions key and extract all indented content under it
-    const extensionsMatch = mkdocsYaml.match(/^markdown_extensions:\s*$([\s\S]*?)^(?=\S)/m);
-    
-    if (!extensionsMatch) {
-      throw new Error(t('editor_error_config_section'));
-    }
-
-    const configSection = 'markdown_extensions:\n' + extensionsMatch[1];
-    
-    // Parse YAML using Pyodide (already loaded)
-    const parsed = pyodide.runPython(`
-import yaml
-import json
-config_text = ${JSON.stringify(configSection)}
-parsed = yaml.safe_load(config_text)
-json.dumps(parsed)
-`);
-    
-    const config = JSON.parse(parsed);
-    const extensions = config.markdown_extensions || [];
-    
-    if (extensions.length === 0) {
+  function generatePythonMarkdownConfig(markdownExtensions, extensionConfigs) {
+    if (!markdownExtensions || !Array.isArray(markdownExtensions)) {
       throw new Error(t('editor_error_no_extensions'));
     }
     
-    // Build extensions list and configs
-    const extList = [];
-    const extConfigs = {};
+    // Build extensions list
+    const extList = markdownExtensions.map(ext => `'${ext}'`);
     
-    extensions.forEach(ext => {
-      if (typeof ext === 'string') {
-        extList.push(`'${ext}'`);
-      } else if (typeof ext === 'object') {
-        const key = Object.keys(ext)[0];
-        extList.push(`'${key}'`);
-        extConfigs[key] = ext[key];
+    // Convert JS object to Python dict format recursively
+    function toPythonDict(obj) {
+      if (obj === null) return 'None';
+      if (obj === true) return 'True';
+      if (obj === false) return 'False';
+      if (typeof obj === 'number') return obj.toString();
+      if (typeof obj === 'string') return `"${obj.replace(/"/g, '\\"')}"`;
+      if (Array.isArray(obj)) {
+        return '[' + obj.map(item => toPythonDict(item)).join(', ') + ']';
       }
-    });
+      if (typeof obj === 'object') {
+        const pairs = Object.keys(obj).map(key => {
+          return `"${key}": ${toPythonDict(obj[key])}`;
+        });
+        return '{' + pairs.join(', ') + '}';
+      }
+      return 'None';
+    }
     
     // Convert configs to Python dict format
-    const configPython = Object.keys(extConfigs).length > 0
-      ? `, extension_configs=${JSON.stringify(extConfigs).replace(/"/g, "'").replace(/'/g, '"').replace(/true/g, 'True').replace(/false/g, 'False')}`
+    const configPython = extensionConfigs && Object.keys(extensionConfigs).length > 0
+      ? `, extension_configs=${toPythonDict(extensionConfigs)}`
       : '';
     
     return `md = markdown.Markdown(extensions=[${extList.join(', ')}]${configPython})`;
+  }
+
+  /**
+   * Strip YAML frontmatter from markdown source
+   */
+  function stripFrontmatter(source) {
+    // Check if source starts with ---
+    if (source.trim().startsWith('---')) {
+      // Find the closing ---
+      const lines = source.split('\n');
+      let endIndex = -1;
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i].trim() === '---') {
+          endIndex = i;
+          break;
+        }
+      }
+      // If we found closing ---, strip everything up to and including it
+      if (endIndex > 0) {
+        return lines.slice(endIndex + 1).join('\n');
+      }
+    }
+    return source;
   }
 
   /**
@@ -251,7 +257,9 @@ json.dumps(parsed)
 
     try {
       setStatus(t('editor_status_ready_to_render'));
-      const html = await pyodide.runPythonAsync(`render_markdown(${JSON.stringify(source)})`);
+      // Strip frontmatter before rendering
+      const sourceWithoutFrontmatter = stripFrontmatter(source);
+      const html = await pyodide.runPythonAsync(`render_markdown(${JSON.stringify(sourceWithoutFrontmatter)})`);
       els.preview.innerHTML = html;
       setStatus(t('editor_status_ready'));
     } catch (err) {
@@ -270,18 +278,236 @@ json.dumps(parsed)
   }
 
   /**
-   * Download current source as .md file
+   * GitHub API integration
    */
-  function downloadSource() {
+  
+  const GITHUB_TOKEN_KEY = 'text_forge_github_token';
+  
+  /**
+   * Check if GitHub token is available
+   */
+  function hasGitHubToken() {
+    return !!localStorage.getItem(GITHUB_TOKEN_KEY);
+  }
+  
+  /**
+   * Get GitHub token from localStorage
+   */
+  function getGitHubToken() {
+    return localStorage.getItem(GITHUB_TOKEN_KEY);
+  }
+  
+  /**
+   * Set GitHub token in localStorage
+   */
+  function setGitHubToken(token) {
+    localStorage.setItem(GITHUB_TOKEN_KEY, token);
+  }
+  
+  /**
+   * Remove GitHub token
+   */
+  function removeGitHubToken() {
+    localStorage.removeItem(GITHUB_TOKEN_KEY);
+  }
+  
+  /**
+   * Prompt user to enter GitHub Personal Access Token
+   */
+  function promptGitHubToken() {
+    const token = prompt(
+      t('editor_github_login') + '\n\n' +
+      'Введите Personal Access Token с правами repo:\n' +
+      'https://github.com/settings/tokens'
+    );
+    
+    if (token && token.trim()) {
+      setGitHubToken(token.trim());
+      return token.trim();
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Save file to GitHub using Contents API
+   */
+  async function saveToGitHub(filePath, content) {
+    if (!config.github) {
+      throw new Error('GitHub configuration not available');
+    }
+    
+    let token = getGitHubToken();
+    
+    // Prompt for token if not available
+    if (!token) {
+      token = promptGitHubToken();
+      if (!token) {
+        throw new Error('GitHub token required');
+      }
+    }
+    
+    const { owner, repo, branch, apiUrl } = config.github;
+    
+    // Step 1: Get current file SHA
+    const getUrl = `${apiUrl}/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+    
+    setStatus(t('editor_github_committing'));
+    
+    let sha = null;
+    try {
+      const getResponse = await fetch(getUrl, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github.v3+json'
+        }
+      });
+      
+      if (getResponse.ok) {
+        const fileData = await getResponse.json();
+        sha = fileData.sha;
+      } else if (getResponse.status === 401) {
+        // Token invalid or expired
+        removeGitHubToken();
+        throw new Error('Invalid GitHub token');
+      } else if (getResponse.status !== 404) {
+        // Unexpected error (404 is OK for new files)
+        throw new Error(`Failed to get file: ${getResponse.status}`);
+      }
+    } catch (error) {
+      if (error.message === 'Invalid GitHub token') {
+        throw error;
+      }
+      // Continue with null SHA for new files
+    }
+    
+    // Step 2: Update file content
+    const putUrl = `${apiUrl}/repos/${owner}/${repo}/contents/${filePath}`;
+    const commitMessage = `Edit ${filePath.split('/').pop()} via text-forge`;
+    
+    const putResponse = await fetch(putUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: commitMessage,
+        content: btoa(unescape(encodeURIComponent(content))), // Base64 encode UTF-8
+        branch: branch,
+        ...(sha ? { sha } : {}) // Include SHA for updates
+      })
+    });
+    
+    if (!putResponse.ok) {
+      const errorData = await putResponse.json();
+      
+      if (putResponse.status === 401) {
+        removeGitHubToken();
+        throw new Error('Invalid GitHub token');
+      } else if (putResponse.status === 403) {
+        throw new Error(t('editor_github_no_permission'));
+      } else if (putResponse.status === 409) {
+        throw new Error('File was modified. Please refresh and try again.');
+      } else {
+        throw new Error(errorData.message || `HTTP ${putResponse.status}`);
+      }
+    }
+    
+    const result = await putResponse.json();
+    return result;
+  }
+  
+  /**
+   * Save current source to file
+   */
+  async function saveSource() {
     if (!els?.source) return;
     
-    const blob = new Blob([els.source.value], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
+    const content = els.source.value;
+    const filePath = config.filePath;
+    
+    if (!filePath) {
+      setStatus(t('editor_status_save_failed'));
+      return;
+    }
+    
+    try {
+      setStatus(t('editor_status_saving'));
+      
+      // Strategy 1: Try GitHub API if config available
+      if (config.github && config.github.owner) {
+        try {
+          await saveToGitHub(filePath, content);
+          setStatus(t('editor_github_committed'));
+          setTimeout(() => setStatus(t('editor_status_ready')), 3000);
+          return;
+        } catch (githubError) {
+          console.error('GitHub save failed:', githubError);
+          
+          // If token issue, let user retry or fall back
+          if (githubError.message.includes('token')) {
+            setStatus(t('editor_github_commit_failed') + ': ' + githubError.message);
+            setTimeout(() => setStatus(t('editor_status_ready')), 3000);
+            return;
+          }
+          
+          // Otherwise fall through to dev server
+        }
+      }
+      
+      // Strategy 2: Try dev server endpoint
+      const response = await fetch('/_text_forge/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          filePath: filePath,
+          content: content
+        })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        setStatus(t('editor_status_saved'));
+        setTimeout(() => setStatus(t('editor_status_ready')), 2000);
+        return;
+      }
+      
+      // Strategy 3: Fallback to download
+      if (response.status === 404) {
+        downloadAsFile(content, filePath);
+        return;
+      }
+      
+      const errorData = await response.text();
+      console.error('Save failed:', response.status, errorData);
+      throw new Error(`HTTP ${response.status}`);
+      
+    } catch (error) {
+      console.error('Save error:', error);
+      // Final fallback to download
+      downloadAsFile(content, filePath);
+    }
+  }
+  
+  /**
+   * Download content as file (fallback for production)
+   */
+  function downloadAsFile(content, filePath) {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
     const a = document.createElement('a');
-    a.href = url;
-    a.download = config.fileName || 'document.md';
+    a.href = URL.createObjectURL(blob);
+    a.download = filePath.split('/').pop();
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    
+    setStatus(t('editor_status_saved'));
+    setTimeout(() => setStatus(t('editor_status_ready')), 2000);
   }
 
   /**
@@ -325,12 +551,19 @@ json.dumps(parsed)
    */
   async function loadTranslations() {
     try {
-      const baseUrl = document.querySelector('link[rel="stylesheet"][href*="/assets/"]')?.href?.split('/assets/')[0] || '';
+      // Get base path from page URL (works for both mkdocs serve and built site)
+      const pathParts = window.location.pathname.split('/').filter(p => p);
+      const baseUrl = pathParts.length > 0 ? '/' + pathParts[0] : '';
       const resp = await fetch(baseUrl + '/assets/js/translations.json');
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
       translations = await resp.json();
       applyTranslations();
     } catch (err) {
       console.warn('Failed to load translations:', err);
+      // Use empty translations as fallback
+      translations = {};
     }
   }
 
@@ -358,6 +591,22 @@ json.dumps(parsed)
   }
 
   /**
+   * Sync scroll position from source to preview
+   */
+  function syncScroll() {
+    if (!els?.source || !els?.preview) return;
+    
+    const textarea = els.source;
+    const previewParent = els.preview.parentElement;
+    
+    // Simple approach: match scroll percentage
+    const scrollRatio = textarea.scrollTop / (textarea.scrollHeight - textarea.clientHeight);
+    const targetScroll = scrollRatio * (previewParent.scrollHeight - previewParent.clientHeight);
+    
+    previewParent.scrollTop = targetScroll;
+  }
+
+  /**
    * Initialize event listeners
    */
   function init() {
@@ -369,7 +618,8 @@ json.dumps(parsed)
 
     els.toggle.addEventListener('click', openEditor);
     els.close?.addEventListener('click', closeEditor);
-    els.download?.addEventListener('click', downloadSource);
+    els.save?.addEventListener('click', saveSource);
+    els.sync?.addEventListener('click', syncScroll);
     els.source?.addEventListener('input', scheduleRender);
 
     // ESC to close

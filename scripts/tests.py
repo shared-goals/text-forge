@@ -2,13 +2,14 @@
 """Tests using fixture files to verify build output."""
 
 import os
-import pytest
 from pathlib import Path
+
+import pytest
 
 # Get build paths from environment (set by Makefile) with sensible defaults
 REPO_ROOT = Path(__file__).parent.parent
-COMBINED_MD = REPO_ROOT / os.getenv('COMBINED_MD', 'build/text_combined.txt')
-PANDOC_MD = REPO_ROOT / os.getenv('PANDOC_MD', 'build/pandoc.md')
+COMBINED_MD = REPO_ROOT / os.getenv("COMBINED_MD", "build/text_combined.txt")
+PANDOC_MD = REPO_ROOT / os.getenv("PANDOC_MD", "build/pandoc.md")
 
 
 class TestFixtures:
@@ -18,7 +19,11 @@ class TestFixtures:
     def _check_fixture_in_output(fxt_name, output_file):
         """Helper: Check if fixture content is in output file"""
         fxt_path = Path(__file__).parent / "fixtures" / fxt_name
-        output_path = Path(output_file) if isinstance(output_file, Path) else REPO_ROOT / output_file
+        output_path = (
+            Path(output_file)
+            if isinstance(output_file, Path)
+            else REPO_ROOT / output_file
+        )
 
         if not fxt_path.exists():
             pytest.skip(f"{fxt_name} fixture not found")
@@ -28,7 +33,9 @@ class TestFixtures:
         fxt_content = fxt_path.read_text(encoding="utf-8").strip()
         output_content = output_path.read_text(encoding="utf-8")
 
-        assert fxt_content in output_content, f"{fxt_name} not found in {output_path.name}"
+        assert fxt_content in output_content, (
+            f"{fxt_name} not found in {output_path.name}"
+        )
 
     def test_combined_heading(self):
         """Verify combined heading fixture in combined.md"""

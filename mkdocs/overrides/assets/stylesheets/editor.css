@@ -116,7 +116,7 @@
   border: none;
   resize: none;
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
-  font-size: 0.875rem;
+  font-size: 0.7rem;
   line-height: 1.6;
   background: var(--md-code-bg-color);
   color: var(--md-code-fg-color);

@@ -4,22 +4,22 @@
   Provides an "Edit" button on content pages that opens a split-pane editor
   with live preview using Pyodide + PyMdown Extensions.
 
-  Config (mkdocs.yml -> extra:):
-    editor:
-      enabled: true   # Show editor button on content pages
+  Config (mkdocs.yml -> plugins -> text-forge):
+    text-forge:
+      editor_enabled: true   # Show editor button on content pages
 #}
 
-{% set editor_cfg = config.extra.get("editor", {}) %}
-{% set editor_enabled = editor_cfg.get("enabled", false) %}
-
-{% if editor_enabled and page and page.content %}
+{% if text_forge_editor_enabled and page and page.content %}
 <!-- Live Editor Panel -->
 <div id="md-editor" class="md-editor" hidden>
   <div class="md-editor__toolbar">
     <span class="md-editor__title" data-i18n="editor_title">Редактор Markdown</span>
     <div class="md-editor__actions">
-      <button id="md-editor-download" class="md-editor__btn" data-i18n-title="editor_download" title="Скачать .md">
-        {% include ".icons/material/download.svg" %}
+      <button id="md-editor-sync" class="md-editor__btn" data-i18n-title="editor_sync" title="Синхронизировать скролл">
+        {% include ".icons/material/arrow-left-right.svg" %}
+      </button>
+      <button id="md-editor-save" class="md-editor__btn" data-i18n-title="editor_save" title="Сохранить">
+        {% include ".icons/material/content-save.svg" %}
       </button>
       <button id="md-editor-close" class="md-editor__btn" title="Закрыть">
         {% include ".icons/material/close.svg" %}
@@ -48,9 +48,25 @@
 <script>
   window.__MD_EDITOR__ = {
     sourceUrl: "{{ (config.repo_url ~ '/' ~ config.edit_uri ~ page.file.src_path)|e }}".replace('/blob/', '/raw/'),
+    filePath: "{{ page.file.src_path|e }}",
     fileName: "{{ page.file.name|e }}",
-    // Embed source for local dev (mkdocs serve)
-    sourceContent: {{ page.markdown | tojson }}
+    // Embed original source with frontmatter (captured before parsing)
+    sourceContent: {{ (page._text_forge_original_source | default(page.markdown)) | tojson }},
+    // Embed markdown extensions config
+    markdownExtensions: {{ config.markdown_extensions | tojson }},
+    // Embed extension configurations (mdx_configs has the actual configs)
+    extensionConfigs: {{ config.mdx_configs | tojson }},
+    // GitHub repository info (for API save)
+    {% if config.repo_name %}
+    github: {
+      owner: "{{ config.repo_name.split('/')[0]|e }}",
+      repo: "{{ config.repo_name.split('/')[1]|e }}",
+      branch: "{{ config.remote_branch|default('main')|e }}",
+      apiUrl: "https://api.github.com"
+    }
+    {% else %}
+    github: null
+    {% endif %}
   };
 </script>
 {% endif %}

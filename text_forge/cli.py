@@ -5,8 +5,9 @@ Provides commands for building EPUB, combining markdown, and other tasks.
 """
 
 import sys
-import click
 from pathlib import Path
+
+import click
 
 
 @click.group()
@@ -18,21 +19,21 @@ def main():
 
 @main.command()
 @click.option(
-    '--config',
+    "--config",
     type=click.Path(exists=True, path_type=Path),
-    default='mkdocs.yml',
-    help='Path to mkdocs.yml configuration file'
+    default="mkdocs.yml",
+    help="Path to mkdocs.yml configuration file",
 )
 @click.option(
-    '--build-dir',
+    "--build-dir",
     type=click.Path(path_type=Path),
-    default='build',
-    help='Build output directory'
+    default="build",
+    help="Build output directory",
 )
 def epub(config, build_dir):
     """Build EPUB from MkDocs project."""
     from text_forge.build import build_epub_pipeline
-    
+
     try:
         epub_file = build_epub_pipeline(config, build_dir)
         click.echo(f"\n✓ Success! EPUB: {epub_file}")
@@ -43,10 +44,10 @@ def epub(config, build_dir):
 
 @main.command()
 @click.option(
-    '--config',
+    "--config",
     type=click.Path(exists=True),
-    default='mkdocs.yml',
-    help='Path to mkdocs.yml configuration file'
+    default="mkdocs.yml",
+    help="Path to mkdocs.yml configuration file",
 )
 def combine(config):
     """Combine markdown files based on nav structure."""
@@ -56,21 +57,21 @@ def combine(config):
 
 @main.command()
 @click.option(
-    '--config',
+    "--config",
     type=click.Path(exists=True, path_type=Path),
-    default='mkdocs.yml',
-    help='Path to mkdocs.yml configuration file'
+    default="mkdocs.yml",
+    help="Path to mkdocs.yml configuration file",
 )
 @click.option(
-    '--build-dir',
+    "--build-dir",
     type=click.Path(path_type=Path),
-    default='build',
-    help='Build output directory'
+    default="build",
+    help="Build output directory",
 )
 def build(config, build_dir):
     """Build site and EPUB."""
     from text_forge.build import build_site_pipeline
-    
+
     try:
         build_site_pipeline(config, build_dir)
         click.echo(f"\n✓ Success! Full build complete.")
@@ -83,12 +84,13 @@ def build(config, build_dir):
 def info():
     """Show text-forge version and configuration."""
     import sys
+
     from text_forge import __version__
-    
+
     click.echo(f"text-forge version: {__version__}")
     click.echo(f"Python: {sys.version}")
     click.echo(f"Installed from: {Path(__file__).parent}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

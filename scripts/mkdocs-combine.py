@@ -26,12 +26,14 @@ Usage:
   python3 mkdocs-combine.py chapter.md --level 1 > output.md
 """
 
-import sys
 import argparse
-import yaml
 import re
+import sys
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import Any, Dict, List, Tuple
+
+import yaml
+
 
 def load_yaml_config(config_path: str) -> Dict[str, Any]:
     """Load MkDocs YAML configuration with graceful error handling."""
@@ -40,12 +42,13 @@ def load_yaml_config(config_path: str) -> Dict[str, Any]:
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
 
-    with open(config_file, 'r', encoding='utf-8') as f:
+    with open(config_file, "r", encoding="utf-8") as f:
         try:
             config = yaml.safe_load(f)
         except yaml.constructor.ConstructorError:
             # Handle MkDocs-style custom tags (e.g. !ENV) and Python object tags.
             f.seek(0)
+
             class SkipUnknownLoader(yaml.SafeLoader):
                 pass
 
@@ -63,18 +66,22 @@ def load_yaml_config(config_path: str) -> Dict[str, Any]:
             def skip_unknown(loader, tag_suffix, node):
                 return _construct_unknown(loader, node)
 
-            SkipUnknownLoader.add_multi_constructor('!python', skip_unknown)
-            SkipUnknownLoader.add_multi_constructor('tag:yaml.org,2002:python/', skip_unknown)
+            SkipUnknownLoader.add_multi_constructor("!python", skip_unknown)
+            SkipUnknownLoader.add_multi_constructor(
+                "tag:yaml.org,2002:python/", skip_unknown
+            )
             # MkDocs commonly uses custom tags like !ENV (provided via pyyaml-env-tag).
             # Treat any unknown "!Something" tag as the underlying YAML node.
-            SkipUnknownLoader.add_multi_constructor('!', skip_unknown)
+            SkipUnknownLoader.add_multi_constructor("!", skip_unknown)
 
             config = yaml.load(f, Loader=SkipUnknownLoader)
 
     return config
 
 
-def extract_nav_items(nav_config: List[Any], level: int = 0) -> List[Tuple[str, str, int]]:
+def extract_nav_items(
+    nav_config: List[Any], level: int = 0
+) -> List[Tuple[str, str, int]]:
     """
     Extract navigation items with hierarchy levels.
 
@@ -86,17 +93,17 @@ def extract_nav_items(nav_config: List[Any], level: int = 0) -> List[Tuple[str, 
 
     for item in nav_config:
         if isinstance(item, str):
-            if item.endswith('.md'):
-                items.append(('', item, level))
+            if item.endswith(".md"):
+                items.append(("", item, level))
         elif isinstance(item, dict):
             for section_title, section_items in item.items():
-                if isinstance(section_items, str) and '://' in section_items:
+                if isinstance(section_items, str) and "://" in section_items:
                     # External link
                     items.append((section_title, section_items, level))
                     continue
 
                 # Section header
-                items.append((section_title, '', level))
+                items.append((section_title, "", level))
 
                 # Nested items
                 if isinstance(section_items, list):
@@ -107,14 +114,14 @@ def extract_nav_items(nav_config: List[Any], level: int = 0) -> List[Tuple[str, 
 
 def extract_frontmatter(content: str) -> Dict[str, Any]:
     """Extract YAML frontmatter as dictionary."""
-    if not content.startswith('---\n'):
+    if not content.startswith("---\n"):
         return {}
 
-    end_match = re.search(r'\n---\n', content[4:])
+    end_match = re.search(r"\n---\n", content[4:])
     if not end_match:
         return {}
 
-    frontmatter_text = content[4:end_match.start() + 4]
+    frontmatter_text = content[4 : end_match.start() + 4]
 
     try:
         frontmatter = yaml.safe_load(frontmatter_text)
@@ -125,10 +132,10 @@ def extract_frontmatter(content: str) -> Dict[str, Any]:
 
 def remove_frontmatter(content: str) -> str:
     """Remove YAML frontmatter from markdown."""
-    if content.startswith('---\n'):
-        end_match = re.search(r'\n---\n', content[4:])
+    if content.startswith("---\n"):
+        end_match = re.search(r"\n---\n", content[4:])
         if end_match:
-            return content[end_match.end() + 4:]
+            return content[end_match.end() + 4 :]
     return content
 
 
@@ -140,8 +147,8 @@ def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
     - created_date: date of first commit (--follow to track renames)
     - updated_date: date of most recent commit
     """
-    import subprocess
     import os
+    import subprocess
 
     try:
         # Determine git repository root (file's parent, or walk up to find .git)
@@ -149,39 +156,60 @@ def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
         # the repo that contains this file
         git_dir = file_path.parent
         while git_dir.parent != git_dir:  # not at filesystem root
-            if (git_dir / '.git').exists():
+            if (git_dir / ".git").exists():
                 break
             git_dir = git_dir.parent
-        
+
         # Make file path relative to git root
         try:
             rel_path = file_path.relative_to(git_dir)
         except ValueError:
             # File is not under git_dir, can't get git dates
-            return '', ''
+            return "", ""
 
         # Get creation date (first commit following file history)
         result_created = subprocess.run(
-            ['git', '-C', str(git_dir), 'log', '--follow', '--diff-filter=A', '--format=%ai', '--reverse', '--', str(rel_path)],
+            [
+                "git",
+                "-C",
+                str(git_dir),
+                "log",
+                "--follow",
+                "--diff-filter=A",
+                "--format=%ai",
+                "--reverse",
+                "--",
+                str(rel_path),
+            ],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
         )
 
         created_date = None
         if result_created.stdout:
             # Extract first line and parse date (format: YYYY-MM-DD HH:MM:SS +ZZZZ)
-            first_line = result_created.stdout.strip().split('\n')[0]
+            first_line = result_created.stdout.strip().split("\n")[0]
             if first_line:
                 date_part = first_line.split()[0]
                 created_date = format_git_date(date_part)
 
         # Get update date (most recent commit)
         result_updated = subprocess.run(
-            ['git', '-C', str(git_dir), 'log', '--follow', '--format=%ai', '--max-count=1', '--', str(rel_path)],
+            [
+                "git",
+                "-C",
+                str(git_dir),
+                "log",
+                "--follow",
+                "--format=%ai",
+                "--max-count=1",
+                "--",
+                str(rel_path),
+            ],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
         )
 
         updated_date = None
@@ -191,24 +219,29 @@ def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
                 date_part = first_line.split()[0]
                 updated_date = format_git_date(date_part)
 
-        return created_date or '', updated_date or ''
+        return created_date or "", updated_date or ""
 
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-        print(f"[WARN] Could not retrieve Git dates for {file_path}: {e}", file=sys.stderr)
-        return '', ''
+        print(
+            f"[WARN] Could not retrieve Git dates for {file_path}: {e}", file=sys.stderr
+        )
+        return "", ""
 
 
 def format_git_date(date_str: str) -> str:
     """Convert date from YYYY-MM-DD format to %d.%m.%Y format."""
     try:
         from datetime import datetime
-        dt = datetime.strptime(date_str, '%Y-%m-%d')
-        return dt.strftime('%d.%m.%Y')
+
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        return dt.strftime("%d.%m.%Y")
     except ValueError:
-        return ''
+        return ""
 
 
-def format_dates_from_frontmatter(frontmatter: Dict[str, Any], file_path: Path = None) -> str:
+def format_dates_from_frontmatter(
+    frontmatter: Dict[str, Any], file_path: Path = None
+) -> str:
     """
     Format dates from frontmatter as italic text.
 
@@ -218,15 +251,15 @@ def format_dates_from_frontmatter(frontmatter: Dict[str, Any], file_path: Path =
     dates = []
 
     # Get Git dates as fallback
-    git_created = ''
-    git_updated = ''
+    git_created = ""
+    git_updated = ""
     if file_path:
         git_created, git_updated = get_git_file_dates(file_path)
 
     # Use frontmatter date or fall back to Git date
-    created = frontmatter.get('created') or git_created
-    published = frontmatter.get('published') or git_created
-    updated = frontmatter.get('updated') or git_updated
+    created = frontmatter.get("created") or git_created
+    published = frontmatter.get("published") or git_created
+    updated = frontmatter.get("updated") or git_updated
 
     if created:
         dates.append(f"Создано: {created}")
@@ -252,20 +285,20 @@ def adjust_heading_levels(content: str, level: int) -> Tuple[str, list]:
     def replace_heading(match):
         hashes = match.group(1)
         title = match.group(2)
-        anchor = match.group(3) or ''
+        anchor = match.group(3) or ""
         current_level = len(hashes)
         new_level = max(1, min(current_level + level, 6))
-        new_hashes = '#' * new_level
+        new_hashes = "#" * new_level
         # Extract anchor name if present
         anchor_name = None
         if anchor:
-            m = re.match(r'\s*\{#([^}]+)\}', anchor)
+            m = re.match(r"\s*\{#([^}]+)\}", anchor)
             if m:
                 anchor_name = m.group(1)
         headings.append((match.start(), anchor_name))
         return f"{new_hashes} {title}{anchor}"
 
-    pattern = r'^(#{1,6})\s+(.+?)(\s*\{#[^}]+\})?$'
+    pattern = r"^(#{1,6})\s+(.+?)(\s*\{#[^}]+\})?$"
     new_content = re.sub(pattern, replace_heading, content, flags=re.MULTILINE)
     return new_content, headings
 
@@ -279,7 +312,7 @@ def add_anchor_to_first_h1(content: str, anchor_id: str) -> str:
     - # Heading {#existing} -> # Heading {#existing} (unchanged if has anchor)
     """
     # Find the first h1 heading
-    match = re.search(r'^(# [^\n]*?)(\s*\{#[^}]+\})?\n', content, re.MULTILINE)
+    match = re.search(r"^(# [^\n]*?)(\s*\{#[^}]+\})?\n", content, re.MULTILINE)
     if match:
         heading = match.group(1)
         existing_anchor = match.group(2)
@@ -287,7 +320,7 @@ def add_anchor_to_first_h1(content: str, anchor_id: str) -> str:
         # If no anchor, add one
         if not existing_anchor:
             new_heading = f"{heading} {{{anchor_id}}}\n"
-            return content[:match.start()] + new_heading + content[match.end():]
+            return content[: match.start()] + new_heading + content[match.end() :]
 
     return content
 
@@ -303,46 +336,50 @@ def fix_internal_links(content: str, current_file: str) -> str:
     """
 
     def replace_link(match):
-        is_image = match.group(1) == '!'
+        is_image = match.group(1) == "!"
         text = match.group(2)
         url = match.group(3)
 
         # Skip image links and external links
-        if is_image or url.startswith(('http://', 'https://', '//', 'mailto:')):
+        if is_image or url.startswith(("http://", "https://", "//", "mailto:")):
             return match.group(0)
 
         # Handle internal links
-        if '#' in url:
-            if url.startswith('#'):
+        if "#" in url:
+            if url.startswith("#"):
                 # Anchor-only link (unchanged)
                 new_url = url
             else:
                 # File with anchor: file.md#anchor -> #anchor
-                file_part, anchor_part = url.split('#', 1)
+                file_part, anchor_part = url.split("#", 1)
                 # Just use the anchor part, ignore the file
                 new_url = f"#{anchor_part}"
         else:
             # File without anchor: file.md -> #file-md
-            if url.endswith('.md'):
-                file_base = url.replace('.md', '-md').replace('/', '-')
+            if url.endswith(".md"):
+                file_base = url.replace(".md", "-md").replace("/", "-")
                 new_url = f"#{file_base}"
             else:
                 new_url = url
 
         return f"[{text}]({new_url})"
 
-    pattern = r'(!?)\[([^\]]+)\]\(([^)]+)\)'
+    pattern = r"(!?)\[([^\]]+)\]\(([^)]+)\)"
     return re.sub(pattern, replace_link, content)
 
 
 def extract_first_heading(content: str) -> str:
     """Extract first heading from markdown content."""
     content_clean = remove_frontmatter(content)
-    match = re.search(r'^#{1,6}\s+(.+?)(?:\s*\{#[^}]+\})?$', content_clean, re.MULTILINE)
-    return match.group(1).strip() if match else ''
+    match = re.search(
+        r"^#{1,6}\s+(.+?)(?:\s*\{#[^}]+\})?$", content_clean, re.MULTILINE
+    )
+    return match.group(1).strip() if match else ""
 
 
-def replace_details_with_source_link(content: str, site_url: str, filepath: str, headings: list) -> str:
+def replace_details_with_source_link(
+    content: str, site_url: str, filepath: str, headings: list
+) -> str:
     """
     Replace content inside /// details blocks with source link.
 
@@ -361,10 +398,10 @@ def replace_details_with_source_link(content: str, site_url: str, filepath: str,
     # Pattern: capture opening line with optional title, then any content until closing ///
     # Group 1: optional title part after 'details' (e.g., ' | Исходник')
     # Group 2: inner content (to be replaced)
-    details_pattern = r'^///\s*details([^\n]*)\n+(.*?)\n+///'
+    details_pattern = r"^///\s*details([^\n]*)\n+(.*?)\n+///"
 
     # Keep filename normalized for URL building
-    filename_without_md = filepath.replace('.md', '').replace('\\', '/')
+    filename_without_md = filepath.replace(".md", "").replace("\\", "/")
 
     def find_nearest_anchor_above(pos):
         anchor = None
@@ -387,7 +424,9 @@ def replace_details_with_source_link(content: str, site_url: str, filepath: str,
         return f"/// details{title_part}\n\n<{source_link}>\n\n///"
 
     # Apply details-block replacement (DOTALL so '.' matches newlines)
-    return re.sub(details_pattern, replace_details, content, flags=re.MULTILINE | re.DOTALL)
+    return re.sub(
+        details_pattern, replace_details, content, flags=re.MULTILINE | re.DOTALL
+    )
 
 
 def mode_mkdocs(config_path: str) -> str:
@@ -402,33 +441,33 @@ def mode_mkdocs(config_path: str) -> str:
     """
     config = load_yaml_config(config_path)
 
-    if 'docs_dir' not in config:
+    if "docs_dir" not in config:
         raise ValueError("Config missing 'docs_dir'")
-    if 'nav' not in config:
+    if "nav" not in config:
         raise ValueError("Config missing 'nav'")
-    if 'site_url' not in config:
+    if "site_url" not in config:
         raise ValueError("Config missing 'site_url'")
 
     config_dir = Path(config_path).parent
-    docs_dir = config_dir / config['docs_dir']
+    docs_dir = config_dir / config["docs_dir"]
 
     if not docs_dir.exists():
         raise FileNotFoundError(f"Docs directory not found: {docs_dir}")
 
-    nav_items = extract_nav_items(config['nav'])
+    nav_items = extract_nav_items(config["nav"])
     combined = []
     first_content = True
 
     for title, filepath, level in nav_items:
         # External links
-        if filepath and '://' in filepath:
-            level_hashes = '#' * (level + 1)
+        if filepath and "://" in filepath:
+            level_hashes = "#" * (level + 1)
             combined.append(f"\n{level_hashes} [{title}]({filepath})\n")
             continue
 
         # Section headers (no filepath)
         if not filepath:
-            level_hashes = '#' * (level + 1)
+            level_hashes = "#" * (level + 1)
             combined.append(f"\n{level_hashes} {title}\n\n")
             continue
 
@@ -441,7 +480,7 @@ def mode_mkdocs(config_path: str) -> str:
         print(f"[INFO] Processing: {filepath} (level {level})", file=sys.stderr)
 
         try:
-            content = file_path.read_text(encoding='utf-8')
+            content = file_path.read_text(encoding="utf-8")
 
             # Extract frontmatter for dates and metadata
             frontmatter = extract_frontmatter(content)
@@ -452,7 +491,7 @@ def mode_mkdocs(config_path: str) -> str:
             # Extract title from first heading
             title_from_file = extract_first_heading(content)
             if not title_from_file:
-                title_from_file = filepath.replace('.md', '').replace('-', ' ').title()
+                title_from_file = filepath.replace(".md", "").replace("-", " ").title()
 
             print(f"[INFO]   Title: {title_from_file}", file=sys.stderr)
 
@@ -461,11 +500,17 @@ def mode_mkdocs(config_path: str) -> str:
 
             # Process content
             content = remove_frontmatter(content)
-            content = content.lstrip('\n')  # Remove leading blank lines after frontmatter
+            content = content.lstrip(
+                "\n"
+            )  # Remove leading blank lines after frontmatter
 
-            content = add_anchor_to_first_h1(content, anchor_id)  # Add anchor to original h1
+            content = add_anchor_to_first_h1(
+                content, anchor_id
+            )  # Add anchor to original h1
             content, headings = adjust_heading_levels(content, level)
-            content = replace_details_with_source_link(content, config['site_url'], filepath, headings)
+            content = replace_details_with_source_link(
+                content, config["site_url"], filepath, headings
+            )
             content = fix_internal_links(content, filepath)
 
             # Combine with dates
@@ -487,7 +532,7 @@ def mode_mkdocs(config_path: str) -> str:
             continue
 
     # Combine all sections
-    result = ''.join(combined)
+    result = "".join(combined)
 
     return result
 
@@ -508,7 +553,7 @@ def mode_single_file(input_file: str, level: int) -> str:
 
     print(f"[INFO] Processing: {input_file} (level shift: {level})", file=sys.stderr)
 
-    content = file_path.read_text(encoding='utf-8')
+    content = file_path.read_text(encoding="utf-8")
 
     # Extract title for logging
     title_from_file = extract_first_heading(content)
@@ -525,45 +570,48 @@ def mode_single_file(input_file: str, level: int) -> str:
 def main():
     """Main entry point with argument parsing."""
     parser = argparse.ArgumentParser(
-        description='MkDocs Markdown Combiner - Two mode tool',
+        description="MkDocs Markdown Combiner - Two mode tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
     )
 
     # Required: input file
     parser.add_argument(
-        'input',
-        help='Input file: either mkdocs.yml or a markdown file'
+        "input", help="Input file: either mkdocs.yml or a markdown file"
     )
 
     # Optional: level for single file mode
     parser.add_argument(
-        '--level',
+        "--level",
         type=int,
         default=0,
-        help='Heading level shift for single file mode (default: 0)'
+        help="Heading level shift for single file mode (default: 0)",
     )
 
     args = parser.parse_args()
 
     try:
         # Determine mode based on input file
-        if args.input.endswith('.yml') or args.input.endswith('.yaml'):
+        if args.input.endswith(".yml") or args.input.endswith(".yaml"):
             # Mode 1: mkdocs.yml
             print(f"[INFO] Mode 1: Processing mkdocs.yml", file=sys.stderr)
             output = mode_mkdocs(args.input)
         else:
             # Mode 2: Single markdown file
-            print(f"[INFO] Mode 2: Processing single file with level shift {args.level}", file=sys.stderr)
+            print(
+                f"[INFO] Mode 2: Processing single file with level shift {args.level}",
+                file=sys.stderr,
+            )
             output = mode_single_file(args.input, args.level)
 
         # Output to stdout
-        print(output, end='')
+        print(output, end="")
         print(f"[INFO] Complete", file=sys.stderr)
 
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

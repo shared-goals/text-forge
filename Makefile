@@ -54,7 +54,7 @@ PANDOC_MD := $(BUILD_DIR)/pandoc.md
 EPUB_OUT := $(BUILD_DIR)/text_book.epub
 BOOK_META_PROCESSED := $(BUILD_DIR)/book_meta_processed.yml
 
-.PHONY: all epub site serve test clean help info install ensure_extra_css
+.PHONY: all epub site serve test clean help info install ensure_extra_css format lint check-i18n
 
 help:
 	@echo "text-forge pipeline (called from content repo)"
@@ -69,6 +69,9 @@ help:
 	@echo "  make site          Build MkDocs site + copy artifacts"
 	@echo "  make all           Build EPUB + MkDocs site (default)"
 	@echo "  make test          Run validation tests"
+	@echo "  make format        Format Python code with ruff"
+	@echo "  make lint          Run lint checks via ruff"
+	@echo "  make check-i18n    Check translation files for consistency"
 	@echo "  make clean         Remove build artifacts in content repo"
 	@echo "  make info          Print resolved paths"
 
@@ -157,6 +160,24 @@ site: epub ensure_extra_css
 	@echo "✓ Redirect created: $(PUBLIC_DIR)/index.html"
 
 all: epub site
+
+format: ## Format Python code with ruff
+	@echo "==> Formatting Python code with ruff..."
+	@$(UV_RUN) ruff check --select I --fix $(TEXT_FORGE_DIR)
+	@$(UV_RUN) ruff format $(TEXT_FORGE_DIR)
+	@echo "✓ Code formatted"
+
+lint: ## Run lint checks via ruff
+	@echo "==> Running lint checks..."
+	@$(UV_RUN) ruff check $(TEXT_FORGE_DIR)
+	@echo "✓ Lint checks complete"
+
+check-i18n: ## Check translation files for consistency
+	@echo "==> Checking i18n translation files..."
+	@TRANSLATIONS_FILE="$(TEXT_FORGE_DIR)/mkdocs/overrides/assets/js/translations.json"; \
+	echo "Checking $$TRANSLATIONS_FILE..."; \
+	$(PYTHON) $(SCRIPTS_DIR)/check_i18n.py "$$TRANSLATIONS_FILE"
+	@echo "✓ i18n check complete"
 
 test: $(EPUB_OUT)
 	@echo "==> Unzipping EPUB for tests..."
