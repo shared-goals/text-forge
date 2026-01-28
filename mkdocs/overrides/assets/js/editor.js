@@ -38,6 +38,9 @@
   let renderTimer = null;
   const RENDER_DELAY = 500; // ms
 
+  // Track original source for change detection
+  let originalSource = null;
+
   /**
    * Initialize DOM element references
    */
@@ -48,8 +51,6 @@
       toggle: document.getElementById('md-editor-toggle'),
       close: document.getElementById('md-editor-close'),
       save: document.getElementById('md-editor-save'),
-      sync: document.getElementById('md-editor-sync'),
-      sync: document.getElementById('md-editor-sync'),
       source: document.getElementById('md-editor-source'),
       preview: document.getElementById('md-editor-preview'),
       status: document.getElementById('md-editor-status')
@@ -63,6 +64,20 @@
     if (els?.status) {
       els.status.textContent = msg;
     }
+  }
+
+  /**
+   * Update Save button state based on content changes
+   */
+  function updateSaveButtonState() {
+    if (!els?.save || !els?.source) return;
+    
+    const currentContent = els.source.value;
+    const hasChanges = originalSource !== null && currentContent !== originalSource;
+    
+    els.save.disabled = !hasChanges;
+    els.save.style.opacity = hasChanges ? '1' : '0.5';
+    els.save.style.cursor = hasChanges ? 'pointer' : 'not-allowed';
   }
 
   /**
@@ -275,6 +290,7 @@ def render_markdown(text):
   function scheduleRender() {
     clearTimeout(renderTimer);
     renderTimer = setTimeout(renderPreview, RENDER_DELAY);
+    updateSaveButtonState();
   }
 
   /**
@@ -436,11 +452,45 @@ def render_markdown(text):
     try {
       setStatus(t('editor_status_saving'));
       
-      // Strategy 1: Try GitHub API if config available
+      // Strategy 1: Try dev server endpoint first (local development)
+      try {
+        const response = await fetch('/_text_forge/save', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            filePath: filePath,
+            content: content
+          })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          setStatus(t('editor_status_saved'));
+          // Update originalSource so button becomes disabled again
+          originalSource = content;
+          updateSaveButtonState();
+          setTimeout(() => setStatus(t('editor_status_ready')), 2000);
+          return;
+        }
+        
+        // If not 404, log error for debugging
+        if (response.status !== 404) {
+          console.error('Dev server error:', response.status);
+        }
+      } catch (devServerError) {
+        // Dev server not reachable, silently continue to next strategy
+      }
+      
+      // Strategy 2: Try GitHub API (production or if dev server unavailable)
       if (config.github && config.github.owner) {
         try {
           await saveToGitHub(filePath, content);
           setStatus(t('editor_github_committed'));
+          // Update originalSource so button becomes disabled again
+          originalSource = content;
+          updateSaveButtonState();
           setTimeout(() => setStatus(t('editor_status_ready')), 3000);
           return;
         } catch (githubError) {
@@ -452,44 +502,20 @@ def render_markdown(text):
             setTimeout(() => setStatus(t('editor_status_ready')), 3000);
             return;
           }
-          
-          // Otherwise fall through to dev server
         }
       }
       
-      // Strategy 2: Try dev server endpoint
-      const response = await fetch('/_text_forge/save', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          filePath: filePath,
-          content: content
-        })
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        setStatus(t('editor_status_saved'));
-        setTimeout(() => setStatus(t('editor_status_ready')), 2000);
-        return;
-      }
-      
       // Strategy 3: Fallback to download
-      if (response.status === 404) {
-        downloadAsFile(content, filePath);
-        return;
-      }
-      
-      const errorData = await response.text();
-      console.error('Save failed:', response.status, errorData);
-      throw new Error(`HTTP ${response.status}`);
+      downloadAsFile(content, filePath);
+      // Update originalSource after download
+      originalSource = content;
+      updateSaveButtonState();
       
     } catch (error) {
       console.error('Save error:', error);
-      // Final fallback to download
       downloadAsFile(content, filePath);
+      originalSource = content;
+      updateSaveButtonState();
     }
   }
   
@@ -521,6 +547,21 @@ def render_markdown(text):
     els.toggle.hidden = true;
     document.body.style.overflow = 'hidden';
 
+    // Set filename in toolbar
+    const filenameEl = document.getElementById('md-editor-filename');
+    if (filenameEl && config.filePath) {
+      // Extract just the filename from the path
+      const filename = config.filePath.split('/').pop();
+      filenameEl.textContent = filename;
+    }
+
+    // Disable Save button initially (no changes yet)
+    if (els?.save) {
+      els.save.disabled = true;
+      els.save.style.opacity = '0.5';
+      els.save.style.cursor = 'not-allowed';
+    }
+
     // Load source and Pyodide in parallel
     try {
       const [source] = await Promise.all([
@@ -528,10 +569,14 @@ def render_markdown(text):
         loadPyodide()
       ]);
       
+      originalSource = source;
       els.source.value = source;
+      updateSaveButtonState();
       await renderPreview();
     } catch (err) {
       els.source.value = `# ${t('editor_status_load_failed')}\n\n${err.message}`;
+      originalSource = null;
+      console.error('Editor failed to load:', err);
     }
   }
 
@@ -544,6 +589,7 @@ def render_markdown(text):
     els.editor.hidden = true;
     els.toggle.hidden = false;
     document.body.style.overflow = '';
+    originalSource = null;
   }
 
   /**
@@ -591,9 +637,9 @@ def render_markdown(text):
   }
 
   /**
-   * Sync scroll position from source to preview
+   * Sync scroll position from source to preview (left to right)
    */
-  function syncScroll() {
+  function syncScrollRight() {
     if (!els?.source || !els?.preview) return;
     
     const textarea = els.source;
@@ -604,6 +650,22 @@ def render_markdown(text):
     const targetScroll = scrollRatio * (previewParent.scrollHeight - previewParent.clientHeight);
     
     previewParent.scrollTop = targetScroll;
+  }
+
+  /**
+   * Sync scroll position from preview to source (right to left)
+   */
+  function syncScrollLeft() {
+    if (!els?.source || !els?.preview) return;
+    
+    const textarea = els.source;
+    const previewParent = els.preview.parentElement;
+    
+    // Match scroll percentage from preview to source
+    const scrollRatio = previewParent.scrollTop / (previewParent.scrollHeight - previewParent.clientHeight);
+    const targetScroll = scrollRatio * (textarea.scrollHeight - textarea.clientHeight);
+    
+    textarea.scrollTop = targetScroll;
   }
 
   /**
@@ -619,7 +681,13 @@ def render_markdown(text):
     els.toggle.addEventListener('click', openEditor);
     els.close?.addEventListener('click', closeEditor);
     els.save?.addEventListener('click', saveSource);
-    els.sync?.addEventListener('click', syncScroll);
+    
+    // Sync buttons
+    const syncRight = document.getElementById('md-editor-sync-right');
+    const syncLeft = document.getElementById('md-editor-sync-left');
+    syncRight?.addEventListener('click', syncScrollRight);
+    syncLeft?.addEventListener('click', syncScrollLeft);
+    
     els.source?.addEventListener('input', scheduleRender);
 
     // ESC to close

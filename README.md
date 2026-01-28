@@ -1,11 +1,9 @@
 
 # text-forge
 
-# TODO Show filename in top bar
-# TODO Disable Save button when no changes with original
-# TODO When Saved - continue editing in same window
-# TODO Sync Right - Sync Left
+# TODO publish and action.yml check with plugin 
 # TODO GitHub API Save and Commit
+# TODO Remove plugin with github edit buttons
 # TODO Publish to PyPI
 # TODO Update README with very short quickstart
 # TODO implement install.sh in top level repo

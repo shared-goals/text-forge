@@ -2,11 +2,35 @@
 """Check i18n translation files for consistency."""
 
 import json
+import re
 import sys
 from pathlib import Path
 
 
-def check_translations(filepath: str) -> bool:
+def find_translation_keys_in_files(base_path: Path) -> set:
+    """Find all data-i18n* attribute values used in HTML and JS files."""
+    keys = set()
+    
+    # Check HTML files
+    html_files = list(base_path.glob('mkdocs/overrides/**/*.html'))
+    for html_file in html_files:
+        content = html_file.read_text(encoding='utf-8')
+        # Match data-i18n="key", data-i18n-title="key", data-i18n-placeholder="key"
+        matches = re.findall(r'data-i18n(?:-\w+)?="([^"]+)"', content)
+        keys.update(matches)
+    
+    # Check JS files for t('key') calls
+    js_files = list(base_path.glob('mkdocs/overrides/**/*.js'))
+    for js_file in js_files:
+        content = js_file.read_text(encoding='utf-8')
+        # Match t('editor_*') or t("editor_*") - only keys starting with editor_
+        matches = re.findall(r"t\(['\"]+(editor_[^'\"]+)['\"]+\)", content)
+        keys.update(matches)
+    
+    return keys
+
+
+def check_translations(filepath: str, base_path: Path = None) -> bool:
     """Check translation file for consistency across languages."""
     path = Path(filepath)
     
@@ -70,6 +94,22 @@ def check_translations(filepath: str) -> bool:
     else:
         # Single-language flat structure: {"key": "value"}
         print(f"✅ Translation file is valid with {len(data)} keys")
+        
+        # Check if all keys used in templates/JS exist in translations
+        if base_path:
+            used_keys = find_translation_keys_in_files(base_path)
+            defined_keys = set(data.keys())
+            
+            missing = used_keys - defined_keys
+            unused = defined_keys - used_keys
+            
+            if missing:
+                print(f"❌ Missing translations for keys used in code: {sorted(missing)}")
+                return False
+            
+            if unused:
+                print(f"⚠️  Unused translation keys (defined but not used): {sorted(unused)}")
+        
         return True
 
 
@@ -78,5 +118,10 @@ if __name__ == "__main__":
         print("Usage: check_i18n.py <translations_file>")
         sys.exit(1)
     
-    success = check_translations(sys.argv[1])
+    filepath = sys.argv[1]
+    # Get absolute project root
+    script_dir = Path(__file__).parent.resolve()
+    base_path = script_dir.parent  # Go up from scripts/ to project root
+    
+    success = check_translations(filepath, base_path)
     sys.exit(0 if success else 1)

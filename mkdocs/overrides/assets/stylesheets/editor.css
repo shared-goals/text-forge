@@ -55,10 +55,17 @@
 .md-editor__toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 0.5rem 1rem;
   background: var(--md-primary-fg-color);
   color: var(--md-primary-bg-color);
+  gap: 1rem;
+}
+
+.md-editor__left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
 }
 
 .md-editor__title {
@@ -66,9 +73,22 @@
   font-size: 1rem;
 }
 
+.md-editor__filename {
+  flex: 1;
+  text-align: left;
+  padding: 0.35rem 0.85rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 0.25rem;
+  font-family: var(--md-code-font-family);
+  font-size: 0.85rem;
+  font-weight: 500;
+  opacity: 0.95;
+}
+
 .md-editor__actions {
   display: flex;
   gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 .md-editor__btn {

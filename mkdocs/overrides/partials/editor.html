@@ -13,10 +13,16 @@
 <!-- Live Editor Panel -->
 <div id="md-editor" class="md-editor" hidden>
   <div class="md-editor__toolbar">
-    <span class="md-editor__title" data-i18n="editor_title">Редактор Markdown</span>
+    <div class="md-editor__left">
+      <span class="md-editor__title" data-i18n="editor_title">Редактор Markdown</span>
+      <button id="md-editor-sync-right" class="md-editor__btn" data-i18n-title="editor_sync_right" title="Синхронизировать скролл →">
+        {% include ".icons/material/arrow-right-bold.svg" %}
+      </button>
+    </div>
+    <span class="md-editor__filename" id="md-editor-filename"></span>
     <div class="md-editor__actions">
-      <button id="md-editor-sync" class="md-editor__btn" data-i18n-title="editor_sync" title="Синхронизировать скролл">
-        {% include ".icons/material/arrow-left-right.svg" %}
+      <button id="md-editor-sync-left" class="md-editor__btn" data-i18n-title="editor_sync_left" title="← Синхронизировать скролл">
+        {% include ".icons/material/arrow-left-bold.svg" %}
       </button>
       <button id="md-editor-save" class="md-editor__btn" data-i18n-title="editor_save" title="Сохранить">
         {% include ".icons/material/content-save.svg" %}
@@ -45,28 +51,24 @@
 </button>
 
 <!-- Pass page metadata and source content to JS -->
+{% set editor_config = {
+  'sourceUrl': (config.repo_url ~ '/' ~ config.edit_uri ~ page.file.src_path)|e|replace('/blob/', '/raw/'),
+  'filePath': page.file.src_path|e,
+  'fileName': page.file.name|e,
+  'sourceContent': (page._text_forge_original_source | default(page.markdown)),
+  'markdownExtensions': config.markdown_extensions,
+  'extensionConfigs': config.mdx_configs,
+  'github': {
+    'owner': config.repo_name.split('/')[0]|e,
+    'repo': config.repo_name.split('/')[1]|e,
+    'branch': config.remote_branch|default('main')|e,
+    'apiUrl': 'https://api.github.com'
+  } if config.repo_name else None
+} %}
+<script id="md-editor-config" type="application/json">
+{{ editor_config | tojson }}
+</script>
 <script>
-  window.__MD_EDITOR__ = {
-    sourceUrl: "{{ (config.repo_url ~ '/' ~ config.edit_uri ~ page.file.src_path)|e }}".replace('/blob/', '/raw/'),
-    filePath: "{{ page.file.src_path|e }}",
-    fileName: "{{ page.file.name|e }}",
-    // Embed original source with frontmatter (captured before parsing)
-    sourceContent: {{ (page._text_forge_original_source | default(page.markdown)) | tojson }},
-    // Embed markdown extensions config
-    markdownExtensions: {{ config.markdown_extensions | tojson }},
-    // Embed extension configurations (mdx_configs has the actual configs)
-    extensionConfigs: {{ config.mdx_configs | tojson }},
-    // GitHub repository info (for API save)
-    {% if config.repo_name %}
-    github: {
-      owner: "{{ config.repo_name.split('/')[0]|e }}",
-      repo: "{{ config.repo_name.split('/')[1]|e }}",
-      branch: "{{ config.remote_branch|default('main')|e }}",
-      apiUrl: "https://api.github.com"
-    }
-    {% else %}
-    github: null
-    {% endif %}
-  };
+  window.__MD_EDITOR__ = JSON.parse(document.getElementById('md-editor-config').textContent);
 </script>
 {% endif %}
