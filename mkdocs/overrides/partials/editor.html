@@ -56,9 +56,10 @@
 <!-- Pass page metadata and source content to JS -->
 {% set edit_uri_parts = config.edit_uri.rstrip('/').split('/') %}
 {% set repo_base_path = '/'.join(edit_uri_parts[2:]) if edit_uri_parts|length > 2 else '' %}
+{% set full_file_path = (repo_base_path ~ '/' ~ page.file.src_path) if repo_base_path else page.file.src_path %}
 {% set editor_config = {
   'sourceUrl': (config.repo_url ~ '/' ~ config.edit_uri ~ page.file.src_path)|e|replace('/blob/', '/raw/'),
-  'filePath': page.file.src_path|e,
+  'filePath': full_file_path|e,
   'localFilePath': page.file.src_uri|e,
   'fileName': page.file.name|e,
   'sourceContent': (page._text_forge_original_source | default(page.markdown)),
