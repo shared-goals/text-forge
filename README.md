@@ -1,16 +1,51 @@
-
 # text-forge
-
-# TODO publish and action.yml check with plugin 
-# TODO GitHub API Save and Commit
-# TODO Remove plugin with github edit buttons
-# TODO Publish to PyPI
-# TODO Update README with very short quickstart
-# TODO implement install.sh in top level repo
 
 **MkDocs plugin + GitHub Action + CLI tools** для создания интерактивных текстовых сайтов с EPUB, live preview, и GitHub-based редактированием.
 
-Originally developed for [`bongiozzo/whattodo`](https://github.com/bongiozzo/whattodo), now extracted as reusable tooling.
+Originally developed for [`bongiozzo/whattodo`](https://github.com/bongiozzo/whattodo), and later extracted as reusable tooling.
+
+---
+
+## Quick Start
+
+### For Content Authors (Use GitHub Action)
+
+```yaml
+# .github/workflows/publish.yml
+- uses: shared-goals/text-forge@main
+  with:
+    mkdocs_config: mkdocs.yml
+    docs_dir: text/ru
+    site_dir: public/ru
+```
+
+### For Local Development
+
+```bash
+# Install from PyPI
+pip install text-forge
+
+# Or with uv
+uv pip install text-forge
+
+# Build EPUB
+text-forge epub --config=mkdocs.yml --build-dir=build
+
+# Build site + EPUB
+text-forge build --config=mkdocs.yml --build-dir=build
+
+# Live preview (MkDocs dev server)
+mkdocs serve
+```
+
+---
+
+## TODOs
+
+- [ ] **Publish to PyPI** (ready! package built and tested)
+- [ ] GitHub API Save and Commit (editor widget)
+- [ ] Remove plugin with github edit buttons  
+- [ ] Update action.yml to use `@v1` after first PyPI release
 
 ---
 
@@ -77,18 +112,18 @@ Originally developed for [`bongiozzo/whattodo`](https://github.com/bongiozzo/wha
    - Save changes → browser auto-refreshes instantly
    - Test multiple edits before committing
 
-5. **Publish All Changes:**
+5. **Publish Changes:**
    ```bash
-   make push     # Commits and pushes all changes → triggers GitHub Actions
+   git add .
+   git commit -m "Update content"
+   git push  # Triggers GitHub Actions to rebuild site
    ```
 
 **Requirements:**
-- 📦 `install.sh` script (handles uv installation + Python deps)
-- 📦 `make` (for development commands, auto-installed by install.sh if missing)
-- 📦 `pandoc` (optional, only for EPUB generation)
-- ✅ `text-forge` installed as Python package (via `uv sync`)
-- ✅ `make serve` launches MkDocs dev server with live reload
-- ✅ Built-in live markdown editor for in-browser preview
+- 📦 `install.sh` script (handles uv + pandoc installation, then `uv sync` for Python deps)
+- 📦 `make` (for development commands, pre-installed on macOS/Linux, needs manual install on Windows)
+- ✅ `text-forge` installed automatically via `uv sync` (reads pyproject.toml)
+- ✅ `pandoc` installed via install.sh (optional, only for EPUB generation)
 
 **Why Local Development:**
 - Test multiple changes before publishing
@@ -98,11 +133,12 @@ Originally developed for [`bongiozzo/whattodo`](https://github.com/bongiozzo/wha
 
 **Target Users:** Content authors who want to preview changes locally before publishing, using the same browser editor widget as production site.
 
-**Implementation Status:** 🚧 In Progress
-- 🚧 Create `install.sh` script for universal installation
-- ✅ Makefile with development targets exists
+**Implementation Status:** ✅ Complete (Local Dev Setup)
+- ✅ `install.sh` script for universal installation (macOS/Linux/Windows)
+- ✅ Makefile with development targets (`serve`, `epub`, `build`, `clean`, `info`)
 - ✅ Live editor widget works on local server
-- 🚧 Need to migrate scripts to CLI commands for better UX
-- 🚧 Need to simplify installation (publish to PyPI)
+- ✅ CLI commands migrated (`text-forge epub`, `text-forge build`)
+- ✅ Package ready for PyPI publication
+- 🚧 GitHub API Save and Commit (in editor widget) - pending
 
 ---

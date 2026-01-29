@@ -68,12 +68,46 @@ def combine(config):
     default="build",
     help="Build output directory",
 )
-def build(config, build_dir):
+@click.option(
+    "--site-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="MkDocs site output directory (default: from mkdocs.yml)",
+)
+@click.option(
+    "--strict/--no-strict",
+    default=True,
+    help="Run mkdocs build with --strict (fail on warnings)",
+)
+@click.option(
+    "--copy-artifacts/--no-copy-artifacts",
+    default=True,
+    help="Copy EPUB and combined text to docs/assets",
+)
+@click.option(
+    "--create-redirect/--no-create-redirect",
+    default=True,
+    help="Create root redirect HTML (public/index.html)",
+)
+@click.option(
+    "--redirect-target",
+    default="/ru/",
+    help="Redirect target path (default: /ru/)",
+)
+def build(config, build_dir, site_dir, strict, copy_artifacts, create_redirect, redirect_target):
     """Build site and EPUB."""
     from text_forge.build import build_site_pipeline
 
     try:
-        build_site_pipeline(config, build_dir)
+        build_site_pipeline(
+            config, 
+            build_dir, 
+            site_dir=site_dir,
+            strict=strict,
+            copy_artifacts=copy_artifacts,
+            create_redirect=create_redirect,
+            redirect_target=redirect_target,
+        )
         click.echo(f"\n✓ Success! Full build complete.")
     except Exception as e:
         click.echo(f"\n✗ Failed: {e}", err=True)

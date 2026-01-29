@@ -1,17 +1,27 @@
 [project]
 name = "text-forge"
-version = "0.0.0"
-description = "Reusable build/publish pipeline for Markdown chapter collections"
+version = "0.1.0"
+description = "MkDocs plugin and build pipeline for Markdown text projects with EPUB generation"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
-keywords = ["mkdocs", "mkdocs-plugin", "epub", "markdown"]
+authors = [
+    {name = "Bongiozzo", email = "sergey.polyakov@hotmail.com"},
+]
+maintainers = [
+    {name = "Bongiozzo", email = "sergey.polyakov@hotmail.com"},
+]
+keywords = ["mkdocs", "mkdocs-plugin", "epub", "markdown", "publishing", "documentation"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Documentation",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Text Processing :: Markup :: Markdown",
 ]
 dependencies = [
     # Keep in sync with content repos that use this pipeline.
@@ -26,6 +36,12 @@ dependencies = [
     # mkdocs.yml uses !ENV tags
     "pyyaml>=6.0.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/shared-goals/text-forge"
+Repository = "https://github.com/shared-goals/text-forge"
+Issues = "https://github.com/shared-goals/text-forge/issues"
+Documentation = "https://github.com/shared-goals/text-forge#readme"
 
 [project.entry-points."mkdocs.plugins"]
 "text-forge" = "text_forge.plugin:TextForgePlugin"
@@ -43,6 +59,16 @@ packages = ["text_forge"]
 [tool.hatch.build.targets.wheel.shared-data]
 "mkdocs/overrides" = "share/text-forge/mkdocs/overrides"
 "mkdocs/hooks" = "share/text-forge/mkdocs/hooks"
+"scripts" = "share/text-forge/scripts"
+"epub" = "share/text-forge/epub"
+
+[tool.hatch.build.targets.wheel.force-include]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "tests/",
+    "whattodo/",
+]
 
 [dependency-groups]
 dev = [

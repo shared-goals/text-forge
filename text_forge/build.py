@@ -12,6 +12,29 @@ from typing import Optional
 import yaml
 
 
+def _get_data_path(relative_path: str) -> Path:
+    """
+    Get path to data files (scripts, epub assets, etc.).
+    
+    Looks in installed location first (sys.prefix/share/text-forge/...),
+    then falls back to repo-relative path for development.
+    """
+    # Try installed location (when installed via pip)
+    installed = Path(sys.prefix) / "share" / "text-forge" / relative_path
+    if installed.exists():
+        return installed
+    
+    # Fall back to repo-relative path (for development)
+    repo_relative = Path(__file__).parent.parent / relative_path
+    if repo_relative.exists():
+        return repo_relative
+    
+    raise FileNotFoundError(
+        f"Could not find {relative_path} in installed location ({installed}) "
+        f"or repo-relative location ({repo_relative})"
+    )
+
+
 def load_mkdocs_config(config_path: Path) -> dict:
     """Load mkdocs.yml configuration."""
     if not config_path.exists():
@@ -43,10 +66,7 @@ def combine_chapters(config_path: Path, output_path: Path) -> None:
 
     Uses mkdocs-combine.py script.
     """
-    script = Path(__file__).parent.parent / "scripts" / "mkdocs-combine.py"
-
-    if not script.exists():
-        raise FileNotFoundError(f"mkdocs-combine.py not found at {script}")
+    script = _get_data_path("scripts/mkdocs-combine.py")
 
     print(f"Combining chapters from {config_path}...")
 
@@ -68,10 +88,7 @@ def normalize_markdown(input_path: Path, output_path: Path) -> None:
 
     Uses pymdown-pandoc.lua filter.
     """
-    lua_filter = Path(__file__).parent.parent / "scripts" / "pymdown-pandoc.lua"
-
-    if not lua_filter.exists():
-        raise FileNotFoundError(f"pymdown-pandoc.lua not found at {lua_filter}")
+    lua_filter = _get_data_path("scripts/pymdown-pandoc.lua")
 
     print(f"Normalizing markdown syntax...")
 
@@ -105,13 +122,8 @@ def process_epub_metadata(config_path: Path, output_path: Path) -> None:
     import datetime
     import subprocess
 
-    script = Path(__file__).parent.parent / "scripts" / "process-epub-meta.py"
-    meta_template = Path(__file__).parent.parent / "epub" / "book_meta.yml"
-
-    if not script.exists():
-        raise FileNotFoundError(f"process-epub-meta.py not found at {script}")
-    if not meta_template.exists():
-        raise FileNotFoundError(f"book_meta.yml not found at {meta_template}")
+    script = _get_data_path("scripts/process-epub-meta.py")
+    meta_template = _get_data_path("epub/book_meta.yml")
 
     print(f"Processing EPUB metadata...")
 
@@ -209,7 +221,7 @@ def build_epub_pipeline(config_path: Path, build_dir: Path) -> Path:
     epub_file = build_dir / "text_book.epub"
 
     # Static assets
-    css_file = Path(__file__).parent.parent / "epub" / "epub.css"
+    css_file = _get_data_path("epub/epub.css")
     cover_file = content_root / docs_dir / "img" / "cover.jpg"
 
     try:
@@ -244,7 +256,9 @@ def build_epub_pipeline(config_path: Path, build_dir: Path) -> Path:
         raise
 
 
-def build_mkdocs_site(config_path: Path, site_dir: Optional[Path] = None) -> Path:
+def build_mkdocs_site(
+    config_path: Path, site_dir: Optional[Path] = None, strict: bool = False
+) -> Path:
     """
     Build MkDocs site.
 
@@ -259,8 +273,14 @@ def build_mkdocs_site(config_path: Path, site_dir: Optional[Path] = None) -> Pat
 
     print(f"\nBuilding MkDocs site...")
 
+    cmd = [sys.executable, "-m", "mkdocs", "build", "--config-file", str(config_path)]
+    if site_dir:
+        cmd.extend(["--site-dir", str(site_dir)])
+    if strict:
+        cmd.append("--strict")
+
     result = subprocess.run(
-        ["mkdocs", "build", "--config-file", str(config_path)],
+        cmd,
         check=True,
         capture_output=True,
         text=True,
@@ -296,13 +316,39 @@ def copy_build_artifacts(build_dir: Path, docs_dir: Path) -> None:
         print(f"✓ Copied {txt_src.name}")
 
 
-def build_site_pipeline(config_path: Path, build_dir: Path) -> None:
+def create_root_redirect(site_dir: Path, redirect_target: str = "/ru/") -> None:
+    """
+    Create root redirect HTML file.
+
+    Creates public/index.html that redirects to the specified target (e.g., /ru/).
+    """
+    public_dir = site_dir.parent
+    public_dir.mkdir(parents=True, exist_ok=True)
+
+    redirect_file = public_dir / "index.html"
+
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url={redirect_target}"><link rel="canonical" href="{redirect_target}"><title>Redirecting to {redirect_target}</title></head><body><p>Redirecting to <a href="{redirect_target}">{redirect_target}</a>...</p><script>window.location.href="{redirect_target}";</script></body></html>"""
+
+    redirect_file.write_text(html, encoding="utf-8")
+    print(f"✓ Created root redirect: {redirect_file} → {redirect_target}")
+
+
+def build_site_pipeline(
+    config_path: Path,
+    build_dir: Path,
+    site_dir: Optional[Path] = None,
+    strict: bool = False,
+    copy_artifacts: bool = True,
+    create_redirect: bool = True,
+    redirect_target: str = "/ru/",
+) -> None:
     """
     Run complete site + EPUB build pipeline.
 
     1. Build EPUB
-    2. Copy artifacts to docs/assets
+    2. Copy artifacts to docs/assets (optional)
     3. Build MkDocs site
+    4. Create root redirect (optional)
     """
     config_path = config_path.resolve()
     content_root = config_path.parent
@@ -315,15 +361,20 @@ def build_site_pipeline(config_path: Path, build_dir: Path) -> None:
         # Step 1: Build EPUB
         epub_file = build_epub_pipeline(config_path, build_dir)
 
-        # Step 2: Copy artifacts
-        copy_build_artifacts(build_dir, docs_dir)
+        # Step 2: Copy artifacts (optional)
+        if copy_artifacts:
+            copy_build_artifacts(build_dir, docs_dir)
 
         # Step 3: Build site
-        site_dir = build_mkdocs_site(config_path)
+        built_site_dir = build_mkdocs_site(config_path, site_dir, strict)
+
+        # Step 4: Create root redirect (optional)
+        if create_redirect:
+            create_root_redirect(built_site_dir, redirect_target)
 
         print(f"\n✓ Full build complete!")
         print(f"  EPUB: {epub_file}")
-        print(f"  Site: {site_dir}")
+        print(f"  Site: {built_site_dir}")
 
     except Exception as e:
         print(f"\n✗ Build failed: {e}", file=sys.stderr)
