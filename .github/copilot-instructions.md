@@ -1,52 +1,46 @@
 # Copilot instructions (text-forge)
 
 ## Big picture
-- This repo is a *composite GitHub Action* that builds/publishes a Markdown chapter collection into:
-  - combined markdown (`build/text_combined.txt`)
-  - pandoc-normalized markdown (`build/pandoc.md`)
-  - EPUB (`build/text_book.epub`)
-  - MkDocs site output (default `public/ru/`)
-- The pipeline is intentionally split into 3 stages in [action.yml](action.yml):
-  1) **Combine**: `scripts/mkdocs-combine.py` reads a content repo’s `mkdocs.yml` (`nav`, `docs_dir`, `site_url`) and emits one merged markdown document.
-  2) **Normalize**: Pandoc runs `scripts/pymdown-pandoc.lua` to convert PyMdown-style `///` blocks into Pandoc `Div`s and to sanitize image attributes.
-  3) **Publish artifacts**: Pandoc generates EPUB using `epub/book_meta.yml` (+ placeholder processing) and MkDocs builds the site.
+- This repo is **tooling**: a MkDocs plugin + build pipeline + composite GitHub Action for “text projects” (Markdown chapters → MkDocs site + EPUB).
+- The pipeline is intentionally staged:
+  1) Combine chapters from `mkdocs.yml` `nav:` → `build/text_combined.txt` via `scripts/mkdocs-combine.py`
+  2) Normalize PyMdown `/// ... ///` blocks → Pandoc AST via `scripts/pymdown-pandoc.lua` → `build/pandoc.md`
+  3) Generate metadata from placeholders in `epub/book_meta.yml` via `scripts/process-epub-meta.py`
+  4) Render EPUB via `pandoc` + `epub/epub.css` → `build/text_book.epub`
+  5) Copy artifacts into `docs_dir/assets/`, then `mkdocs build` into `public/ru/` (or configured `site_dir`).
 
-- Content repos may reference shared MkDocs assets from this repo via paths like:
-  - `hooks: [text-forge/mkdocs/hooks/nobr_emoticons.py]`
-  - `theme.custom_dir: text-forge/mkdocs/overrides`
-  The action provisions these paths at runtime so CI builds work even without a git submodule checkout.
+## Key components (where to look)
+- MkDocs plugin: `text_forge/plugin.py` (theme overrides, hook wiring, editor integration).
+- CLI entrypoint: `text_forge/cli.py` (`text-forge epub|build|info`; `combine` is currently TODO).
+- Build helpers: `text_forge/build.py` (Python wrapper around the same scripts).
+- Site overrides/assets: `mkdocs/overrides/` (templates + `assets/js/editor.js` + CSS).
+- MkDocs hook: `mkdocs/hooks/nobr_emoticons.py` (wraps ASCII emoticons in `md-nobr`).
 
-## Key conventions baked into the build
-- `scripts/mkdocs-combine.py` (mkdocs.yml mode) requires `mkdocs.yml` to define: `docs_dir`, `nav`, and `site_url`.
-- Link rewriting in the combined doc:
-  - `[text](file.md)` becomes `[text](#file-md)` (anchor derived from path).
-  - `[text](file.md#anchor)` becomes `[text](#anchor)`.
-- Frontmatter handling: YAML frontmatter is removed from chapters, but dates may be emitted as a PyMdown block:
-  - `/// chapter-dates ... ///` created from `created/published/updated` frontmatter or Git history.
-- “Details” blocks: `/// details ... ///` bodies are replaced with a source link derived from `site_url`.
-- MkDocs hook `mkdocs/hooks/nobr_emoticons.py` wraps emoticons in `<span class="md-nobr">…</span>` to prevent line breaks.
+## Local workflows (tooling repo)
+- Install deps: `make install` (uses `uv sync` for this repo).
+- Fast preview (no EPUB): `make CONTENT_ROOT=/abs/path/to/content serve`.
+- Full build: `make CONTENT_ROOT=/abs/path/to/content all`.
+- Tests (fixtures): `make CONTENT_ROOT=/abs/path/to/content test`.
+- i18n keys check: `make check-i18n` (validates `mkdocs/overrides/assets/js/translations.json`).
+- MkDocs strict mode note: the Makefile defaults `MKDOCS_GIT_COMMITTERS_ENABLED=false` to avoid rate-limit warnings becoming errors under `--strict`.
 
-## Local dev workflow (mirrors the action)
-Local runs should mirror [action.yml](action.yml).
+## CI / GitHub Action
+- The composite action in `action.yml` runs the same 3-stage pipeline inside GitHub Actions (no `uv`), with pinned `mkdocs`/`mkdocs-material`/plugins. If you bump versions in `pyproject.toml`, consider updating `action.yml` pins too.
 
-- Recommended: use `uv` (see `pyproject.toml` / `uv.lock`) and run via `uv run ...`.
+## Conventions that affect content repos
+- `scripts/mkdocs-combine.py` is nav-driven and performs transformations:
+  - Adds a stable top anchor to each file’s first H1: `{#p2-170-opensource-md}` derived from the file path.
+  - Rewrites internal links: `(file.md)` → `(#file-md)`, `(file.md#anchor)` → `(#anchor)`.
+  - Replaces inner content of `/// details ... ///` blocks with a source link built from `site_url` + nearest heading anchor.
+  - Appends chapter dates as a `/// chapter-dates` block, sourcing `created/published/updated` from frontmatter or Git history.
+- `scripts/pymdown-pandoc.lua` converts `/// block-type | caption ... ///` into a Pandoc `Div` with class `block-type` and prepends an `h6.block-caption` (caption can be derived from mkdocs.yml `pymdownx.blocks.admonition` types).
 
-- Create combined markdown:
-  - `python scripts/mkdocs-combine.py mkdocs.yml > build/text_combined.txt`
-- Run the Pandoc normalization step:
-  - `pandoc -f markdown+smart build/text_combined.txt --lua-filter=scripts/pymdown-pandoc.lua --wrap=preserve -t markdown -o build/pandoc.md`
-- Generate EPUB (metadata placeholders are normally processed by the action):
-  - `pandoc -f markdown+smart build/pandoc.md -o build/text_book.epub --standalone --toc --toc-depth=2 --metadata-file=build/book_meta_processed.yml --resource-path=text/ru --css=epub/epub.css -t epub3`
+## Live editor (MkDocs dev + GitHub)
+- UI is injected via `mkdocs/overrides/partials/editor.html` and implemented in `mkdocs/overrides/assets/js/editor.js`.
+- Save strategies:
+  - Prefer GitHub Contents API (token stored in `localStorage` under `text_forge_github_token`).
+  - For `mkdocs serve`, POST to `/_text_forge/save` (implemented in `TextForgePlugin.on_serve`) which writes to `docs_dir` after path-safety checks.
 
-## Tests
-- Tests are fixture-based smoke checks in [scripts/tests.py](scripts/tests.py).
-- They look for specific fixture snippets under `scripts/fixtures/` inside the generated outputs:
-  - `COMBINED_MD` defaults to `build/text_combined.txt`
-  - `PANDOC_MD` defaults to `build/pandoc.md`
-- Typical run (after generating outputs): `pytest -q scripts/tests.py`
-
-## Making changes safely
-- If changing how `///` blocks are interpreted, update both:
-  - [scripts/mkdocs-combine.py](scripts/mkdocs-combine.py) (what is emitted, e.g. `/// chapter-dates`)
-  - [scripts/pymdown-pandoc.lua](scripts/pymdown-pandoc.lua) (what Pandoc will parse/convert)
-- If changing action inputs/outputs, keep [action.yml](action.yml) and README in sync.
+## When changing the pipeline
+- If you touch `scripts/mkdocs-combine.py` or `scripts/pymdown-pandoc.lua`, update fixtures in `scripts/fixtures/` and validate via `make … test` (tests are in `scripts/tests.py`).
+- Packaging note: `pyproject.toml` installs `mkdocs/overrides` + `mkdocs/hooks` into `sys.prefix/share/text-forge/...`; `TextForgePlugin` looks there first and falls back to repo-relative paths for development.

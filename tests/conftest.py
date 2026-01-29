@@ -1,5 +1,6 @@
 """Pytest configuration for shorter test output."""
 
+
 def pytest_itemcollected(item):
     """Customize test node IDs for shorter output."""
     test_name = item.originalname or item.name

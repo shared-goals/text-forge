@@ -78,157 +78,23 @@ runs:
       with:
         python-version: '3.11'
 
-    - name: Install Python deps (MkDocs + PyYAML)
+    - name: Install text-forge package
       shell: bash
       run: |
         set -euo pipefail
         python -m pip install --upgrade pip
-        python -m pip install \
-          mkdocs==1.6.1 \
-          mkdocs-material==9.6.22 \
-          mkdocs-git-committers-plugin-2==2.5.0 \
-          mkdocs-git-revision-date-localized-plugin==1.5.0 \
-          pyyaml==6.0.3 \
-          click==8.1.7 \
-          livereload==2.7.1
+        # Install text-forge from current action path (for development/testing)
+        # In production, this would be: pip install text-forge==VERSION
+        python -m pip install "${{ github.action_path }}"
 
     - name: Set up Pandoc
       uses: r-lib/actions/setup-pandoc@v2
 
-    - name: Provide MkDocs hook (if missing)
+    - name: Build EPUB (stages 1-3)
       shell: bash
       run: |
         set -euo pipefail
-        # Content repos reference shared hooks/overrides via paths like:
-        #   hooks: [text-forge/mkdocs/hooks/nobr_emoticons.py]
-        #   theme.custom_dir: text-forge/mkdocs/overrides
-        # This step makes builds work even without a git submodule checkout.
-
-        mkdir -p text-forge/mkdocs/hooks text-forge/mkdocs/overrides/partials
-
-        # Hook
-        if [ -f "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" ]; then
-          cp -f "${{ github.action_path }}/mkdocs/hooks/nobr_emoticons.py" "text-forge/mkdocs/hooks/nobr_emoticons.py"
-        fi
-
-        # Theme overrides
-        if [ -f "${{ github.action_path }}/mkdocs/overrides/partials/comments.html" ]; then
-          cp -f "${{ github.action_path }}/mkdocs/overrides/partials/comments.html" "text-forge/mkdocs/overrides/partials/comments.html"
-        fi
-        if [ -f "${{ github.action_path }}/mkdocs/overrides/partials/source-file.html" ]; then
-          cp -f "${{ github.action_path }}/mkdocs/overrides/partials/source-file.html" "text-forge/mkdocs/overrides/partials/source-file.html"
-        fi
-
-    - name: Provide extra.css (if missing)
-      shell: bash
-      run: |
-        set -euo pipefail
-        SRC="${{ github.action_path }}/mkdocs/assets/css/extra.css"
-        DST="${{ inputs.docs_dir }}/assets/css/extra.css"
-        if [ -f "$SRC" ] && [ ! -f "$DST" ]; then
-          mkdir -p "$(dirname "$DST")"
-          cp -f "$SRC" "$DST"
-        fi
-
-    - name: Stage 1 - Combine markdown from mkdocs.yml
-      shell: bash
-      run: |
-        set -euo pipefail
-        mkdir -p "${{ inputs.build_dir }}"
-        python3 "${{ github.action_path }}/scripts/mkdocs-combine.py" "${{ inputs.mkdocs_config }}" > "${{ inputs.build_dir }}/text_combined.txt"
-
-    - name: Stage 2 - Convert PyMdown blocks to Pandoc markdown
-      shell: bash
-      run: |
-        set -euo pipefail
-        pandoc -f markdown+smart "${{ inputs.build_dir }}/text_combined.txt" \
-          --lua-filter="${{ github.action_path }}/scripts/pymdown-pandoc.lua" \
-          --wrap=preserve \
-          -t markdown \
-          -o "${{ inputs.build_dir }}/pandoc.md"
-
-    - name: Process EPUB metadata placeholders
-      shell: bash
-      run: |
-        set -euo pipefail
-        mkdir -p "${{ inputs.build_dir }}"
-
-        GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
-
-        # Prefer a stable YYYY-MM-DD from git; fall back to current UTC date if unavailable.
-        GIT_DATE=$(git log -1 --format=%cs 2>/dev/null || true)
-        if [ -z "$GIT_DATE" ]; then
-          GIT_DATE=$(date -u +%Y-%m-%d)
-        fi
-
-        GIT_DATE_DISPLAY=$(echo "$GIT_DATE" | python3 - <<'PY'
-        import sys, datetime
-        s = sys.stdin.read().strip()
-        if not s:
-          print('')
-          raise SystemExit(0)
-        months = {
-          'January': 'января', 'February': 'февраля', 'March': 'марта', 'April': 'апреля',
-          'May': 'мая', 'June': 'июня', 'July': 'июля', 'August': 'августа',
-          'September': 'сентября', 'October': 'октября', 'November': 'ноября', 'December': 'декабря'
-        }
-        d = datetime.datetime.strptime(s, '%Y-%m-%d')
-        out = d.strftime('%d %B %Y')
-        for en, ru in months.items():
-          out = out.replace(en, ru)
-        print(out)
-        PY
-        )
-
-        if [ -z "$GIT_DATE_DISPLAY" ]; then
-          GIT_DATE_DISPLAY="$GIT_DATE"
-        fi
-
-        EDITION="$GIT_TAG, $GIT_DATE_DISPLAY"
-
-        python3 "${{ github.action_path }}/scripts/process-epub-meta.py" \
-          --mkdocs-config "${{ inputs.mkdocs_config }}" \
-          --template "${{ github.action_path }}/epub/book_meta.yml" \
-          --out "${{ inputs.build_dir }}/book_meta_processed.yml" \
-          --edition "$EDITION" \
-          --date "$GIT_DATE"
-
-    - name: Stage 3 - Generate EPUB
-      shell: bash
-      run: |
-        set -euo pipefail
-        if [ -n "${{ inputs.cover_image }}" ] && [ ! -f "${{ inputs.cover_image }}" ]; then
-          echo "::warning::cover_image was set to '${{ inputs.cover_image }}' but file was not found; falling back to epub/cover.jpg if present, otherwise building without cover."
-        fi
-        COVER=""
-        if [ -n "${{ inputs.cover_image }}" ] && [ -f "${{ inputs.cover_image }}" ]; then
-          COVER="${{ inputs.cover_image }}"
-        elif [ -f "epub/cover.jpg" ]; then
-          COVER="epub/cover.jpg"
-        fi
-        COVER_ARG=""
-        if [ -n "$COVER" ]; then
-          COVER_ARG="--epub-cover-image=$COVER"
-        fi
-        pandoc -f markdown+smart "${{ inputs.build_dir }}/pandoc.md" \
-          -o "${{ inputs.build_dir }}/text_book.epub" \
-          --standalone \
-          --toc \
-          --toc-depth=2 \
-          --metadata-file="${{ inputs.build_dir }}/book_meta_processed.yml" \
-          --resource-path="${{ inputs.docs_dir }}" \
-          --css="${{ github.action_path }}/epub/epub.css" \
-          $COVER_ARG \
-          -t epub3
-
-    - name: Copy artifacts into docs assets
-      if: ${{ inputs.copy_artifacts_into_docs == 'true' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        mkdir -p "${{ inputs.docs_dir }}/assets"
-        cp "${{ inputs.build_dir }}/text_book.epub" "${{ inputs.docs_dir }}/assets/" 
-        cp "${{ inputs.build_dir }}/text_combined.txt" "${{ inputs.docs_dir }}/assets/"
+        text-forge epub --config="${{ inputs.mkdocs_config }}" --build-dir="${{ inputs.build_dir }}"
 
     - name: Configure git-committers token
       shell: bash
@@ -252,23 +118,30 @@ runs:
           git fetch --prune --unshallow --tags || true
         fi
 
-    - name: Build MkDocs site
+    - name: Build site (with artifacts copy and redirect)
       shell: bash
       run: |
         set -euo pipefail
-        STRICT=""
-        if [ "${{ inputs.strict }}" = "true" ]; then
-          STRICT="--strict"
+        STRICT_FLAG="--strict"
+        if [ "${{ inputs.strict }}" != "true" ]; then
+          STRICT_FLAG="--no-strict"
         fi
-        mkdocs build --config-file="${{ inputs.mkdocs_config }}" --site-dir="${{ inputs.site_dir }}" $STRICT
-
-    - name: Create root redirect
-      if: ${{ inputs.create_root_redirect == 'true' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        PUBLIC_DIR=$(dirname "${{ inputs.site_dir }}")
-        mkdir -p "$PUBLIC_DIR"
-        cat > "$PUBLIC_DIR/index.html" <<HTML
-        <!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=${{ inputs.redirect_target }}"><link rel="canonical" href="${{ inputs.redirect_target }}"><title>Redirecting to ${{ inputs.redirect_target }}</title></head><body><p>Redirecting to <a href="${{ inputs.redirect_target }}">${{ inputs.redirect_target }}</a>...</p><script>window.location.href="${{ inputs.redirect_target }}";</script></body></html>
-        HTML
+        
+        COPY_FLAG="--copy-artifacts"
+        if [ "${{ inputs.copy_artifacts_into_docs }}" != "true" ]; then
+          COPY_FLAG="--no-copy-artifacts"
+        fi
+        
+        REDIRECT_FLAG="--create-redirect"
+        if [ "${{ inputs.create_root_redirect }}" != "true" ]; then
+          REDIRECT_FLAG="--no-create-redirect"
+        fi
+        
+        text-forge build \
+          --config="${{ inputs.mkdocs_config }}" \
+          --build-dir="${{ inputs.build_dir }}" \
+          --site-dir="${{ inputs.site_dir }}" \
+          $STRICT_FLAG \
+          $COPY_FLAG \
+          $REDIRECT_FLAG \
+          --redirect-target="${{ inputs.redirect_target }}"

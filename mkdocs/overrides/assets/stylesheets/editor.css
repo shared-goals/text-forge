@@ -1,0 +1,183 @@
+/*
+ * Live Editor Styles (text-forge)
+ * Minimal CSS for split-pane markdown editor with live preview
+ */
+
+/* ========== FAB Toggle Button ========== */
+.md-editor-fab {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  z-index: 10;
+  width: 3rem;
+  height: 3rem;
+  border: none;
+  border-radius: 50%;
+  background: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s, box-shadow 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.md-editor-fab:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.md-editor-fab svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.md-editor-fab[hidden] {
+  display: none;
+}
+
+/* ========== Editor Panel (fullscreen overlay) ========== */
+.md-editor {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  background: var(--md-default-bg-color);
+}
+
+.md-editor[hidden] {
+  display: none;
+}
+
+/* ========== Toolbar ========== */
+.md-editor__toolbar {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+  gap: 1rem;
+}
+
+.md-editor__left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.md-editor__title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.md-editor__filename {
+  flex: 1;
+  text-align: left;
+  padding: 0.35rem 0.85rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 0.25rem;
+  font-family: var(--md-code-font-family);
+  font-size: 0.85rem;
+  font-weight: 500;
+  opacity: 0.95;
+}
+
+.md-editor__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.md-editor__btn {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.md-editor__btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.md-editor__btn svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+/* ========== Split Panes ========== */
+.md-editor__content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.md-editor__pane {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.md-editor__pane--source {
+  border-right: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.md-editor__pane--source textarea {
+  width: 100%;
+  height: 100%;
+  padding: 1rem;
+  border: none;
+  resize: none;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  line-height: 1.6;
+  background: var(--md-code-bg-color);
+  color: var(--md-code-fg-color);
+}
+
+.md-editor__pane--source textarea:focus {
+  outline: none;
+}
+
+.md-editor__pane--preview {
+  padding: 1rem;
+  background: var(--md-default-bg-color);
+}
+
+/* ========== Status Bar ========== */
+.md-editor__status {
+  padding: 0.25rem 1rem;
+  font-size: 0.75rem;
+  color: var(--md-default-fg-color--light);
+  background: var(--md-default-bg-color);
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* ========== Responsive: Stack on mobile ========== */
+@media (max-width: 768px) {
+  .md-editor__content {
+    flex-direction: column;
+  }
+
+  .md-editor__pane--source {
+    border-right: none;
+    border-bottom: 1px solid var(--md-default-fg-color--lightest);
+    flex: 0 0 50%;
+  }
+
+  .md-editor__pane--preview {
+    flex: 0 0 50%;
+  }
+
+  .md-editor-fab {
+    bottom: 1rem;
+    right: 1rem;
+  }
+}

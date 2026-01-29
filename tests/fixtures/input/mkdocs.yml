@@ -1,0 +1,21 @@
+site_name: Test Fixtures
+site_url: https://example.com/test/
+
+docs_dir: docs
+site_dir: site
+
+nav:
+  - 'Introduction':
+    - index.md
+  - 'Content':
+    - chapter1.md
+    - chapter2.md
+
+markdown_extensions:
+  - pymdownx.blocks.admonition:
+      types:
+      - situation
+      - quote
+      - define
+  - attr_list
+  - meta

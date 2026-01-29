@@ -1,0 +1,23 @@
+{
+  "editor_title": "Редактор Markdown",
+  "editor_loading": "Загрузка редактора...",
+  "editor_sync_right": "Синхронизировать скролл →",
+  "editor_sync_left": "← Синхронизировать скролл",
+  "editor_save": "Сохранить",
+  "editor_status_saving": "Сохранение...",
+  "editor_status_saved": "Файл сохранен",
+  "editor_status_save_failed": "Ошибка сохранения",
+  "editor_github_login": "Войти через GitHub",
+  "editor_github_committing": "Отправка в GitHub...",
+  "editor_github_committed": "Изменения отправлены в GitHub",
+  "editor_github_commit_failed": "Ошибка отправки в GitHub",
+  "editor_github_no_permission": "Нет прав на запись. Создать fork?",
+  "editor_status_ready": "Готов",
+  "editor_status_loading_pyodide": "Загрузка Pyodide...",
+  "editor_status_ready_to_render": "Готов к рендеру",
+  "editor_status_rendering_error": "Ошибка рендеринга",
+  "editor_status_load_failed": "Загрузка не удалась",
+  "editor_empty_document": "Пустой документ",
+  "editor_error_mkdocs_fetch": "Не удалось загрузить mkdocs.yml (HTTP {status}). Пример конфигурации: https://github.com/bongiozzo/whattodo/blob/master/mkdocs.yml",
+  "editor_error_no_extensions": "Не найдены markdown расширения в mkdocs.yml. Пример: https://github.com/bongiozzo/whattodo/blob/master/mkdocs.yml"
+}

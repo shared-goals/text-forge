@@ -38,7 +38,9 @@ def _as_str(value) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Process EPUB book_meta.yml placeholders")
+    parser = argparse.ArgumentParser(
+        description="Process EPUB book_meta.yml placeholders"
+    )
     parser.add_argument("--mkdocs-config", required=True)
     parser.add_argument("--template", required=True)
     parser.add_argument("--out", required=True)
@@ -52,7 +54,12 @@ def main() -> int:
 
     mk = {}
     if mkdocs_path.exists():
-        mk = yaml.load(mkdocs_path.read_text(encoding="utf-8"), Loader=_IgnoreUnknownTagsLoader) or {}
+        mk = (
+            yaml.load(
+                mkdocs_path.read_text(encoding="utf-8"), Loader=_IgnoreUnknownTagsLoader
+            )
+            or {}
+        )
 
     site_name = _as_str(mk.get("site_name"))
     site_desc = _as_str(mk.get("site_description"))
@@ -78,7 +85,9 @@ def main() -> int:
 
     rights = epub_rights
     if not rights:
-        rights = copyright_ or (f'<a href="{site_url}">{site_url}</a>' if site_url else "")
+        rights = copyright_ or (
+            f'<a href="{site_url}">{site_url}</a>' if site_url else ""
+        )
 
     text = template_path.read_text(encoding="utf-8")
     replacements = {
@@ -97,7 +106,9 @@ def main() -> int:
 
     leftovers = sorted(set(re.findall(r"\[[a-z_]+\]", text)))
     if leftovers:
-        raise SystemExit(f"Unreplaced placeholders in book_meta: {', '.join(leftovers)}")
+        raise SystemExit(
+            f"Unreplaced placeholders in book_meta: {', '.join(leftovers)}"
+        )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text, encoding="utf-8")
