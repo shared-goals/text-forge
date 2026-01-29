@@ -147,7 +147,6 @@ def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
     - created_date: date of first commit (--follow to track renames)
     - updated_date: date of most recent commit
     """
-    import os
     import subprocess
 
     try:
@@ -594,7 +593,7 @@ def main():
         # Determine mode based on input file
         if args.input.endswith(".yml") or args.input.endswith(".yaml"):
             # Mode 1: mkdocs.yml
-            print(f"[INFO] Mode 1: Processing mkdocs.yml", file=sys.stderr)
+            print("[INFO] Mode 1: Processing mkdocs.yml", file=sys.stderr)
             output = mode_mkdocs(args.input)
         else:
             # Mode 2: Single markdown file
@@ -606,7 +605,7 @@ def main():
 
         # Output to stdout
         print(output, end="")
-        print(f"[INFO] Complete", file=sys.stderr)
+        print("[INFO] Complete", file=sys.stderr)
 
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)

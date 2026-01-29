@@ -94,21 +94,29 @@ def combine(config):
     default="/ru/",
     help="Redirect target path (default: /ru/)",
 )
-def build(config, build_dir, site_dir, strict, copy_artifacts, create_redirect, redirect_target):
+def build(
+    config,
+    build_dir,
+    site_dir,
+    strict,
+    copy_artifacts,
+    create_redirect,
+    redirect_target,
+):
     """Build site and EPUB."""
     from text_forge.build import build_site_pipeline
 
     try:
         build_site_pipeline(
-            config, 
-            build_dir, 
+            config,
+            build_dir,
             site_dir=site_dir,
             strict=strict,
             copy_artifacts=copy_artifacts,
             create_redirect=create_redirect,
             redirect_target=redirect_target,
         )
-        click.echo(f"\n✓ Success! Full build complete.")
+        click.echo("\n✓ Success! Full build complete.")
     except Exception as e:
         click.echo(f"\n✗ Failed: {e}", err=True)
         sys.exit(1)

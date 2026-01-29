@@ -51,6 +51,7 @@
       toggle: document.getElementById('md-editor-toggle'),
       close: document.getElementById('md-editor-close'),
       save: document.getElementById('md-editor-save'),
+      githubLogout: document.getElementById('md-editor-github-logout'),
       source: document.getElementById('md-editor-source'),
       preview: document.getElementById('md-editor-preview'),
       status: document.getElementById('md-editor-status')
@@ -328,13 +329,30 @@ def render_markdown(text):
   }
   
   /**
+   * Update GitHub logout button visibility based on token status
+   */
+  function updateGitHubButtonVisibility() {
+    if (!els?.githubLogout) return;
+    
+    // Show logout button only when token is present
+    els.githubLogout.style.display = hasGitHubToken() ? 'inline-flex' : 'none';
+  }
+  
+  /**
    * Prompt user to enter GitHub Personal Access Token
    */
   function promptGitHubToken() {
+    const tokenUrl = 'https://github.com/settings/tokens/new?description=text-forge-editor&scopes=repo';
+    
+    // Show URL in the prompt directly
     const token = prompt(
-      t('editor_github_login') + '\n\n' +
-      'Введите Personal Access Token с правами repo:\n' +
-      'https://github.com/settings/tokens'
+      t('editor_github_token_prompt_title') + '\n\n' +
+      t('editor_github_token_prompt_fork') + '\n\n' +
+      t('editor_github_token_prompt_step1') + '\n\n' +
+      tokenUrl + '\n\n' +
+      t('editor_github_token_prompt_step2') + '\n' +
+      t('editor_github_token_prompt_step3') + '\n\n' +
+      t('editor_github_token_prompt_input')
     );
     
     if (token && token.trim()) {
@@ -443,6 +461,7 @@ def render_markdown(text):
     
     const content = els.source.value;
     const filePath = config.filePath;
+    const localFilePath = config.localFilePath;
     
     if (!filePath) {
       setStatus(t('editor_status_save_failed'));
@@ -452,15 +471,23 @@ def render_markdown(text):
     try {
       setStatus(t('editor_status_saving'));
       
-      // Strategy 1: Try dev server endpoint first (local development)
-      try {
-        const response = await fetch('/_text_forge/save', {
+      // Auto-detect save strategy based on hostname:
+      // - localhost/127.0.0.1 → save to local dev server
+      // - production domain → save to GitHub
+      const isLocalhost = window.location.hostname === 'localhost' || 
+                         window.location.hostname === '127.0.0.1' ||
+                         window.location.hostname === '';
+      
+      // Strategy 1: Try dev server endpoint (localhost only)
+      if (isLocalhost) {
+        try {
+          const response = await fetch('/_text_forge/save', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            filePath: filePath,
+            filePath: localFilePath || filePath,
             content: content
           })
         });
@@ -482,6 +509,7 @@ def render_markdown(text):
       } catch (devServerError) {
         // Dev server not reachable, silently continue to next strategy
       }
+      }
       
       // Strategy 2: Try GitHub API (production or if dev server unavailable)
       if (config.github && config.github.owner) {
@@ -494,14 +522,15 @@ def render_markdown(text):
           setTimeout(() => setStatus(t('editor_status_ready')), 3000);
           return;
         } catch (githubError) {
-          console.error('GitHub save failed:', githubError);
-          
           // If token issue, let user retry or fall back
           if (githubError.message.includes('token')) {
             setStatus(t('editor_github_commit_failed') + ': ' + githubError.message);
             setTimeout(() => setStatus(t('editor_status_ready')), 3000);
             return;
           }
+          
+          // Re-throw to prevent fallback to download
+          throw githubError;
         }
       }
       
@@ -681,6 +710,11 @@ def render_markdown(text):
     els.toggle.addEventListener('click', openEditor);
     els.close?.addEventListener('click', closeEditor);
     els.save?.addEventListener('click', saveSource);
+    els.githubLogout?.addEventListener('click', () => {
+      removeGitHubToken();
+      updateGitHubButtonVisibility();
+      setStatus(t('editor_github_logged_out') || 'GitHub token cleared');
+    });
     
     // Sync buttons
     const syncRight = document.getElementById('md-editor-sync-right');
@@ -696,6 +730,9 @@ def render_markdown(text):
         closeEditor();
       }
     });
+    
+    // Update GitHub login button visibility
+    updateGitHubButtonVisibility();
   }
 
   // Initialize when DOM is ready

@@ -6,7 +6,6 @@ These tests validate the core pipeline functionality without depending on
 external content repositories like whattodo.
 """
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -165,9 +164,9 @@ class TestConsistency:
         actual = actual.replace("\r\n", "\n").strip()
         expected = expected.replace("\r\n", "\n").strip()
 
-        assert (
-            actual == expected
-        ), "Combined markdown differs from expected. Run test suite to regenerate fixtures if changes are intentional."
+        assert actual == expected, (
+            "Combined markdown differs from expected. Run test suite to regenerate fixtures if changes are intentional."
+        )
 
     def test_pandoc_matches_expected(self, build_test_epub):
         """Verify Pandoc markdown matches expected output."""
@@ -178,9 +177,9 @@ class TestConsistency:
         actual = actual.replace("\r\n", "\n").strip()
         expected = expected.replace("\r\n", "\n").strip()
 
-        assert (
-            actual == expected
-        ), "Pandoc markdown differs from expected. Run test suite to regenerate fixtures if changes are intentional."
+        assert actual == expected, (
+            "Pandoc markdown differs from expected. Run test suite to regenerate fixtures if changes are intentional."
+        )
 
 
 if __name__ == "__main__":

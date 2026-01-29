@@ -15,7 +15,7 @@ import yaml
 def _get_data_path(relative_path: str) -> Path:
     """
     Get path to data files (scripts, epub assets, etc.).
-    
+
     Looks in installed location first (sys.prefix/share/text-forge/...),
     then falls back to repo-relative path for development.
     """
@@ -23,12 +23,12 @@ def _get_data_path(relative_path: str) -> Path:
     installed = Path(sys.prefix) / "share" / "text-forge" / relative_path
     if installed.exists():
         return installed
-    
+
     # Fall back to repo-relative path (for development)
     repo_relative = Path(__file__).parent.parent / relative_path
     if repo_relative.exists():
         return repo_relative
-    
+
     raise FileNotFoundError(
         f"Could not find {relative_path} in installed location ({installed}) "
         f"or repo-relative location ({repo_relative})"
@@ -71,7 +71,7 @@ def combine_chapters(config_path: Path, output_path: Path) -> None:
     print(f"Combining chapters from {config_path}...")
 
     with open(output_path, "w", encoding="utf-8") as out:
-        result = subprocess.run(
+        subprocess.run(
             [sys.executable, str(script), str(config_path)],
             stdout=out,
             stderr=subprocess.PIPE,
@@ -90,9 +90,9 @@ def normalize_markdown(input_path: Path, output_path: Path) -> None:
     """
     lua_filter = _get_data_path("scripts/pymdown-pandoc.lua")
 
-    print(f"Normalizing markdown syntax...")
+    print("Normalizing markdown syntax...")
 
-    result = subprocess.run(
+    subprocess.run(
         [
             "pandoc",
             str(input_path),
@@ -125,7 +125,7 @@ def process_epub_metadata(config_path: Path, output_path: Path) -> None:
     script = _get_data_path("scripts/process-epub-meta.py")
     meta_template = _get_data_path("epub/book_meta.yml")
 
-    print(f"Processing EPUB metadata...")
+    print("Processing EPUB metadata...")
 
     # Get git info for edition and date
     try:
@@ -142,7 +142,7 @@ def process_epub_metadata(config_path: Path, output_path: Path) -> None:
 
     date = datetime.datetime.now().strftime("%Y-%m-%d")
 
-    result = subprocess.run(
+    subprocess.run(
         [
             sys.executable,
             str(script),
@@ -175,7 +175,7 @@ def build_epub_with_pandoc(
     """
     Build EPUB using pandoc.
     """
-    print(f"Building EPUB with pandoc...")
+    print("Building EPUB with pandoc...")
 
     cmd = [
         "pandoc",
@@ -195,7 +195,7 @@ def build_epub_with_pandoc(
     if cover_path and cover_path.exists():
         cmd.extend(["--epub-cover-image", str(cover_path)])
 
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
 
     print(f"✓ EPUB saved to {output_path}")
 
@@ -271,7 +271,7 @@ def build_mkdocs_site(
     if site_dir is None:
         site_dir = Path(config.get("site_dir", "public"))
 
-    print(f"\nBuilding MkDocs site...")
+    print("\nBuilding MkDocs site...")
 
     cmd = [sys.executable, "-m", "mkdocs", "build", "--config-file", str(config_path)]
     if site_dir:
@@ -279,7 +279,7 @@ def build_mkdocs_site(
     if strict:
         cmd.append("--strict")
 
-    result = subprocess.run(
+    subprocess.run(
         cmd,
         check=True,
         capture_output=True,
@@ -372,7 +372,7 @@ def build_site_pipeline(
         if create_redirect:
             create_root_redirect(built_site_dir, redirect_target)
 
-        print(f"\n✓ Full build complete!")
+        print("\n✓ Full build complete!")
         print(f"  EPUB: {epub_file}")
         print(f"  Site: {built_site_dir}")
 
