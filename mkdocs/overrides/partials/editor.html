@@ -13,27 +13,26 @@
 <!-- Live Editor Panel -->
 <div id="md-editor" class="md-editor" hidden>
   <div class="md-editor__toolbar">
-    <div class="md-editor__left">
-      <span class="md-editor__title" data-i18n="editor_title">Markdown Editor</span>
+    <span class="md-editor__title" data-i18n="editor_title">Markdown Editor</span>
+    <div class="md-editor__syncs">
       <button id="md-editor-sync-right" class="md-editor__btn" data-i18n-title="editor_sync_right" title="Sync scroll →">
         {% include ".icons/material/arrow-right-bold.svg" %}
-      </button>
-    </div>
-    <span class="md-editor__filename" id="md-editor-filename"></span>
-    <div class="md-editor__actions">
-      <button id="md-editor-github-logout" class="md-editor__btn md-editor__btn--github" data-i18n-title="editor_github_logout" title="Clear GitHub Token" style="display:none;">
-        {% include ".icons/material/account-remove.svg" %}
       </button>
       <button id="md-editor-sync-left" class="md-editor__btn" data-i18n-title="editor_sync_left" title="← Sync scroll">
         {% include ".icons/material/arrow-left-bold.svg" %}
       </button>
-      <button id="md-editor-save" class="md-editor__btn" data-i18n-title="editor_save" title="Save">
-        {% include ".icons/material/content-save.svg" %}
-      </button>
-      <button id="md-editor-close" class="md-editor__btn" title="Close">
-        {% include ".icons/material/close.svg" %}
-      </button>
     </div>
+    <div class="md-editor__actions">
+        <button id="md-editor-github-logout" class="md-editor__btn md-editor__btn--github" data-i18n-title="editor_github_logout" title="Clear GitHub Token" style="display:none;">
+          {% include ".icons/material/account-remove.svg" %}
+        </button>
+        <button id="md-editor-save" class="md-editor__btn" data-i18n-title="editor_save" title="Save">
+          {% include ".icons/material/content-save.svg" %}
+        </button>
+        <button id="md-editor-close" class="md-editor__btn" title="Close">
+          {% include ".icons/material/close.svg" %}
+        </button>
+      </div>
   </div>
   <div class="md-editor__content">
     <div class="md-editor__pane md-editor__pane--source">
@@ -44,6 +43,7 @@
     </div>
   </div>
   <div class="md-editor__status">
+    <span class="md-editor__filename" id="md-editor-filename"></span>
     <span id="md-editor-status" data-i18n="editor_status_ready">Ready</span>
   </div>
 </div>

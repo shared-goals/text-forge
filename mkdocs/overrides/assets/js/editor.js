@@ -566,6 +566,24 @@ def render_markdown(text):
   }
 
   /**
+   * Position sync buttons at exact pane divider
+   */
+  function positionSyncButtons() {
+    const sourcePane = document.querySelector('.md-editor__pane--source');
+    const syncs = document.querySelector('.md-editor__syncs');
+    const toolbar = document.querySelector('.md-editor__toolbar');
+    if (!sourcePane || !syncs || !toolbar) return;
+
+    const rect = sourcePane.getBoundingClientRect();
+    const dividerX = rect.right;
+    const toolbarRect = toolbar.getBoundingClientRect();
+    
+    syncs.style.left = `${dividerX}px`;
+    syncs.style.top = `${toolbarRect.top}px`;
+    syncs.style.height = `${toolbarRect.height}px`;
+  }
+
+  /**
    * Open editor panel
    */
   async function openEditor() {
@@ -575,6 +593,12 @@ def render_markdown(text):
     els.editor.hidden = false;
     els.toggle.hidden = true;
     document.body.style.overflow = 'hidden';
+
+    // Position sync buttons at divider
+    requestAnimationFrame(() => {
+      positionSyncButtons();
+      window.addEventListener('resize', positionSyncButtons);
+    });
 
     // Set filename in toolbar
     const filenameEl = document.getElementById('md-editor-filename');
@@ -615,6 +639,7 @@ def render_markdown(text):
   function closeEditor() {
     if (!els?.editor) return;
     
+    window.removeEventListener('resize', positionSyncButtons);
     els.editor.hidden = true;
     els.toggle.hidden = false;
     document.body.style.overflow = '';

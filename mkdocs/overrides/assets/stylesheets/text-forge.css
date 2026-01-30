@@ -19,8 +19,24 @@ https://github.com/squidfunk/mkdocs-material/blob/master/src/templates/assets/st
   "quote":    format-quote-close    $clr-grey
 
   background-color: color.adjust($clr-blue-a200, $alpha: -0.9);
+*/
 
- * Fix figure/image width: make <p> wrapper respect <img> width
+/* ========== Downloads Button ========== */
+.md-downloads__epub {
+  color: var(--md-primary-bg-color);
+}
+
+.md-downloads__epub:hover {
+  opacity: 0.7;
+}
+
+@media (max-width: 768px) {
+  .md-downloads__epub {
+    display: none;
+  }
+}
+
+/* Fix figure/image width: make <p> wrapper respect <img> width
  * MkDocs Material wraps images in <figure><p><img></p></figure>
  * The image's width attribute controls the container width
  */

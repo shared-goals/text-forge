@@ -127,20 +127,64 @@ def process_epub_metadata(config_path: Path, output_path: Path) -> None:
 
     print("Processing EPUB metadata...")
 
-    # Get git info for edition and date
+    # Get git info for edition and date (matching Makefile implementation)
+    # Try to get most recent tag first
+    git_tag = None
     try:
         git_result = subprocess.run(
-            ["git", "describe", "--tags", "--always"],
+            ["git", "describe", "--tags", "--abbrev=0"],
             capture_output=True,
             text=True,
             check=True,
             cwd=config_path.parent,
         )
-        edition = git_result.stdout.strip()
+        git_tag = git_result.stdout.strip()
     except subprocess.CalledProcessError:
-        edition = "dev"
+        pass
+    
+    # Fallback to describe if no tag found
+    if not git_tag:
+        try:
+            git_result = subprocess.run(
+                ["git", "describe", "--tags", "--always"],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=config_path.parent,
+            )
+            git_tag = git_result.stdout.strip()
+        except subprocess.CalledProcessError:
+            git_tag = "dev"
 
+    # Get date from last commit or use today
     date = datetime.datetime.now().strftime("%Y-%m-%d")
+    try:
+        git_result = subprocess.run(
+            ["git", "log", "-1", "--format=%cs"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=config_path.parent,
+        )
+        if git_result.stdout.strip():
+            date = git_result.stdout.strip()
+    except subprocess.CalledProcessError:
+        pass
+
+    # Format date with Russian month names (matching Makefile)
+    date_obj = datetime.datetime.strptime(date, "%Y-%m-%d")
+    russian_months = {
+        "January": "января", "February": "февраля", "March": "марта",
+        "April": "апреля", "May": "мая", "June": "июня",
+        "July": "июля", "August": "августа", "September": "сентября",
+        "October": "октября", "November": "ноября", "December": "декабря"
+    }
+    date_display = date_obj.strftime("%d %B %Y")
+    for eng, rus in russian_months.items():
+        date_display = date_display.replace(eng, rus)
+    
+    # Combine tag and formatted date as edition (like Makefile: "v0.51.0b1, 29 января 2026")
+    edition = f"{git_tag}, {date_display}"
 
     subprocess.run(
         [
@@ -171,6 +215,7 @@ def build_epub_with_pandoc(
     css_path: Path,
     cover_path: Optional[Path],
     output_path: Path,
+    docs_dir: Path,
 ) -> None:
     """
     Build EPUB using pandoc.
@@ -181,11 +226,16 @@ def build_epub_with_pandoc(
         "pandoc",
         str(markdown_path),
         "--from",
-        "markdown",
+        "markdown+smart",
         "--to",
-        "epub",
+        "epub3",
+        "--standalone",
+        "--toc",
+        "--toc-depth=2",
         "--metadata-file",
         str(metadata_path),
+        "--resource-path",
+        str(docs_dir),
         "--css",
         str(css_path),
         "--output",
@@ -241,6 +291,7 @@ def build_epub_pipeline(config_path: Path, build_dir: Path) -> Path:
             css_file,
             cover_file if cover_file.exists() else None,
             epub_file,
+            docs_dir,
         )
 
         print(f"\n✓ EPUB build complete: {epub_file}")

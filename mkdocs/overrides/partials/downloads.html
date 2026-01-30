@@ -1,0 +1,12 @@
+{% if text_forge_downloads_enabled %}
+<a 
+  href="{{ config.site_url | default('', true) }}assets/text_book.epub" 
+  class="md-downloads__epub md-header__button"
+  download
+  data-i18n-title="downloads_epub_title"
+  title="Download EPUB"
+  aria-label="Download EPUB"
+>
+  {% include ".icons/material/book-open-variant.svg" %}
+</a>
+{% endif %}

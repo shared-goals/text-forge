@@ -27,6 +27,7 @@ class TextForgePlugin(BasePlugin):
     config_scheme = (
         ("editor_enabled", config_options.Type(bool, default=True)),
         ("nobr_emoticons_enabled", config_options.Type(bool, default=True)),
+        ("downloads_enabled", config_options.Type(bool, default=False)),
         ("auto_configure_theme", config_options.Type(bool, default=True)),
         ("epub_title", config_options.Type(str, default="")),
         ("epub_subtitle", config_options.Type(str, default="")),
@@ -171,6 +172,7 @@ class TextForgePlugin(BasePlugin):
     def on_env(self, env, config, files):
         """Add plugin config to Jinja globals."""
         env.globals["text_forge_editor_enabled"] = self.config["editor_enabled"]
+        env.globals["text_forge_downloads_enabled"] = self.config["downloads_enabled"]
         env.globals["text_forge_source_file_published_title"] = self.config[
             "source_file_published_title"
         ]

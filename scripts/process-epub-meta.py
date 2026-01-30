@@ -67,15 +67,20 @@ def main() -> int:
     site_url = _as_str(mk.get("site_url"))
     copyright_ = _as_str(mk.get("copyright"))
 
-    extra = mk.get("extra") or {}
-    epub = (extra.get("epub") or {}) if isinstance(extra, dict) else {}
+    # Read EPUB metadata from text-forge plugin config
+    plugins = mk.get("plugins") or []
+    text_forge_config = {}
+    for plugin_entry in plugins:
+        if isinstance(plugin_entry, dict) and "text-forge" in plugin_entry:
+            text_forge_config = plugin_entry["text-forge"] or {}
+            break
 
-    epub_title = _as_str(epub.get("title"))
-    epub_subtitle = _as_str(epub.get("subtitle"))
-    epub_author = _as_str(epub.get("author"))
-    epub_identifier = _as_str(epub.get("identifier"))
-    epub_publisher = _as_str(epub.get("publisher"))
-    epub_rights = _as_str(epub.get("rights"))
+    epub_title = _as_str(text_forge_config.get("epub_title"))
+    epub_subtitle = _as_str(text_forge_config.get("epub_subtitle"))
+    epub_author = _as_str(text_forge_config.get("epub_author"))
+    epub_identifier = _as_str(text_forge_config.get("epub_identifier"))
+    epub_publisher = _as_str(text_forge_config.get("epub_publisher"))
+    epub_rights = _as_str(text_forge_config.get("epub_rights"))
 
     title = epub_title or site_name or "Book"
     subtitle = epub_subtitle or site_desc

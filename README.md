@@ -2,6 +2,10 @@
 
 MkDocs plugin + GitHub Action for building text-based websites with EPUB, live editor, and GitHub integration.
 
+## TODOs
+
+- TODO MCP?
+
 ## Quick Start
 
 ### GitHub Action (Publish Site)
