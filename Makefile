@@ -12,7 +12,7 @@ UV := uv --project $(TEXT_FORGE_DIR)
 UV_RUN := $(UV) run
 PYTHON := $(UV_RUN) python
 
-.PHONY: help install format lint check-i18n test clean info
+.PHONY: help install format lint check-i18n test clean info release
 
 help:
 	@echo "text-forge - Development Tools"
@@ -25,6 +25,7 @@ help:
 	@echo "  make test          Run validation tests (uses whattodo as fixture)"
 	@echo "  make clean         Remove build artifacts from whattodo"
 	@echo "  make info          Show project paths"
+	@echo "  make release       Tag and push release (triggers PyPI publish via CI/CD)"
 	@echo ""
 	@echo "For building content projects, see README.md and whattodo/Makefile"
 
@@ -70,3 +71,35 @@ info:
 	@echo "  TEXT_FORGE_DIR: $(TEXT_FORGE_DIR)"
 	@echo "  Tests:          tests/"
 	@echo "  Fixtures:       tests/fixtures/"
+
+release:
+	@echo "==> Creating release..."
+	@CURRENT=$$(grep '^version = ' pyproject.toml | cut -d'"' -f2); \
+	if [ -z "$$CURRENT" ]; then \
+		echo "Error: Could not extract version from pyproject.toml"; \
+		exit 1; \
+	fi; \
+	echo "Current version: $$CURRENT"; \
+	echo "Bump type? [patch/minor/major] (default: patch)"; \
+	read BUMP; \
+	BUMP=$${BUMP:-patch}; \
+	IFS='.' read -r MAJOR MINOR PATCH <<< "$$CURRENT"; \
+	case "$$BUMP" in \
+		patch) NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))" ;; \
+		minor) NEW="$$MAJOR.$$((MINOR + 1)).0" ;; \
+		major) NEW="$$((MAJOR + 1)).0.0" ;; \
+		*) echo "Error: Invalid bump type. Use patch, minor, or major"; exit 1 ;; \
+	esac; \
+	echo "New version: $$NEW"; \
+	echo "Update pyproject.toml and create release? [y/N]"; \
+	read CONFIRM; \
+	if [ "$$CONFIRM" != "y" ] && [ "$$CONFIRM" != "Y" ]; then \
+		echo "Cancelled"; \
+		exit 1; \
+	fi; \
+	sed -i.bak "s/^version = \"$$CURRENT\"/version = \"$$NEW\"/" pyproject.toml && rm pyproject.toml.bak; \
+	git add pyproject.toml; \
+	git commit -m "chore: bump version to $$NEW"; \
+	git tag -a "v$$NEW" -m "Release v$$NEW"; \
+	git push origin main "v$$NEW"; \
+	echo "✓ Released v$$NEW (CI/CD will publish to PyPI)"
