@@ -101,6 +101,7 @@ release:
 	git add pyproject.toml; \
 	git commit -m "chore: bump version to $$NEW"; \
 	git tag -a "v$$NEW" -m "Release v$$NEW"; \
+	git remote set-url origin git@github.com:shared-goals/text-forge.git; \
 	git push origin main "v$$NEW"; \
 	echo "✓ Released v$$NEW (CI/CD will publish to PyPI)"; \
 	echo "→ Watch workflow: https://github.com/shared-goals/text-forge/actions"
