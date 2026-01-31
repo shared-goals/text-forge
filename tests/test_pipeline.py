@@ -53,7 +53,7 @@ def build_test_epub():
         pytest.fail(f"EPUB build failed:\n{result.stderr}")
 
     # Verify outputs exist
-    assert (BUILD_DIR / "text_combined.txt").exists(), "Combined markdown not generated"
+    assert (BUILD_DIR / "text_combined.md").exists(), "Combined markdown not generated"
     assert (BUILD_DIR / "pandoc.md").exists(), "Pandoc markdown not generated"
     assert (BUILD_DIR / "text_book.epub").exists(), "EPUB not generated"
 
@@ -65,13 +65,13 @@ class TestPipeline:
 
     def test_combined_markdown_generated(self, build_test_epub):
         """Verify combined markdown is generated."""
-        combined = build_test_epub / "text_combined.txt"
+        combined = build_test_epub / "text_combined.md"
         assert combined.exists()
         assert combined.stat().st_size > 0
 
     def test_combined_has_all_chapters(self, build_test_epub):
         """Verify all chapters are included in combined markdown."""
-        combined = (build_test_epub / "text_combined.txt").read_text(encoding="utf-8")
+        combined = (build_test_epub / "text_combined.md").read_text(encoding="utf-8")
 
         # Check for content from all files
         assert "Test Fixtures" in combined  # from index.md
@@ -80,7 +80,7 @@ class TestPipeline:
 
     def test_combined_has_pymdown_blocks(self, build_test_epub):
         """Verify PyMdown blocks are preserved in combined markdown."""
-        combined = (build_test_epub / "text_combined.txt").read_text(encoding="utf-8")
+        combined = (build_test_epub / "text_combined.md").read_text(encoding="utf-8")
 
         # Check for PyMdown block syntax
         assert "/// situation" in combined
@@ -88,7 +88,7 @@ class TestPipeline:
 
     def test_combined_has_chapter_dates(self, build_test_epub):
         """Verify chapter dates are added."""
-        combined = (build_test_epub / "text_combined.txt").read_text(encoding="utf-8")
+        combined = (build_test_epub / "text_combined.md").read_text(encoding="utf-8")
 
         # Check for chapter-dates blocks
         assert "/// chapter-dates" in combined
@@ -97,7 +97,7 @@ class TestPipeline:
 
     def test_combined_internal_links_rewritten(self, build_test_epub):
         """Verify internal links are rewritten to anchors."""
-        combined = (build_test_epub / "text_combined.txt").read_text(encoding="utf-8")
+        combined = (build_test_epub / "text_combined.md").read_text(encoding="utf-8")
 
         # Original: [Chapter 1](chapter1.md)
         # Should become: [Chapter 1](#chapter1-md)
@@ -157,8 +157,8 @@ class TestConsistency:
 
     def test_combined_matches_expected(self, build_test_epub):
         """Verify combined markdown matches expected output."""
-        actual = (build_test_epub / "text_combined.txt").read_text(encoding="utf-8")
-        expected = (EXPECTED_DIR / "text_combined.txt").read_text(encoding="utf-8")
+        actual = (build_test_epub / "text_combined.md").read_text(encoding="utf-8")
+        expected = (EXPECTED_DIR / "text_combined.md").read_text(encoding="utf-8")
 
         # Normalize line endings
         actual = actual.replace("\r\n", "\n").strip()

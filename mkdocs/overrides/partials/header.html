@@ -60,10 +60,10 @@
         {% include "partials/source.html" %}
       </div>
     {% endif %}
-    {# EPUB download button - rightmost element #}
+    {# EPUB download button #}
     {% if text_forge_downloads_enabled %}
     <a 
-      href="{{ config.site_url | default('', true) }}assets/text_book.epub" 
+      href="{{ config.site_url | default('', true) }}{{ text_forge_epub_filename }}" 
       class="md-header__button md-icon"
       download
       data-i18n-title="downloads_epub_title"
@@ -71,6 +71,20 @@
       aria-label="Download EPUB"
     >
       {% include ".icons/material/book-open-variant.svg" %}
+    </a>
+    {% endif %}
+    {# AI-readable combined text button (Perplexity integration) #}
+    {% if text_forge_ai_readable_perplexity_query %}
+    <a 
+      href="{{ text_forge_ai_readable_perplexity_query }}" 
+      class="md-header__button md-icon"
+      target="_blank"
+      rel="noopener noreferrer"
+      data-i18n-title="ai_readable_perplexity_title"
+      title="Open in Perplexity"
+      aria-label="Open in Perplexity"
+    >
+      {% include ".icons/material/robot-outline.svg" %}
     </a>
     {% endif %}
   </nav>

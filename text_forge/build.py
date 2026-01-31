@@ -250,7 +250,12 @@ def build_epub_with_pandoc(
     print(f"✓ EPUB saved to {output_path}")
 
 
-def build_epub_pipeline(config_path: Path, build_dir: Path) -> Path:
+def build_epub_pipeline(
+    config_path: Path,
+    build_dir: Path,
+    epub_filename: str = "text_book.epub",
+    combined_filename: str = "text_combined.md",
+) -> Path:
     """
     Run complete EPUB build pipeline.
 
@@ -265,10 +270,10 @@ def build_epub_pipeline(config_path: Path, build_dir: Path) -> Path:
     docs_dir = Path(config.get("docs_dir", "docs"))
 
     # Pipeline paths
-    combined_md = build_dir / "text_combined.txt"
+    combined_md = build_dir / combined_filename
     normalized_md = build_dir / "pandoc.md"
     metadata_yaml = build_dir / "book_meta.yml"
-    epub_file = build_dir / "text_book.epub"
+    epub_file = build_dir / epub_filename
 
     # Static assets
     css_file = _get_data_path("epub/epub.css")
@@ -341,30 +346,36 @@ def build_mkdocs_site(
     return site_dir
 
 
-def copy_build_artifacts(build_dir: Path, docs_dir: Path) -> None:
+def copy_build_artifacts(
+    build_dir: Path,
+    site_dir: Path,
+    epub_filename: str = "text_book.epub",
+    combined_filename: str = "text_combined.md",
+) -> None:
     """
-    Copy build artifacts (EPUB, combined text) to docs assets directory.
+    Copy build artifacts (EPUB, combined text) to site root directory.
 
     This makes them available for download from the published site.
+    Files are placed at site root so combined markdown can reference
+    relative paths like img/... which work from that location.
     """
     import shutil
 
-    assets_dir = docs_dir / "assets"
-    assets_dir.mkdir(parents=True, exist_ok=True)
+    site_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nCopying build artifacts to {assets_dir}...")
+    print(f"\nCopying build artifacts to {site_dir}...")
 
     # Copy EPUB
-    epub_src = build_dir / "text_book.epub"
+    epub_src = build_dir / epub_filename
     if epub_src.exists():
-        shutil.copy2(epub_src, assets_dir / "text_book.epub")
+        shutil.copy2(epub_src, site_dir / epub_filename)
         print(f"✓ Copied {epub_src.name}")
 
     # Copy combined text
-    txt_src = build_dir / "text_combined.txt"
-    if txt_src.exists():
-        shutil.copy2(txt_src, assets_dir / "text_combined.txt")
-        print(f"✓ Copied {txt_src.name}")
+    combined_src = build_dir / combined_filename
+    if combined_src.exists():
+        shutil.copy2(combined_src, site_dir / combined_filename)
+        print(f"✓ Copied {combined_src.name}")
 
 
 def create_root_redirect(site_dir: Path, redirect_target: str = "/ru/") -> None:
@@ -396,9 +407,9 @@ def build_site_pipeline(
     """
     Run complete site + EPUB build pipeline.
 
-    1. Build EPUB
-    2. Copy artifacts to docs/assets (optional)
-    3. Build MkDocs site
+    1. Build EPUB pipeline (generates combined markdown + EPUB)
+    2. Build MkDocs site
+    3. Copy artifacts to site_dir root (optional, after site build to avoid link warnings)
     4. Create root redirect (optional)
     """
     config_path = config_path.resolve()
@@ -408,16 +419,28 @@ def build_site_pipeline(
     config = load_mkdocs_config(config_path)
     docs_dir = content_root / Path(config.get("docs_dir", "docs"))
 
+    # Extract text-forge plugin config for filenames
+    plugin_config = {}
+    for plugin in config.get("plugins", []):
+        if isinstance(plugin, dict) and "text-forge" in plugin:
+            plugin_config = plugin["text-forge"]
+            break
+    
+    epub_filename = plugin_config.get("epub_filename", "text_book.epub")
+    combined_filename = plugin_config.get("combined_filename", "text_combined.md")
+
     try:
         # Step 1: Build EPUB
-        epub_file = build_epub_pipeline(config_path, build_dir)
+        epub_file = build_epub_pipeline(
+            config_path, build_dir, epub_filename, combined_filename
+        )
 
-        # Step 2: Copy artifacts (optional)
-        if copy_artifacts:
-            copy_build_artifacts(build_dir, docs_dir)
-
-        # Step 3: Build site
+        # Step 2: Build site
         built_site_dir = build_mkdocs_site(config_path, site_dir, strict)
+
+        # Step 3: Copy artifacts after site build (optional)
+        if copy_artifacts:
+            copy_build_artifacts(build_dir, built_site_dir, epub_filename, combined_filename)
 
         # Step 4: Create root redirect (optional)
         if create_redirect:

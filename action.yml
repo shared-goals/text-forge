@@ -23,7 +23,7 @@ inputs:
     required: false
     default: 'true'
   copy_artifacts_into_docs:
-    description: Copy EPUB + combined markdown into docs_dir/assets before mkdocs build
+    description: Copy EPUB + combined markdown into site_dir root after mkdocs build
     required: false
     default: 'true'
   cover_image:
@@ -69,7 +69,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        echo "combined_md=${{ inputs.build_dir }}/text_combined.txt" >> "$GITHUB_OUTPUT"
+        echo "combined_md=${{ inputs.build_dir }}/text_combined.md" >> "$GITHUB_OUTPUT"
         echo "pandoc_md=${{ inputs.build_dir }}/pandoc.md" >> "$GITHUB_OUTPUT"
         echo "epub=${{ inputs.build_dir }}/text_book.epub" >> "$GITHUB_OUTPUT"
 

@@ -1,6 +1,6 @@
 {% if text_forge_downloads_enabled %}
 <a 
-  href="{{ config.site_url | default('', true) }}assets/text_book.epub" 
+  href="{{ config.site_url | default('', true) }}{{ text_forge_epub_filename }}" 
   class="md-downloads__epub md-header__button"
   download
   data-i18n-title="downloads_epub_title"

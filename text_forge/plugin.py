@@ -28,6 +28,7 @@ class TextForgePlugin(BasePlugin):
         ("editor_enabled", config_options.Type(bool, default=True)),
         ("nobr_emoticons_enabled", config_options.Type(bool, default=True)),
         ("downloads_enabled", config_options.Type(bool, default=False)),
+        ("ai_readable_perplexity_query", config_options.Type(str, default="")),
         ("auto_configure_theme", config_options.Type(bool, default=True)),
         ("epub_title", config_options.Type(str, default="")),
         ("epub_subtitle", config_options.Type(str, default="")),
@@ -35,6 +36,8 @@ class TextForgePlugin(BasePlugin):
         ("epub_identifier", config_options.Type(str, default="")),
         ("epub_publisher", config_options.Type(str, default="")),
         ("epub_rights", config_options.Type(str, default="")),
+        ("epub_filename", config_options.Type(str, default="text_book.epub")),
+        ("combined_filename", config_options.Type(str, default="text_combined.md")),
         ("source_file_published_title", config_options.Type(str, default="Published")),
     )
 
@@ -173,6 +176,9 @@ class TextForgePlugin(BasePlugin):
         """Add plugin config to Jinja globals."""
         env.globals["text_forge_editor_enabled"] = self.config["editor_enabled"]
         env.globals["text_forge_downloads_enabled"] = self.config["downloads_enabled"]
+        env.globals["text_forge_ai_readable_perplexity_query"] = self.config["ai_readable_perplexity_query"]
+        env.globals["text_forge_epub_filename"] = self.config["epub_filename"]
+        env.globals["text_forge_combined_filename"] = self.config["combined_filename"]
         env.globals["text_forge_source_file_published_title"] = self.config[
             "source_file_published_title"
         ]

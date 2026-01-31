@@ -82,7 +82,7 @@ def combine(config):
 @click.option(
     "--copy-artifacts/--no-copy-artifacts",
     default=True,
-    help="Copy EPUB and combined text to docs/assets",
+    help="Copy EPUB and combined text to site_dir root",
 )
 @click.option(
     "--create-redirect/--no-create-redirect",

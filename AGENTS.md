@@ -139,11 +139,11 @@ Cursor rules:
 Copilot rules (from `.github/copilot-instructions.md`):
 
 - Pipeline stages:
-  1) Combine chapters from `mkdocs.yml nav:` -> `build/text_combined.txt` via `scripts/mkdocs-combine.py`
+  1) Combine chapters from `mkdocs.yml nav:` -> `build/text_combined.md` via `scripts/mkdocs-combine.py`
   2) Normalize PyMdown `/// ... ///` blocks -> `build/pandoc.md` via `scripts/pymdown-pandoc.lua`
   3) Process metadata placeholders from `epub/book_meta.yml` via `scripts/process-epub-meta.py`
   4) Render EPUB via `pandoc` + `epub/epub.css` -> `build/text_book.epub`
-  5) Copy artifacts into `docs_dir/assets/`, then `mkdocs build` into `public/ru/` (or configured `site_dir`)
+  5) Build MkDocs site into `site_dir`, then copy artifacts to `site_dir` root
 
 - If you change `scripts/mkdocs-combine.py` or `scripts/pymdown-pandoc.lua`:
   - update fixtures in `scripts/fixtures/`
