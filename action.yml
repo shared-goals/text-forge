@@ -9,11 +9,11 @@ inputs:
   docs_dir:
     description: MkDocs docs_dir (where markdown lives)
     required: false
-    default: text/ru
+    default: text
   site_dir:
     description: Output directory for MkDocs site
     required: false
-    default: public/ru
+    default: public
   build_dir:
     description: Build artifacts directory
     required: false
@@ -30,14 +30,6 @@ inputs:
     description: Optional cover image path (relative to content repo)
     required: false
     default: ''
-  create_root_redirect:
-    description: Create public/index.html redirecting to /ru/
-    required: false
-    default: 'true'
-  redirect_target:
-    description: Redirect target for public/index.html
-    required: false
-    default: /ru/
   ensure_full_git_history:
     description: Fetch full git history if checkout is shallow (improves revision date accuracy)
     required: false
@@ -132,16 +124,9 @@ runs:
           COPY_FLAG="--no-copy-artifacts"
         fi
         
-        REDIRECT_FLAG="--create-redirect"
-        if [ "${{ inputs.create_root_redirect }}" != "true" ]; then
-          REDIRECT_FLAG="--no-create-redirect"
-        fi
-        
         text-forge build \
           --config="${{ inputs.mkdocs_config }}" \
           --build-dir="${{ inputs.build_dir }}" \
           --site-dir="${{ inputs.site_dir }}" \
           $STRICT_FLAG \
-          $COPY_FLAG \
-          $REDIRECT_FLAG \
-          --redirect-target="${{ inputs.redirect_target }}"
+          $COPY_FLAG

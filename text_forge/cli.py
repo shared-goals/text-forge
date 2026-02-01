@@ -85,14 +85,9 @@ def combine(config):
     help="Copy EPUB and combined text to site_dir root",
 )
 @click.option(
-    "--create-redirect/--no-create-redirect",
+    "--create-404-redirect/--no-create-404-redirect",
     default=True,
-    help="Create root redirect HTML (public/index.html)",
-)
-@click.option(
-    "--redirect-target",
-    default="/ru/",
-    help="Redirect target path (default: /ru/)",
+    help="Create 404.html for legacy URL redirects (default: enabled)",
 )
 def build(
     config,
@@ -100,8 +95,7 @@ def build(
     site_dir,
     strict,
     copy_artifacts,
-    create_redirect,
-    redirect_target,
+    create_404_redirect,
 ):
     """Build site and EPUB."""
     from text_forge.build import build_site_pipeline
@@ -113,8 +107,7 @@ def build(
             site_dir=site_dir,
             strict=strict,
             copy_artifacts=copy_artifacts,
-            create_redirect=create_redirect,
-            redirect_target=redirect_target,
+            create_404_redirect=create_404_redirect,
         )
         click.echo("\n✓ Success! Full build complete.")
     except Exception as e:

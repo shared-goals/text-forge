@@ -378,21 +378,69 @@ def copy_build_artifacts(
         print(f"✓ Copied {combined_src.name}")
 
 
-def create_root_redirect(site_dir: Path, redirect_target: str = "/ru/") -> None:
+def create_legacy_redirect_404(site_dir: Path) -> None:
     """
-    Create root redirect HTML file.
+    Create 404.html that redirects legacy /ru/* URLs to new structure.
 
-    Creates public/index.html that redirects to the specified target (e.g., /ru/).
+    For GitHub Pages, 404.html is served for all missing pages.
+    This detects /ru/* URLs and redirects to non-prefixed versions.
+    
+    Args:
+        site_dir: Site directory where 404.html will be created
     """
-    public_dir = site_dir.parent
-    public_dir.mkdir(parents=True, exist_ok=True)
-
-    redirect_file = public_dir / "index.html"
-
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url={redirect_target}"><link rel="canonical" href="{redirect_target}"><title>Redirecting to {redirect_target}</title></head><body><p>Redirecting to <a href="{redirect_target}">{redirect_target}</a>...</p><script>window.location.href="{redirect_target}";</script></body></html>"""
-
+    site_dir.mkdir(parents=True, exist_ok=True)
+    
+    redirect_file = site_dir / "404.html"
+    
+    html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Redirecting...</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      background: #f5f5f5;
+    }
+    .message {
+      text-align: center;
+      padding: 2rem;
+    }
+  </style>
+  <script>
+    (function() {
+      const path = window.location.pathname;
+      
+      // Detect legacy /ru/ prefixed URL and redirect
+      if (path.startsWith('/ru/')) {
+        const newPath = path.replace('/ru/', '/');
+        const newUrl = window.location.origin + newPath + window.location.search + window.location.hash;
+        window.location.replace(newUrl);
+      } else {
+        // Real 404 - redirect to home after delay
+        setTimeout(function() {
+          window.location.replace('/');
+        }, 2000);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="message">
+    <h1>Redirecting...</h1>
+    <p>If you are not redirected automatically, <a href="/">click here</a>.</p>
+  </div>
+</body>
+</html>"""
+    
     redirect_file.write_text(html, encoding="utf-8")
-    print(f"✓ Created root redirect: {redirect_file} → {redirect_target}")
+    print(f"✓ Created 404 redirect: {redirect_file} (redirects /ru/* → /*)")
 
 
 def build_site_pipeline(
@@ -401,8 +449,7 @@ def build_site_pipeline(
     site_dir: Optional[Path] = None,
     strict: bool = False,
     copy_artifacts: bool = True,
-    create_redirect: bool = True,
-    redirect_target: str = "/ru/",
+    create_404_redirect: bool = True,
 ) -> None:
     """
     Run complete site + EPUB build pipeline.
@@ -410,7 +457,7 @@ def build_site_pipeline(
     1. Build EPUB pipeline (generates combined markdown + EPUB)
     2. Build MkDocs site
     3. Copy artifacts to site_dir root (optional, after site build to avoid link warnings)
-    4. Create root redirect (optional)
+    4. Create legacy URL redirect via 404.html (optional, redirects /ru/* to /*)
     """
     config_path = config_path.resolve()
     content_root = config_path.parent
@@ -442,9 +489,9 @@ def build_site_pipeline(
         if copy_artifacts:
             copy_build_artifacts(build_dir, built_site_dir, epub_filename, combined_filename)
 
-        # Step 4: Create root redirect (optional)
-        if create_redirect:
-            create_root_redirect(built_site_dir, redirect_target)
+        # Step 4: Create 404 redirect for legacy URLs (optional)
+        if create_404_redirect:
+            create_legacy_redirect_404(built_site_dir)
 
         print("\n✓ Full build complete!")
         print(f"  EPUB: {epub_file}")

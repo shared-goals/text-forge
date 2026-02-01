@@ -7,7 +7,7 @@
   2) Normalize PyMdown `/// ... ///` blocks → Pandoc AST via `scripts/pymdown-pandoc.lua` → `build/pandoc.md`
   3) Generate metadata from placeholders in `epub/book_meta.yml` via `scripts/process-epub-meta.py`
   4) Render EPUB via `pandoc` + `epub/epub.css` → `build/text_book.epub`
-  5) Copy artifacts into `docs_dir/assets/`, then `mkdocs build` into `public/ru/` (or configured `site_dir`).
+  5) Build MkDocs site, then copy artifacts into `site_dir` root (or configured `site_dir`).
 
 ## Key components (where to look)
 - MkDocs plugin: `text_forge/plugin.py` (theme overrides, hook wiring, editor integration).

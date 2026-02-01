@@ -134,10 +134,9 @@ Options:
   --site-dir PATH            MkDocs output (default: from mkdocs.yml)
   --strict/--no-strict       Fail on warnings (default: true)
   --copy-artifacts/--no-copy-artifacts
-                             Copy EPUB to site assets (default: true)
-  --create-redirect/--no-create-redirect
-                             Create root redirect (default: true)
-  --redirect-target PATH     Redirect target (default: /ru/)
+                             Copy EPUB to site root (default: true)
+  --create-404-redirect/--no-create-404-redirect
+                             Create 404.html for /ru/* redirects (default: true)
 ```
 
 ## Plugin Configuration
@@ -217,7 +216,7 @@ text-forge/
 ## Example Projects
 
 - **[whattodo](https://github.com/bongiozzo/whattodo)** - Full example site with Russian content
-- **[Live demo](https://text.sharedgoals.ru/ru/)** - Published whattodo site
+- **[Live demo](https://text.sharedgoals.ru/)** - Published whattodo site
 
 ## Requirements
 
