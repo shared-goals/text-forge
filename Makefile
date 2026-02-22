@@ -74,9 +74,9 @@ info:
 
 release:
 	@echo "==> Creating release..."
-	@if ! git diff --quiet || ! git diff --cached --quiet; then \
+	@if ! git diff --quiet --ignore-submodules=all || ! git diff --cached --quiet --ignore-submodules=all; then \
 		echo "Error: You have uncommitted changes. Please commit or stash them before releasing:"; \
-		git status --short; \
+		git status --short --ignore-submodules=all; \
 		exit 1; \
 	fi
 	@CURRENT=$$(grep '^version = ' pyproject.toml | cut -d'"' -f2); \
