@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-MkDocs Markdown Combiner - Two Mode Tool
+MkDocs Markdown Combiner - Multi-Mode Tool
 
-Mode 1: mkdocs.yml mode
+Mode 1: mkdocs.yml mode (default for .yml/.yaml input)
   python3 mkdocs-combine.py mkdocs.yml
   - Extracts navigation hierarchy from mkdocs.yml
   - Reads files one by one from specified chapters
@@ -18,19 +18,33 @@ Mode 2: Single file mode
   - Fixes internal links
   - Outputs to stdout
 
+Mode 3: Summary mode
+  python3 mkdocs-combine.py mkdocs.yml --mode summary --exclude p3-summary.md
+  - Extracts nav-ordered file list from mkdocs.yml
+  - Concatenates raw chapter content (no heading shifts, no link rewrites)
+  - Inserts <!-- FILE: filename.md --> markers between chapters
+  - Optionally writes heading index JSON to --index-output
+  - Outputs concatenated text to stdout
+
 Usage:
-  # Mode 1: Process mkdocs.yml
+  # Mode 1: Process mkdocs.yml for EPUB
   python3 mkdocs-combine.py mkdocs.yml > combined.md
 
   # Mode 2: Process single file with heading adjustment
   python3 mkdocs-combine.py chapter.md --level 1 > output.md
+
+  # Mode 3: Prepare source for AI summarization
+  python3 mkdocs-combine.py mkdocs.yml --mode summary \\
+    --exclude p3-summary.md --index-output build/heading_index.json \\
+    > build/summary_source.md
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -52,7 +66,7 @@ def load_yaml_config(config_path: str) -> Dict[str, Any]:
             class SkipUnknownLoader(yaml.SafeLoader):
                 pass
 
-            def _construct_unknown(loader, node):
+            def _construct_unknown(loader: Any, node: Any) -> Any:
                 # Best-effort: preserve the underlying YAML structure but ignore the tag.
                 # For mkdocs-combine we only care about basic fields like `nav`.
                 if isinstance(node, yaml.ScalarNode):
@@ -63,7 +77,7 @@ def load_yaml_config(config_path: str) -> Dict[str, Any]:
                     return loader.construct_mapping(node)
                 return None
 
-            def skip_unknown(loader, tag_suffix, node):
+            def skip_unknown(loader: Any, tag_suffix: str, node: Any) -> Any:
                 return _construct_unknown(loader, node)
 
             SkipUnknownLoader.add_multi_constructor("!python", skip_unknown)
@@ -89,7 +103,7 @@ def extract_nav_items(
     - level 0: top-level chapters
     - level 1+: nested sections
     """
-    items = []
+    items: List[Tuple[str, str, int]] = []
 
     for item in nav_config:
         if isinstance(item, str):
@@ -239,7 +253,7 @@ def format_git_date(date_str: str) -> str:
 
 
 def format_dates_from_frontmatter(
-    frontmatter: Dict[str, Any], file_path: Path = None
+    frontmatter: Dict[str, Any], file_path: Path | None = None
 ) -> str:
     """
     Format dates from frontmatter as italic text.
@@ -247,7 +261,7 @@ def format_dates_from_frontmatter(
     Falls back to Git history if dates are not specified in frontmatter.
     Date format: %d.%m.%Y
     """
-    dates = []
+    dates: List[str] = []
 
     # Get Git dates as fallback
     git_created = ""
@@ -274,14 +288,14 @@ def format_dates_from_frontmatter(
     return ""
 
 
-def adjust_heading_levels(content: str, level: int) -> Tuple[str, list]:
+def adjust_heading_levels(content: str, level: int) -> Tuple[str, List[Tuple[int, Optional[str]]]]:
     """
     Shift markdown heading levels by specified amount.
     Returns (new_content, headings) where headings is a list of (pos, anchor or None)
     """
-    headings = []
+    headings: List[Tuple[int, Optional[str]]] = []
 
-    def replace_heading(match):
+    def replace_heading(match: "re.Match[str]") -> str:
         hashes = match.group(1)
         title = match.group(2)
         anchor = match.group(3) or ""
@@ -334,7 +348,7 @@ def fix_internal_links(content: str, current_file: str) -> str:
     - [text](#anchor) -> [text](#anchor) (unchanged)
     """
 
-    def replace_link(match):
+    def replace_link(match: "re.Match[str]") -> str:
         is_image = match.group(1) == "!"
         text = match.group(2)
         url = match.group(3)
@@ -350,7 +364,7 @@ def fix_internal_links(content: str, current_file: str) -> str:
                 new_url = url
             else:
                 # File with anchor: file.md#anchor -> #anchor
-                file_part, anchor_part = url.split("#", 1)
+                _, anchor_part = url.split("#", 1)
                 # Just use the anchor part, ignore the file
                 new_url = f"#{anchor_part}"
         else:
@@ -377,7 +391,7 @@ def extract_first_heading(content: str) -> str:
 
 
 def replace_details_with_source_link(
-    content: str, site_url: str, filepath: str, headings: list
+    content: str, site_url: str, filepath: str, headings: List[Tuple[int, Optional[str]]]
 ) -> str:
     """
     Replace content inside /// details blocks with source link.
@@ -402,8 +416,8 @@ def replace_details_with_source_link(
     # Keep filename normalized for URL building
     filename_without_md = filepath.replace(".md", "").replace("\\", "/")
 
-    def find_nearest_anchor_above(pos):
-        anchor = None
+    def find_nearest_anchor_above(pos: int) -> Optional[str]:
+        anchor: Optional[str] = None
         for hpos, hanchor in headings:
             if hpos < pos and hanchor:
                 anchor = hanchor
@@ -411,7 +425,7 @@ def replace_details_with_source_link(
                 break
         return anchor
 
-    def replace_details(match):
+    def replace_details(match: "re.Match[str]") -> str:
         title_part = match.group(1)  # Includes everything after 'details' on first line
         match_pos = match.start()
         anchor = find_nearest_anchor_above(match_pos)
@@ -454,7 +468,7 @@ def mode_mkdocs(config_path: str) -> str:
         raise FileNotFoundError(f"Docs directory not found: {docs_dir}")
 
     nav_items = extract_nav_items(config["nav"])
-    combined = []
+    combined: List[str] = []
     first_content = True
 
     for title, filepath, level in nav_items:
@@ -536,6 +550,113 @@ def mode_mkdocs(config_path: str) -> str:
     return result
 
 
+def extract_headings_with_anchors(content: str) -> List[Tuple[str, str]]:
+    """
+    Extract all headings with {#anchor} from markdown content.
+
+    Returns list of tuples: (heading_text, anchor)
+    Only returns headings that have explicit anchors.
+    """
+    pattern = r"^#{1,6}\s+(.+?)\s*\{#([^}]+)\}\s*$"
+    return re.findall(pattern, content, re.MULTILINE)
+
+
+def flatten_nav_files(nav_config: List[Any]) -> List[str]:
+    """
+    Flatten navigation config into ordered list of .md filenames.
+
+    Recursively walks the nav tree and returns only file entries,
+    skipping section headers and external links.
+    """
+    files: List[str] = []
+    for item in nav_config:
+        if isinstance(item, str):
+            if item.endswith(".md"):
+                files.append(item)
+        elif isinstance(item, dict):
+            for section_items in item.values():
+                if isinstance(section_items, str):
+                    if section_items.endswith(".md"):
+                        files.append(section_items)
+                elif isinstance(section_items, list):
+                    files.extend(flatten_nav_files(section_items))
+    return files
+
+
+def mode_summary(
+    config_path: str,
+    exclude: Optional[List[str]] = None,
+    index_output: Optional[str] = None,
+) -> str:
+    """
+    Mode 3: Prepare source text for AI summarization.
+
+    - Extracts nav-ordered file list from mkdocs.yml
+    - Skips files listed in --exclude
+    - Concatenates raw chapter content (no heading shifts, no link rewrites)
+    - Inserts <!-- FILE: filename.md --> markers between chapters
+    - Optionally writes heading index JSON to index_output
+    - Returns concatenated text
+    """
+    config = load_yaml_config(config_path)
+
+    if "docs_dir" not in config:
+        raise ValueError("Config missing 'docs_dir'")
+    if "nav" not in config:
+        raise ValueError("Config missing 'nav'")
+
+    config_dir = Path(config_path).parent
+    docs_dir = config_dir / config["docs_dir"]
+
+    if not docs_dir.exists():
+        raise FileNotFoundError(f"Docs directory not found: {docs_dir}")
+
+    exclude_set = set(exclude or [])
+    nav_files = flatten_nav_files(config["nav"])
+    heading_index: Dict[str, str] = {}  # "filename_without_md#anchor" -> "Heading text"
+    combined: List[str] = []
+
+    for filepath in nav_files:
+        if filepath in exclude_set:
+            print(f"[INFO] Skipping excluded: {filepath}", file=sys.stderr)
+            continue
+
+        file_path = docs_dir / filepath
+        if not file_path.exists():
+            print(f"[WARN] File not found: {file_path}", file=sys.stderr)
+            continue
+
+        print(f"[INFO] Processing: {filepath}", file=sys.stderr)
+
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            content_body = remove_frontmatter(content).lstrip("\n")
+
+            # Extract headings for the index
+            filename_base = filepath.replace(".md", "")
+            headings = extract_headings_with_anchors(content_body)
+            for heading_text, anchor in headings:
+                key = f"{filename_base}#{anchor}"
+                heading_index[key] = heading_text
+
+            # Add file marker and content
+            combined.append(f"<!-- FILE: {filepath} -->\n{content_body}")
+
+        except Exception as e:
+            print(f"[ERROR] Processing {filepath}: {e}", file=sys.stderr)
+            continue
+
+    # Write heading index if requested
+    if index_output:
+        index_path = Path(index_output)
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(heading_index, f, ensure_ascii=False, indent=2)
+        print(f"[INFO] Heading index: {index_path} ({len(heading_index)} entries)", file=sys.stderr)
+
+    return "\n\n".join(combined)
+
+
 def mode_single_file(input_file: str, level: int) -> str:
     """
     Mode 2: Process single markdown file.
@@ -560,7 +681,7 @@ def mode_single_file(input_file: str, level: int) -> str:
 
     # Process content
     content = remove_frontmatter(content)
-    content = adjust_heading_levels(content, level)
+    content, _ = adjust_heading_levels(content, level)
     content = fix_internal_links(content, input_file)
 
     return content
@@ -569,7 +690,7 @@ def mode_single_file(input_file: str, level: int) -> str:
 def main():
     """Main entry point with argument parsing."""
     parser = argparse.ArgumentParser(
-        description="MkDocs Markdown Combiner - Two mode tool",
+        description="MkDocs Markdown Combiner - Multi-mode tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -577,6 +698,15 @@ def main():
     # Required: input file
     parser.add_argument(
         "input", help="Input file: either mkdocs.yml or a markdown file"
+    )
+
+    # Optional: explicit mode selection
+    parser.add_argument(
+        "--mode",
+        choices=["mkdocs", "single", "summary"],
+        default=None,
+        help="Processing mode: mkdocs (EPUB combine), single (one file), "
+        "summary (AI summarization source). Auto-detected if omitted.",
     )
 
     # Optional: level for single file mode
@@ -587,18 +717,41 @@ def main():
         help="Heading level shift for single file mode (default: 0)",
     )
 
+    # Optional: exclude files for summary mode
+    parser.add_argument(
+        "--exclude",
+        nargs="*",
+        default=[],
+        help="Filenames to exclude in summary mode (e.g. p3-summary.md)",
+    )
+
+    # Optional: heading index output for summary mode
+    parser.add_argument(
+        "--index-output",
+        default=None,
+        help="Path to write heading index JSON (summary mode only)",
+    )
+
     args = parser.parse_args()
 
-    try:
-        # Determine mode based on input file
+    # Auto-detect mode if not specified
+    mode = args.mode
+    if mode is None:
         if args.input.endswith(".yml") or args.input.endswith(".yaml"):
-            # Mode 1: mkdocs.yml
-            print("[INFO] Mode 1: Processing mkdocs.yml", file=sys.stderr)
-            output = mode_mkdocs(args.input)
+            mode = "mkdocs"
         else:
-            # Mode 2: Single markdown file
+            mode = "single"
+
+    try:
+        if mode == "mkdocs":
+            print("[INFO] Mode: mkdocs (EPUB combine)", file=sys.stderr)
+            output = mode_mkdocs(args.input)
+        elif mode == "summary":
+            print("[INFO] Mode: summary (AI summarization source)", file=sys.stderr)
+            output = mode_summary(args.input, args.exclude, args.index_output)
+        else:
             print(
-                f"[INFO] Mode 2: Processing single file with level shift {args.level}",
+                f"[INFO] Mode: single file (level shift {args.level})",
                 file=sys.stderr,
             )
             output = mode_single_file(args.input, args.level)

@@ -73,16 +73,18 @@
       {% include ".icons/material/book-open-variant.svg" %}
     </a>
     {% endif %}
-    {# AI-readable combined text button (Perplexity integration) #}
-    {% if text_forge_ai_readable_perplexity_query %}
+    {# AI-readable link — links to full combined text #}
+    {% if text_forge_ai_readable_prompt and text_forge_combined_filename %}
+      {% set _full_url = config.site_url | default('/', true) ~ text_forge_combined_filename %}
+      {% set _query = text_forge_ai_readable_prompt.replace('{url}', _full_url) %}
     <a 
-      href="{{ text_forge_ai_readable_perplexity_query }}" 
+      href="https://grok.com/?q={{ _query | urlencode }}" 
       class="md-header__button md-icon"
       target="_blank"
       rel="noopener noreferrer"
-      data-i18n-title="ai_readable_perplexity_title"
-      title="Open in Perplexity"
-      aria-label="Open in Perplexity"
+      data-i18n-title="ai_readable_title"
+      title="Ask Grok about this text"
+      aria-label="Ask Grok about this text"
     >
       {% include ".icons/material/robot-outline.svg" %}
     </a>

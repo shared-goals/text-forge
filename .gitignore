@@ -1,7 +1,9 @@
 build/
+dist/
 public/
 __pycache__/
 .pytest_cache/
 .venv/
 *.pyc
+*.egg-info/
 .DS_Store

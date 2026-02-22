@@ -2,6 +2,7 @@
 title: Chapter 1
 created: 2024-02-01
 published: 2024-02-05
+updated: 2024-02-01
 ---
 
 # Chapter 1: Blocks and Links {#chapter1}

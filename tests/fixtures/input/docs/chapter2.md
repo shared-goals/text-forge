@@ -1,6 +1,8 @@
 ---
 title: Chapter 2
 created: 2024-03-01
+published: 2024-03-01
+updated: 2024-03-01
 ---
 
 # Chapter 2: Quotes and Images {#chapter2}

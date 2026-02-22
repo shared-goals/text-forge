@@ -74,6 +74,11 @@ info:
 
 release:
 	@echo "==> Creating release..."
+	@if ! git diff --quiet || ! git diff --cached --quiet; then \
+		echo "Error: You have uncommitted changes. Please commit or stash them before releasing:"; \
+		git status --short; \
+		exit 1; \
+	fi
 	@CURRENT=$$(grep '^version = ' pyproject.toml | cut -d'"' -f2); \
 	if [ -z "$$CURRENT" ]; then \
 		echo "Error: Could not extract version from pyproject.toml"; \

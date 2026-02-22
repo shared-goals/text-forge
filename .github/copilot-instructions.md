@@ -44,3 +44,15 @@
 ## When changing the pipeline
 - If you touch `scripts/mkdocs-combine.py` or `scripts/pymdown-pandoc.lua`, update fixtures in `scripts/fixtures/` and validate via `make … test` (tests are in `scripts/tests.py`).
 - Packaging note: `pyproject.toml` installs `mkdocs/overrides` + `mkdocs/hooks` into `sys.prefix/share/text-forge/...`; `TextForgePlugin` looks there first and falls back to repo-relative paths for development.
+
+## AI summarization skill
+- `scripts/mkdocs-combine.py --mode summary` concatenates nav-ordered chapters (raw, no link rewrites or heading shifts) with `<!-- FILE: filename.md -->` markers and optionally writes a heading index JSON via `--index-output`.
+- Content repos configure `summary_prompt` and `summary_output` in the `text-forge` plugin section of `mkdocs.yml`.
+
+## AI-readable link (Grok integration)
+- The header template (`mkdocs/overrides/partials/header.html`) renders a robot-icon button that opens the combined text in Grok for AI Q&A.
+- The link is constructed as `https://grok.com/?q=<prompt>`, where the prompt is built from the `ai_readable_prompt` plugin config with `{url}` replaced by `site_url` + `combined_filename`.
+- Plugin config in `mkdocs.yml`:
+  - `ai_readable_prompt`: prompt template with `{url}` placeholder (e.g. `"Прочти {url} и ответь на вопросы"`). Empty string hides the button.
+  - `combined_filename`: name of the combined Markdown file deployed to `site_dir` root (e.g. `"whattodo_full.md"`).
+- i18n key: `ai_readable_title` in `mkdocs/overrides/assets/js/translations.json`.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+from typing import Any, Dict
 
 import yaml
 
@@ -27,7 +28,7 @@ def _unknown(loader: yaml.SafeLoader, tag_suffix: str, node: yaml.Node):
 _IgnoreUnknownTagsLoader.add_multi_constructor("!", _unknown)
 
 
-def _as_str(value) -> str:
+def _as_str(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
@@ -52,7 +53,7 @@ def main() -> int:
     template_path = Path(args.template)
     out_path = Path(args.out)
 
-    mk = {}
+    mk: Dict[str, Any] = {}
     if mkdocs_path.exists():
         mk = (
             yaml.load(
@@ -69,7 +70,7 @@ def main() -> int:
 
     # Read EPUB metadata from text-forge plugin config
     plugins = mk.get("plugins") or []
-    text_forge_config = {}
+    text_forge_config: Dict[str, Any] = {}
     for plugin_entry in plugins:
         if isinstance(plugin_entry, dict) and "text-forge" in plugin_entry:
             text_forge_config = plugin_entry["text-forge"] or {}
@@ -95,7 +96,7 @@ def main() -> int:
         )
 
     text = template_path.read_text(encoding="utf-8")
-    replacements = {
+    replacements: Dict[str, str] = {
         "[title]": title,
         "[subtitle]": subtitle,
         "[author]": author,
