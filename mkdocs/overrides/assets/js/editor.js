@@ -18,6 +18,17 @@
   
   // Translations (loaded separately)
   let translations = {};
+
+  // Absolute site root URL — resolved from MkDocs Material __config.base once at startup
+  const siteRoot = (function () {
+    let base = '.';
+    const cfgEl = document.getElementById('__config');
+    if (cfgEl) {
+      try { base = JSON.parse(cfgEl.textContent).base || '.'; } catch (_) {}
+    }
+    // Resolve relative base against current page to get absolute site root
+    return new URL(base + '/', window.location.href).href;
+  }());
   
   /**
    * Get translated string by key
@@ -260,6 +271,29 @@ def render_markdown(text):
   }
 
   /**
+   * Rewrite relative src/href attributes in the preview DOM to absolute URLs
+   * using the site root, so images and links resolve correctly on any sub-page.
+   */
+  function fixRelativeUrls(container) {
+    // Fix image sources
+    container.querySelectorAll('img[src]').forEach(img => {
+      const src = img.getAttribute('src');
+      if (src && !/^(https?:)?\/\/|^data:/.test(src)) {
+        img.src = new URL(src, siteRoot).href;
+      }
+    });
+    // Fix anchor hrefs (internal .md links become page-relative in rendered HTML)
+    container.querySelectorAll('a[href]').forEach(a => {
+      const href = a.getAttribute('href');
+      if (href && !/^(https?:)?\/\/|^#|^mailto:/.test(href)) {
+        a.href = new URL(href, siteRoot).href;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+      }
+    });
+  }
+
+  /**
    * Render markdown to preview pane
    */
   async function renderPreview() {
@@ -277,6 +311,7 @@ def render_markdown(text):
       const sourceWithoutFrontmatter = stripFrontmatter(source);
       const html = await pyodide.runPythonAsync(`render_markdown(${JSON.stringify(sourceWithoutFrontmatter)})`);
       els.preview.innerHTML = html;
+      fixRelativeUrls(els.preview);
       setStatus(t('editor_status_ready'));
     } catch (err) {
       console.error('Render error:', err);
@@ -651,13 +686,8 @@ def render_markdown(text):
    */
   async function loadTranslations() {
     try {
-      // Get base path from MkDocs Material __config (relative path to site root)
-      let base = '.';
-      const cfgEl = document.getElementById('__config');
-      if (cfgEl) {
-        try { base = JSON.parse(cfgEl.textContent).base || '.'; } catch (_) {}
-      }
-      const resp = await fetch(base + '/assets/js/translations.json');
+      // Resolve translations path against site root (same base used for image rewriting)
+      const resp = await fetch(new URL('assets/js/translations.json', siteRoot).href);
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}`);
       }
