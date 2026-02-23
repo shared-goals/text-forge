@@ -1,6 +1,6 @@
 [project]
 name = "sg-text-forge"
-version = "0.1.9"
+version = "0.1.10"
 description = "MkDocs plugin and build pipeline for Markdown text projects with EPUB generation"
 readme = "README.md"
 license = {text = "MIT"}
