@@ -651,10 +651,13 @@ def render_markdown(text):
    */
   async function loadTranslations() {
     try {
-      // Get base path from page URL (works for both mkdocs serve and built site)
-      const pathParts = window.location.pathname.split('/').filter(p => p);
-      const baseUrl = pathParts.length > 0 ? '/' + pathParts[0] : '';
-      const resp = await fetch(baseUrl + '/assets/js/translations.json');
+      // Get base path from MkDocs Material __config (relative path to site root)
+      let base = '.';
+      const cfgEl = document.getElementById('__config');
+      if (cfgEl) {
+        try { base = JSON.parse(cfgEl.textContent).base || '.'; } catch (_) {}
+      }
+      const resp = await fetch(base + '/assets/js/translations.json');
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}`);
       }

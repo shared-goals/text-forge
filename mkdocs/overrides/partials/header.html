@@ -73,18 +73,20 @@
       {% include ".icons/material/book-open-variant.svg" %}
     </a>
     {% endif %}
-    {# AI-readable link — links to full combined text #}
-    {% if text_forge_ai_readable_prompt and text_forge_combined_filename %}
-      {% set _full_url = config.site_url | default('/', true) ~ text_forge_combined_filename %}
-      {% set _query = text_forge_ai_readable_prompt.replace('{url}', _full_url) %}
+    {# AI-readable link — links to raw GitHub source of current chapter #}
+    {% if text_forge_ai_readable_prompt and config.repo_url and page and page.file %}
+      {% set _chapter_url = (config.repo_url ~ '/' ~ config.edit_uri ~ page.file.src_path)
+          | replace('https://github.com/', 'https://raw.githubusercontent.com/')
+          | replace('/blob/', '/refs/heads/') %}
+      {% set _query = text_forge_ai_readable_prompt.replace('{url}', _chapter_url) %}
     <a 
-      href="https://grok.com/?q={{ _query | urlencode }}" 
+      href="{{ text_forge_ai_readable_base_url }}{{ _query | urlencode }}" 
       class="md-header__button md-icon"
       target="_blank"
       rel="noopener noreferrer"
       data-i18n-title="ai_readable_title"
-      title="Ask Grok about this text"
-      aria-label="Ask Grok about this text"
+      title="Ask AI about this text"
+      aria-label="Ask AI about this text"
     >
       {% include ".icons/material/robot-outline.svg" %}
     </a>

@@ -29,6 +29,7 @@ class TextForgePlugin(BasePlugin):
         ("nobr_emoticons_enabled", config_options.Type(bool, default=True)),
         ("downloads_enabled", config_options.Type(bool, default=False)),
         ("ai_readable_prompt", config_options.Type(str, default="")),
+        ("ai_readable_base_url", config_options.Type(str, default="https://grok.com/?q=")),
         ("auto_configure_theme", config_options.Type(bool, default=True)),
         ("epub_title", config_options.Type(str, default="")),
         ("epub_subtitle", config_options.Type(str, default="")),
@@ -177,6 +178,7 @@ class TextForgePlugin(BasePlugin):
         env.globals["text_forge_editor_enabled"] = self.config["editor_enabled"]
         env.globals["text_forge_downloads_enabled"] = self.config["downloads_enabled"]
         env.globals["text_forge_ai_readable_prompt"] = self.config["ai_readable_prompt"]
+        env.globals["text_forge_ai_readable_base_url"] = self.config["ai_readable_base_url"]
         env.globals["text_forge_epub_filename"] = self.config["epub_filename"]
         env.globals["text_forge_combined_filename"] = self.config["combined_filename"]
         env.globals["text_forge_source_file_published_title"] = self.config[
