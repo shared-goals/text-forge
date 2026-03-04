@@ -11,8 +11,9 @@
 
 ## Key components (where to look)
 - MkDocs plugin: `text_forge/plugin.py` (theme overrides, hook wiring, editor integration).
-- CLI entrypoint: `text_forge/cli.py` (`text-forge epub|build|info`; `combine` is currently TODO).
+- CLI entrypoint: `text_forge/cli.py` (`text-forge epub|build|info|obsidian install`; `combine` is currently TODO).
 - Build helpers: `text_forge/build.py` (Python wrapper around the same scripts).
+- Obsidian assets: `text_forge/obsidian/` — Obsidian plugin (`plugins/text-forge/`), Templater scripts (`scripts/`), templates (`templates/`), `hotkeys.json`, `templater.json`. Installed into a vault via `text-forge obsidian install`.
 - Site overrides/assets: `mkdocs/overrides/` (templates + `assets/js/editor.js` + CSS).
 - MkDocs hook: `mkdocs/hooks/nobr_emoticons.py` (wraps ASCII emoticons in `md-nobr`).
 

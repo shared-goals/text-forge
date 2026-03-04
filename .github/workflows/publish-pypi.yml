@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: ${{ github.event.inputs.test_pypi == 'true' && 'testpypi' || 'pypi' }}
-      url: ${{ github.event.inputs.test_pypi == 'true' && 'https://test.pypi.org/p/text-forge' || 'https://pypi.org/p/text-forge' }}
+      url: ${{ github.event.inputs.test_pypi == 'true' && 'https://test.pypi.org/p/sg-text-forge' || 'https://pypi.org/p/sg-text-forge' }}
     permissions:
       id-token: write  # Required for trusted publishing
     
