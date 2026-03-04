@@ -127,5 +127,82 @@ def info():
     click.echo(f"Installed from: {Path(__file__).parent}")
 
 
+@main.group()
+def obsidian():
+    """Obsidian vault setup commands."""
+    pass
+
+
+@obsidian.command("install")
+@click.option(
+    "--vault",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Path to Obsidian vault root (default: current directory)",
+)
+def obsidian_install(vault):
+    """Install text-forge plugin, Templater scripts and templates into the vault.
+
+    Run from the content repo root (the vault root).
+    Requires Templater plugin to be installed first (handled by make obsidian).
+    """
+    import importlib.resources
+    import json
+
+    vault = vault.resolve()
+    src = importlib.resources.files("text_forge.obsidian")
+
+    def _copy(rel_src: str, rel_dst: str, skip_if_exists: bool = False) -> None:
+        dst = vault / rel_dst
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if skip_if_exists and dst.exists():
+            click.echo(f"  skip  {rel_dst}")
+            return
+        dst.write_bytes((src / rel_src).read_bytes())
+        click.echo(f"  wrote {rel_dst}")
+
+    # Plugin (always overwrite — ensures latest version)
+    click.echo("==> Installing text-forge plugin...")
+    _copy("plugins/text-forge/main.js",      ".obsidian/plugins/text-forge/main.js")
+    _copy("plugins/text-forge/manifest.json", ".obsidian/plugins/text-forge/manifest.json")
+
+    # community-plugins.json — register text-forge
+    plugins_file = vault / ".obsidian" / "community-plugins.json"
+    if plugins_file.exists():
+        plugins = json.loads(plugins_file.read_text())
+        if "text-forge" not in plugins:
+            plugins.append("text-forge")
+            plugins_file.write_text(json.dumps(plugins, indent=2))
+            click.echo("  added text-forge to .obsidian/community-plugins.json")
+        else:
+            click.echo("  skip  text-forge already in .obsidian/community-plugins.json")
+
+    # Templater settings (skip if already configured)
+    _copy("templater.json", ".obsidian/plugins/templater-obsidian/data.json", skip_if_exists=True)
+
+    # Templater scripts + templates (skip if already present — user may have customised them)
+    click.echo("==> Installing Templater scripts and templates...")
+    for name in ("insert_block.js", "insert_image.js", "insert_link.js"):
+        _copy(f"scripts/{name}", f"obsidian/scripts/{name}", skip_if_exists=True)
+    for name in ("insert_block.md", "insert_image.md", "insert_link.md"):
+        _copy(f"templates/{name}", f"obsidian/templates/{name}", skip_if_exists=True)
+
+    # Hotkeys — merge (add missing keys, never remove existing)
+    hotkeys_file = vault / ".obsidian" / "hotkeys.json"
+    src_hotkeys = json.loads((src / "hotkeys.json").read_text(encoding="utf-8"))
+    if hotkeys_file.exists():
+        dst_hotkeys = json.loads(hotkeys_file.read_text(encoding="utf-8"))
+        added = [k for k in src_hotkeys if k not in dst_hotkeys]
+        dst_hotkeys.update({k: src_hotkeys[k] for k in added})
+        hotkeys_file.write_text(json.dumps(dst_hotkeys, indent=2, ensure_ascii=False))
+        click.echo(f"  hotkeys merged: {', '.join(added) if added else '(all present)'}")
+    else:
+        hotkeys_file.parent.mkdir(parents=True, exist_ok=True)
+        hotkeys_file.write_text(json.dumps(src_hotkeys, indent=2, ensure_ascii=False))
+        click.echo("  wrote .obsidian/hotkeys.json")
+
+    click.echo("✓ Done. Restart Obsidian (or reload plugins) to apply.")
+
+
 if __name__ == "__main__":
     main()
