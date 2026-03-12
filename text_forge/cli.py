@@ -32,10 +32,20 @@ def main():
 )
 def epub(config, build_dir):
     """Build EPUB from MkDocs project."""
-    from text_forge.build import build_epub_pipeline
+    from text_forge.build import build_epub_pipeline, load_mkdocs_config
 
     try:
-        epub_file = build_epub_pipeline(config, build_dir)
+        # Read epub_filename and combined_filename from plugin config
+        mkdocs_config = load_mkdocs_config(config)
+        plugin_config = {}
+        for plugin in mkdocs_config.get("plugins", []):
+            if isinstance(plugin, dict) and "text-forge" in plugin:
+                plugin_config = plugin["text-forge"] or {}
+                break
+        epub_filename = plugin_config.get("epub_filename", "text_book.epub")
+        combined_filename = plugin_config.get("combined_filename", "text_combined.md")
+
+        epub_file = build_epub_pipeline(config, build_dir, epub_filename, combined_filename)
         click.echo(f"\n✓ Success! EPUB: {epub_file}")
     except Exception as e:
         click.echo(f"\n✗ Failed: {e}", err=True)

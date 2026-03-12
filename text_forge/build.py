@@ -335,12 +335,13 @@ def build_mkdocs_site(
     if strict:
         cmd.append("--strict")
 
-    subprocess.run(
-        cmd,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise
 
     print(f"✓ Site built to {site_dir}")
     return site_dir
