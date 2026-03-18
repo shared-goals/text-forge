@@ -3,6 +3,7 @@ module.exports = async function (tp) {
   const blockTypes = [
     { label: 'quote — цитата с автором',             type: 'quote'     },
     { label: 'situation — ситуация из жизни',        type: 'situation' },
+    { label: 'note — дополнение / вставка',          type: 'note'      },
     { label: 'abstract — пример / анекдот / притча', type: 'abstract'  },
     { label: 'define — термин и определение',        type: 'define'    },
     { label: 'rule — правило / принцип',             type: 'rule'      },
@@ -37,7 +38,11 @@ module.exports = async function (tp) {
     case 'situation': {
       return `/// situation\n\n${text}\n\n///`;
     }
-  
+
+    case 'note': {
+      return `/// note\n\n${text}\n\n///`;
+    }
+
     case 'abstract': {
       const title = await tp.system.prompt('Заголовок');
       if (!title) return '';
