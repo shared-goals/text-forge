@@ -68,12 +68,21 @@ def request_json(api_url: str, method: str, path: str, payload: dict | None = No
     return json.loads(body) if body else {}
 
 
-def iter_documents(inv: dict[str, Any], chapter_filter: str | None, chunk_size: int):
-    wanted = chapter_filter.removesuffix(".md") if chapter_filter else None
+def section_matches(section: dict[str, Any], section_filter: str | None) -> bool:
+    if not section_filter:
+        return True
+    wanted = section_filter.removeprefix("#")
+    return wanted in {str(section.get("section_uid", "")), str(section.get("anchor", ""))}
+
+
+def iter_documents(inv: dict[str, Any], chapter_filter: str | None, section_filter: str | None, chunk_size: int):
+    wanted_chapter = chapter_filter.removesuffix(".md") if chapter_filter else None
     for chapter in inv["chapters"]:
-        if wanted and chapter["chapter"] != wanted:
+        if wanted_chapter and chapter["chapter"] != wanted_chapter:
             continue
         for section in chapter["sections"]:
+            if not section_matches(section, section_filter):
+                continue
             chunks = chunk_text(section.get("text", ""), chunk_size)
             for chunk_idx, chunk in enumerate(chunks):
                 yield chapter, section, chunk_idx, len(chunks), chunk
@@ -172,10 +181,10 @@ def retain_with_retry(*, retries: int, retry_delay: float, **kwargs) -> None:
             time.sleep(wait)
 
 
-def validate_documents(inv: dict[str, Any], chapter_filter: str | None, chunk_size: int) -> list[str]:
+def validate_documents(inv: dict[str, Any], chapter_filter: str | None, section_filter: str | None, chunk_size: int) -> list[str]:
     errors: list[str] = []
     seen_doc: set[str] = set()
-    for chapter, section, chunk_idx, _chunk_count, _chunk in iter_documents(inv, chapter_filter, chunk_size):
+    for chapter, section, chunk_idx, _chunk_count, _chunk in iter_documents(inv, chapter_filter, section_filter, chunk_size):
         did = document_id(chapter, section, chunk_idx)
         if did in seen_doc:
             errors.append(f"duplicate document_id: {did}")
@@ -183,8 +192,8 @@ def validate_documents(inv: dict[str, Any], chapter_filter: str | None, chunk_si
     return errors
 
 
-def preview(inv: dict[str, Any], chapter_filter: str | None, chunk_size: int, limit: int | None) -> None:
-    docs = list(iter_documents(inv, chapter_filter, chunk_size))
+def preview(inv: dict[str, Any], chapter_filter: str | None, section_filter: str | None, chunk_size: int, limit: int | None) -> None:
+    docs = list(iter_documents(inv, chapter_filter, section_filter, chunk_size))
     shown = docs if limit is None else docs[:limit]
     total_chars = 0
     for chapter, section, chunk_idx, chunk_count, chunk in shown:
@@ -198,7 +207,7 @@ def preview(inv: dict[str, Any], chapter_filter: str | None, chunk_size: int, li
 
 
 def ingest(inv: dict[str, Any], args: argparse.Namespace) -> int:
-    docs = list(iter_documents(inv, args.chapter, args.chunk_size))
+    docs = list(iter_documents(inv, args.chapter, args.section, args.chunk_size))
     selected = docs if args.limit is None else docs[: args.limit]
     sent = 0
     for idx, (chapter, section, chunk_idx, chunk_count, chunk) in enumerate(selected, start=1):
@@ -232,6 +241,7 @@ def main() -> int:
     parser.add_argument("--strategy", default=None, help="Named Hindsight retain strategy")
     parser.add_argument("--observation-scopes", default="combined", choices=["per_tag", "combined", "all_combinations"], help="Hindsight observation_scopes value")
     parser.add_argument("--chapter", help="Ingest only one chapter slug, e.g. p2-200-text")
+    parser.add_argument("--section", help="Ingest only one section_uid or anchor, e.g. digital_format_freedom")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of chunks")
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
     parser.add_argument("--dry-run", action="store_true", help="Preview only; default unless --yes is passed")
@@ -246,14 +256,14 @@ def main() -> int:
     os.environ.setdefault("no_proxy", "*")
 
     inv = load_inventory(args.inventory)
-    errors = validate_documents(inv, args.chapter, args.chunk_size)
+    errors = validate_documents(inv, args.chapter, args.section, args.chunk_size)
     if errors:
         print("ERROR: inventory validation failed:", file=sys.stderr)
         for err in errors[:20]:
             print(f"  - {err}", file=sys.stderr)
         return 1
 
-    docs = list(iter_documents(inv, args.chapter, args.chunk_size))
+    docs = list(iter_documents(inv, args.chapter, args.section, args.chunk_size))
     published = sum(1 for ch in inv["chapters"] if ch["status"] == "published")
     draft = sum(1 for ch in inv["chapters"] if ch["status"] == "draft")
     print(f"Inventory commit: {inv.get('commit')}")
@@ -262,13 +272,15 @@ def main() -> int:
     print(f"Retain strategy: {args.strategy or '(bank default)'}")
     if args.chapter:
         print(f"Chapter only: {args.chapter}")
+    if args.section:
+        print(f"Section only: {args.section}")
     if inv.get("warnings"):
         print("Inventory warnings:")
         for warning in inv["warnings"][:20]:
             print(f"  - {warning}")
 
     print("\nDRY-RUN PREVIEW")
-    preview(inv, args.chapter, args.chunk_size, args.limit)
+    preview(inv, args.chapter, args.section, args.chunk_size, args.limit)
     if not args.yes:
         print("\nNo writes performed. Pass --yes to ingest.")
         return 0
