@@ -30,7 +30,9 @@ def run(cmd: list[str], *, cwd: pathlib.Path | None = None, stdout=None) -> None
         print(f"$ (cd {cwd} && {printable})")
     else:
         print(f"$ {printable}")
-    subprocess.run(cmd, cwd=cwd, check=True, stdout=stdout)
+    env = os.environ.copy()
+    env.pop("VIRTUAL_ENV", None)
+    subprocess.run(cmd, cwd=cwd, check=True, stdout=stdout, env=env)
 
 
 def main() -> int:
