@@ -97,8 +97,8 @@ def document_id(chapter: dict[str, Any], section: dict[str, Any], chunk_idx: int
 
 
 def metadata(inv: dict[str, Any], chapter: dict[str, Any], section: dict[str, Any], chunk_idx: int, chunk_count: int) -> dict[str, str]:
-    quote_authors = [str(x) for x in section.get("quote_authors") or [] if str(x).strip()]
-    text_author = quote_authors[0] if quote_authors else "User"
+    section_changed = str(section.get("changed") or "")
+    chapter_changed = str(chapter.get("changed") or "")
     data: dict[str, str] = {
         "corpus": str(inv.get("corpus", "wtd")),
         "role": "roots",
@@ -106,7 +106,8 @@ def metadata(inv: dict[str, Any], chapter: dict[str, Any], section: dict[str, An
         "chapter": str(chapter["chapter"]),
         "chapter_created": str(chapter.get("created") or ""),
         "chapter_published": str(chapter.get("published") or ""),
-        "chapter_changed": str(chapter.get("changed") or ""),
+        "section_changed": section_changed,
+        "chapter_changed": chapter_changed,
         "heading_level": str(section["heading_level"]),
         "heading": str(section["heading"]),
         "section_uid": str(section["section_uid"]),
@@ -114,17 +115,16 @@ def metadata(inv: dict[str, Any], chapter: dict[str, Any], section: dict[str, An
         "github_url": str(section.get("github_url") or ""),
         "chunk_index": str(chunk_idx),
         "chunk_count": str(chunk_count),
-        "text_author": text_author,
+        "text_author": "User",
         "reader": "Assistant",
     }
     if inv.get("commit"):
         data["commit"] = str(inv["commit"])
-    if inv.get("commit_date"):
-        data["changed_at"] = str(inv["commit_date"])
+    changed_at = section_changed or chapter_changed or str(inv.get("commit_date") or "")
+    if changed_at:
+        data["changed_at"] = changed_at
     if section.get("anchor"):
         data["anchor"] = str(section["anchor"])
-    if quote_authors:
-        data["quote_authors"] = " | ".join(quote_authors)
     return data
 
 
@@ -144,10 +144,8 @@ def tags(chapter: dict[str, Any], section: dict[str, Any]) -> list[str]:
 
 def context(chapter: dict[str, Any], section: dict[str, Any]) -> str:
     url = section.get("url") or chapter.get("url")
-    quote_authors = [str(x) for x in section.get("quote_authors") or [] if str(x).strip()]
-    author_label = quote_authors[0] if quote_authors else "User"
     return (
-        f"WTD roots corpus. Author: {author_label}. Reader: Assistant. "
+        "WTD roots corpus authored by User; Assistant is reader. "
         f"{chapter['status']} chapter {chapter['chapter']}, section «{section['heading']}». URL: {url}"
     )
 
@@ -217,13 +215,16 @@ def preview(inv: dict[str, Any], chapter_filter: str | None, section_filter: str
     total_chars = 0
     for chapter, section, chunk_idx, chunk_count, chunk in shown:
         total_chars += len(chunk)
+        doc_meta = metadata(inv, chapter, section, chunk_idx, chunk_count)
         print(f"- {chapter['chapter']}#{section['section_uid']} ({chapter['status']}) chunk {chunk_idx + 1}/{chunk_count}: {len(chunk):,} chars")
         print(f"  heading: {section['heading']}")
         print(f"  document_id: {document_id(chapter, section, chunk_idx)}")
         print(f"  url: {section.get('url') or chapter.get('url')}")
-        quote_authors = [str(x) for x in section.get("quote_authors") or [] if str(x).strip()]
-        if quote_authors:
-            print(f"  quote_authors: {', '.join(quote_authors)}")
+        print(f"  created: {doc_meta.get('chapter_created') or '-'}")
+        print(f"  published: {doc_meta.get('chapter_published') or '-'}")
+        print(f"  changed: {doc_meta.get('changed_at') or doc_meta.get('chapter_changed') or '-'}")
+        print(f"  author: {doc_meta.get('text_author')}")
+        print(f"  reader: {doc_meta.get('reader')}")
         print(f"  tags: {', '.join(tags(chapter, section))}")
     print(f"\nTOTAL selected preview: {len(shown)} chunks, {total_chars:,} chars")
 
@@ -276,6 +277,9 @@ def ingest(inv: dict[str, Any], args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True, write_through=True)
+
     parser = argparse.ArgumentParser(description="Ingest text-forge inventory JSON into Hindsight")
     parser.add_argument("--inventory", default="-", help="Inventory JSON path, or '-' for stdin")
     parser.add_argument("--api-url", required=True, help="Hindsight API URL, e.g. http://localhost:8889")
@@ -342,4 +346,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:
+        # Downstream consumer (e.g. `head`) closed the pipe early.
+        # Exit cleanly so preview commands can be safely piped.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        raise SystemExit(0)

@@ -118,6 +118,11 @@ scripts/hindsight-ingest.py
 
 It consumes inventory JSON and writes citable documents into Hindsight. This makes a text available to agents as structured memory while preserving public URLs, GitHub source links, chapter/section identity, and tags.
 
+Recommended ownership framing for retain quality and attribution stability:
+
+- context should explicitly state ownership, for example: `WTD roots corpus authored by User; Assistant is reader.`
+- metadata should keep machine-readable provenance fields: `text_author=User`, `reader=Assistant`.
+
 The public adapter is intentionally infrastructure-neutral. Private paths, hostnames, bank names, backups, and operational rituals belong in local Hermes skills or wrappers.
 
 See:

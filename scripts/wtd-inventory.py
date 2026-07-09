@@ -25,7 +25,6 @@ from mkdocs_common import flatten_nav_files, load_yaml_config, remove_frontmatte
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*(\{[^}]*\})\s*$")
 ID_ATTR_RE = re.compile(r"(?:^|\s)#([^\s}]+)")
 CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
-QUOTE_AUTHOR_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)\s*\{\s*\.author\s*\}")
 
 
 @dataclass
@@ -36,10 +35,10 @@ class Section:
     heading: str
     url: str | None
     github_url: str | None
+    changed: str | None
     start_line: int
     end_line: int
     text: str
-    quote_authors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -131,6 +130,62 @@ def git_commit_date(repo_root: Path) -> str | None:
         return None
 
 
+def git_file_commit_date(repo_root: Path, source_path: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "log", "-1", "--format=%cI", "--", source_path],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def git_range_commit_date(repo_root: Path, source_path: str, start_line: int, end_line: int) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "log", "-1", "--format=%cI", "-L", f"{start_line},{end_line}:{source_path}"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        output = result.stdout.strip()
+        if not output:
+            return None
+        match = re.search(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b", output)
+        return match.group(0) if match else None
+    except Exception:
+        return None
+
+
+def content_line_offset(raw_content: str) -> int:
+    """Return number of original file lines removed before content line 1.
+
+    Offsets account for removed frontmatter and leading blank lines stripped from body.
+    """
+    lines = raw_content.splitlines()
+    if not lines:
+        return 0
+
+    offset = 0
+    body_start = 0
+    if lines[0] == "---":
+        for i in range(1, len(lines)):
+            if lines[i] == "---":
+                body_start = i + 1
+                break
+
+    offset += body_start
+    while body_start < len(lines) and lines[body_start] == "":
+        body_start += 1
+        offset += 1
+    return offset
+
+
 def iter_markdown_files(docs_dir: Path) -> Iterable[Path]:
     return sorted(p for p in docs_dir.rglob("*.md") if p.is_file())
 
@@ -202,20 +257,6 @@ def frontmatter_value(frontmatter: dict[str, Any], key: str) -> str | None:
     return str(value)
 
 
-def extract_quote_authors(text: str) -> list[str]:
-    authors: list[str] = []
-    seen: set[str] = set()
-    for match in QUOTE_AUTHOR_RE.finditer(text):
-        candidate = re.sub(r"\s+", " ", match.group(1)).strip()
-        if not candidate:
-            continue
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        authors.append(candidate)
-    return authors
-
-
 def build_chapter(
     *,
     docs_dir: Path,
@@ -229,10 +270,12 @@ def build_chapter(
     source_file = docs_dir / filepath
     raw_content = source_file.read_text(encoding="utf-8")
     frontmatter, body = split_frontmatter(raw_content)
-    content = remove_frontmatter(raw_content).lstrip("\n")
+    content = body.lstrip("\n")
     lines = content.splitlines()
+    line_offset = content_line_offset(raw_content)
     chapter_slug = slug_for_path(filepath)
     source_path = str(source_file.relative_to(repo_root))
+    changed = git_file_commit_date(repo_root, source_path)
     base_url = page_url(site_url, chapter_slug)
     chapter_github_url = repo_blob_url(repo_url, commit, source_path, 1, max(1, len(lines)))
     title = first_heading(content, chapter_slug)
@@ -244,6 +287,8 @@ def build_chapter(
         # Stop at the next explicit anchor at any heading level to avoid parent/child duplication.
         next_line = headings[index + 1][0] if index + 1 < len(headings) else len(lines) + 1
         end_line = max(line_no, next_line - 1)
+        raw_start_line = line_offset + line_no
+        raw_end_line = line_offset + end_line
         sections.append(
             Section(
                 section_uid=anchor,
@@ -252,10 +297,10 @@ def build_chapter(
                 heading=heading,
                 url=anchor_url(base_url, anchor),
                 github_url=repo_blob_url(repo_url, commit, source_path, line_no, end_line),
+                changed=git_range_commit_date(repo_root, source_path, raw_start_line, raw_end_line) or changed,
                 start_line=line_no,
                 end_line=end_line,
                 text=section_text(lines, line_no, end_line),
-                quote_authors=extract_quote_authors(section_text(lines, line_no, end_line)),
             )
         )
 
@@ -269,10 +314,10 @@ def build_chapter(
                 heading=title,
                 url=base_url,
                 github_url=chapter_github_url,
+                changed=changed,
                 start_line=1,
                 end_line=max(1, len(lines)),
                 text=content.strip(),
-                quote_authors=extract_quote_authors(content.strip()),
             )
         )
 
@@ -286,7 +331,7 @@ def build_chapter(
         github_url=chapter_github_url,
         created=frontmatter_value(frontmatter, "created"),
         published=frontmatter_value(frontmatter, "published"),
-        changed=commit,
+        changed=changed,
         sections=sections,
     )
 

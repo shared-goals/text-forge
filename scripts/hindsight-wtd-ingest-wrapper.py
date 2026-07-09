@@ -36,6 +36,9 @@ def run(cmd: list[str], *, cwd: pathlib.Path | None = None, stdout=None) -> None
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True, write_through=True)
+
     parser = argparse.ArgumentParser(description="WTD inventory -> Hindsight wrapper using text-forge scripts")
     parser.add_argument("--text-forge", type=pathlib.Path, default=DEFAULT_TEXT_FORGE)
     parser.add_argument("--root", type=pathlib.Path, required=True, help="WTD repository root containing mkdocs.yml")
@@ -124,4 +127,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        raise SystemExit(0)
