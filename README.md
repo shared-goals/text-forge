@@ -33,7 +33,7 @@ inventory → memory projections → meaning graph projections
 
 The key principle is: **do not pollute the source text with infrastructure concerns**. Keep Markdown readable. Put publication, memory, graph, and agent mechanics into generated layers.
 
-## Жизнь как Текст
+## Life as Text
 
 The WTD approach treats life, work, product thinking, references, doubts, and decisions as a text that can be revised, linked, published, questioned, and remembered.
 
@@ -208,6 +208,24 @@ pip install sg-text-forge
 ```
 
 ## Quick start
+
+### Peer layout for local content repos
+
+When using a local content repo such as `whattodo`, the default convention is to keep it as a peer directory:
+
+```text
+work/
+  text-forge/
+  whattodo/
+```
+
+`whattodo/Makefile` uses:
+
+```makefile
+TEXT_FORGE_DIR ?= ../text-forge
+```
+
+So local script routes resolve from the content repo to this toolkit repo without hardcoded machine-specific paths.
 
 Add the plugin to `mkdocs.yml`:
 

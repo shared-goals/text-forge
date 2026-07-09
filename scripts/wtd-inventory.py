@@ -18,11 +18,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+import yaml
+
 from mkdocs_common import flatten_nav_files, load_yaml_config, remove_frontmatter
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*(\{[^}]*\})\s*$")
 ID_ATTR_RE = re.compile(r"(?:^|\s)#([^\s}]+)")
 CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+QUOTE_AUTHOR_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)\s*\{\s*\.author\s*\}")
 
 
 @dataclass
@@ -36,6 +39,7 @@ class Section:
     start_line: int
     end_line: int
     text: str
+    quote_authors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -47,6 +51,9 @@ class Chapter:
     source_path: str
     url: str | None
     github_url: str | None
+    created: str | None = None
+    published: str | None = None
+    changed: str | None = None
     sections: list[Section] = field(default_factory=list)
 
 
@@ -55,6 +62,7 @@ class Inventory:
     corpus: str
     repo: str | None
     commit: str | None
+    commit_date: str | None
     site_url: str | None
     docs_dir: str
     chapters: list[Chapter]
@@ -99,6 +107,20 @@ def git_commit(repo_root: Path) -> str | None:
     try:
         result = subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def git_commit_date(repo_root: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "show", "-s", "--format=%cI", "HEAD"],
             check=True,
             capture_output=True,
             text=True,
@@ -157,6 +179,43 @@ def section_text(lines: list[str], start_line: int, end_line: int) -> str:
     return "\n".join(lines[start_line - 1 : end_line]).strip()
 
 
+def split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
+    if not content.startswith("---\n"):
+        return {}, content
+    end_match = re.search(r"\n---\n", content[4:])
+    if not end_match:
+        return {}, content
+    fm_raw = content[4 : end_match.start() + 4]
+    body = content[end_match.end() + 4 :]
+    try:
+        loaded = yaml.safe_load(fm_raw)
+        frontmatter = loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        frontmatter = {}
+    return frontmatter, body
+
+
+def frontmatter_value(frontmatter: dict[str, Any], key: str) -> str | None:
+    value = frontmatter.get(key)
+    if value is None:
+        return None
+    return str(value)
+
+
+def extract_quote_authors(text: str) -> list[str]:
+    authors: list[str] = []
+    seen: set[str] = set()
+    for match in QUOTE_AUTHOR_RE.finditer(text):
+        candidate = re.sub(r"\s+", " ", match.group(1)).strip()
+        if not candidate:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        authors.append(candidate)
+    return authors
+
+
 def build_chapter(
     *,
     docs_dir: Path,
@@ -168,7 +227,9 @@ def build_chapter(
     commit: str | None,
 ) -> Chapter:
     source_file = docs_dir / filepath
-    content = remove_frontmatter(source_file.read_text(encoding="utf-8")).lstrip("\n")
+    raw_content = source_file.read_text(encoding="utf-8")
+    frontmatter, body = split_frontmatter(raw_content)
+    content = remove_frontmatter(raw_content).lstrip("\n")
     lines = content.splitlines()
     chapter_slug = slug_for_path(filepath)
     source_path = str(source_file.relative_to(repo_root))
@@ -194,6 +255,7 @@ def build_chapter(
                 start_line=line_no,
                 end_line=end_line,
                 text=section_text(lines, line_no, end_line),
+                quote_authors=extract_quote_authors(section_text(lines, line_no, end_line)),
             )
         )
 
@@ -210,6 +272,7 @@ def build_chapter(
                 start_line=1,
                 end_line=max(1, len(lines)),
                 text=content.strip(),
+                quote_authors=extract_quote_authors(content.strip()),
             )
         )
 
@@ -221,6 +284,9 @@ def build_chapter(
         source_path=source_path,
         url=base_url,
         github_url=chapter_github_url,
+        created=frontmatter_value(frontmatter, "created"),
+        published=frontmatter_value(frontmatter, "published"),
+        changed=commit,
         sections=sections,
     )
 
@@ -256,6 +322,7 @@ def build_inventory(config_path: Path, include_drafts: bool) -> Inventory:
 
     repo_root = config_dir.resolve()
     commit = git_commit(repo_root)
+    commit_date = git_commit_date(repo_root)
     repo_url = config.get("repo_url")
     site_url = config.get("site_url")
 
@@ -293,6 +360,7 @@ def build_inventory(config_path: Path, include_drafts: bool) -> Inventory:
         corpus="wtd",
         repo=repo_url,
         commit=commit,
+        commit_date=commit_date,
         site_url=site_url,
         docs_dir=docs_dir_name,
         chapters=chapters,
@@ -308,6 +376,7 @@ def summarize(inv: Inventory) -> str:
     lines = [
         f"corpus: {inv.corpus}",
         f"commit: {inv.commit}",
+        f"commit_date: {inv.commit_date}",
         f"site_url: {inv.site_url}",
         f"chapters: {chapter_count} ({published_count} published, {draft_count} draft)",
         f"sections: {section_count}",

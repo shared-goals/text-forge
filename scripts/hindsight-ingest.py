@@ -97,11 +97,16 @@ def document_id(chapter: dict[str, Any], section: dict[str, Any], chunk_idx: int
 
 
 def metadata(inv: dict[str, Any], chapter: dict[str, Any], section: dict[str, Any], chunk_idx: int, chunk_count: int) -> dict[str, str]:
+    quote_authors = [str(x) for x in section.get("quote_authors") or [] if str(x).strip()]
+    text_author = quote_authors[0] if quote_authors else "User"
     data: dict[str, str] = {
         "corpus": str(inv.get("corpus", "wtd")),
         "role": "roots",
         "status": str(chapter["status"]),
         "chapter": str(chapter["chapter"]),
+        "chapter_created": str(chapter.get("created") or ""),
+        "chapter_published": str(chapter.get("published") or ""),
+        "chapter_changed": str(chapter.get("changed") or ""),
         "heading_level": str(section["heading_level"]),
         "heading": str(section["heading"]),
         "section_uid": str(section["section_uid"]),
@@ -109,11 +114,17 @@ def metadata(inv: dict[str, Any], chapter: dict[str, Any], section: dict[str, An
         "github_url": str(section.get("github_url") or ""),
         "chunk_index": str(chunk_idx),
         "chunk_count": str(chunk_count),
+        "text_author": text_author,
+        "reader": "Assistant",
     }
     if inv.get("commit"):
         data["commit"] = str(inv["commit"])
+    if inv.get("commit_date"):
+        data["changed_at"] = str(inv["commit_date"])
     if section.get("anchor"):
         data["anchor"] = str(section["anchor"])
+    if quote_authors:
+        data["quote_authors"] = " | ".join(quote_authors)
     return data
 
 
@@ -133,21 +144,25 @@ def tags(chapter: dict[str, Any], section: dict[str, Any]) -> list[str]:
 
 def context(chapter: dict[str, Any], section: dict[str, Any]) -> str:
     url = section.get("url") or chapter.get("url")
-    return f"WTD roots corpus. {chapter['status']} chapter {chapter['chapter']}, section «{section['heading']}». URL: {url}"
+    quote_authors = [str(x) for x in section.get("quote_authors") or [] if str(x).strip()]
+    author_label = quote_authors[0] if quote_authors else "User"
+    return (
+        f"WTD roots corpus. Author: {author_label}. Reader: Assistant. "
+        f"{chapter['status']} chapter {chapter['chapter']}, section «{section['heading']}». URL: {url}"
+    )
 
 
-def retain_item(
-    api_url: str,
-    bank: str,
+def build_item(
+    *,
     content: str,
     context_text: str,
     document_id_value: str,
     metadata_value: dict[str, str],
     tags_value: list[str],
-    timeout: int,
     strategy: str | None,
     observation_scopes: str | None,
-) -> None:
+    update_mode: str,
+) -> dict[str, Any]:
     item: dict[str, Any] = {
         "content": content,
         "context": context_text,
@@ -155,13 +170,17 @@ def retain_item(
         "metadata": metadata_value,
         "tags": tags_value,
         "timestamp": "unset",
-        "update_mode": "replace",
+        "update_mode": update_mode,
     }
     if strategy:
         item["strategy"] = strategy
     if observation_scopes:
         item["observation_scopes"] = observation_scopes
-    request_json(api_url, "POST", f"/v1/default/banks/{bank}/memories", {"items": [item], "async": False}, timeout=timeout)
+    return item
+
+
+def retain_batch(api_url: str, bank: str, items: list[dict[str, Any]], timeout: int) -> None:
+    request_json(api_url, "POST", f"/v1/default/banks/{bank}/memories", {"items": items, "async": False}, timeout=timeout)
 
 
 def is_retryable(exc: BaseException) -> bool:
@@ -171,7 +190,7 @@ def is_retryable(exc: BaseException) -> bool:
 def retain_with_retry(*, retries: int, retry_delay: float, **kwargs) -> None:
     for attempt in range(1, retries + 2):
         try:
-            retain_item(**kwargs)
+            retain_batch(**kwargs)
             return
         except Exception as e:
             if not is_retryable(e) or attempt == retries + 1:
@@ -202,6 +221,9 @@ def preview(inv: dict[str, Any], chapter_filter: str | None, section_filter: str
         print(f"  heading: {section['heading']}")
         print(f"  document_id: {document_id(chapter, section, chunk_idx)}")
         print(f"  url: {section.get('url') or chapter.get('url')}")
+        quote_authors = [str(x) for x in section.get("quote_authors") or [] if str(x).strip()]
+        if quote_authors:
+            print(f"  quote_authors: {', '.join(quote_authors)}")
         print(f"  tags: {', '.join(tags(chapter, section))}")
     print(f"\nTOTAL selected preview: {len(shown)} chunks, {total_chars:,} chars")
 
@@ -209,25 +231,45 @@ def preview(inv: dict[str, Any], chapter_filter: str | None, section_filter: str
 def ingest(inv: dict[str, Any], args: argparse.Namespace) -> int:
     docs = list(iter_documents(inv, args.chapter, args.section, args.chunk_size))
     selected = docs if args.limit is None else docs[: args.limit]
+    if not selected:
+        return 0
     sent = 0
-    for idx, (chapter, section, chunk_idx, chunk_count, chunk) in enumerate(selected, start=1):
-        did = document_id(chapter, section, chunk_idx)
-        print(f"\n[{idx}/{len(selected)}] retain {did} ({len(chunk):,} chars)...", end=" ", flush=True)
+    total_batches = (len(selected) + args.batch_size - 1) // args.batch_size
+    for batch_index in range(total_batches):
+        start = batch_index * args.batch_size
+        end = min(len(selected), start + args.batch_size)
+        batch_docs = selected[start:end]
+        items: list[dict[str, Any]] = []
+        for chapter, section, chunk_idx, chunk_count, chunk in batch_docs:
+            did = document_id(chapter, section, chunk_idx)
+            items.append(
+                build_item(
+                    content=chunk,
+                    context_text=context(chapter, section),
+                    document_id_value=did,
+                    metadata_value=metadata(inv, chapter, section, chunk_idx, chunk_count),
+                    tags_value=tags(chapter, section),
+                    strategy=args.strategy,
+                    observation_scopes=args.observation_scopes,
+                    update_mode=args.update_mode,
+                )
+            )
+
+        print(
+            f"\n[batch {batch_index + 1}/{total_batches}] retain {len(items)} items "
+            f"(chunks {start + 1}-{end}/{len(selected)})...",
+            end=" ",
+            flush=True,
+        )
         retain_with_retry(
             api_url=args.api_url,
             bank=args.bank,
-            content=chunk,
-            context_text=context(chapter, section),
-            document_id_value=did,
-            metadata_value=metadata(inv, chapter, section, chunk_idx, chunk_count),
-            tags_value=tags(chapter, section),
+            items=items,
             timeout=args.retain_timeout,
-            strategy=args.strategy,
-            observation_scopes=args.observation_scopes,
             retries=args.retries,
             retry_delay=args.retry_delay,
         )
-        sent += 1
+        sent += len(items)
         print("OK")
         time.sleep(args.delay)
     return sent
@@ -250,7 +292,13 @@ def main() -> int:
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-delay", type=float, default=30.0)
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY)
+    parser.add_argument("--batch-size", type=int, default=25, help="Items per retain request")
+    parser.add_argument("--update-mode", choices=["replace", "append"], default="replace", help="Document update policy for existing document_id")
+    parser.add_argument("--delta", action="store_true", help="Alias for --update-mode append")
     args = parser.parse_args()
+
+    if args.delta:
+        args.update_mode = "append"
 
     os.environ.setdefault("NO_PROXY", "*")
     os.environ.setdefault("no_proxy", "*")
@@ -267,9 +315,12 @@ def main() -> int:
     published = sum(1 for ch in inv["chapters"] if ch["status"] == "published")
     draft = sum(1 for ch in inv["chapters"] if ch["status"] == "draft")
     print(f"Inventory commit: {inv.get('commit')}")
+    print(f"Inventory commit_date: {inv.get('commit_date')}")
     print(f"Chapters: {len(inv['chapters'])} ({published} published, {draft} draft), chunks selected: {len(docs)}")
     print(f"API: {args.api_url}, bank: {args.bank}")
     print(f"Retain strategy: {args.strategy or '(bank default)'}")
+    print(f"Update mode: {args.update_mode}")
+    print(f"Batch size: {args.batch_size}")
     if args.chapter:
         print(f"Chapter only: {args.chapter}")
     if args.section:
