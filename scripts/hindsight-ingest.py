@@ -19,9 +19,10 @@ import socket
 import sys
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
+
+from hindsight_common import ensure_no_proxy, request_json
 
 DEFAULT_CHUNK_SIZE = 8000
 DEFAULT_DELAY = 0.5
@@ -50,22 +51,6 @@ def load_inventory(path: str) -> dict[str, Any]:
     if path == "-":
         return json.load(sys.stdin)
     return json.loads(Path(path).read_text(encoding="utf-8"))
-
-
-def request_json(api_url: str, method: str, path: str, payload: dict | None = None, timeout: int = 120) -> dict:
-    data = None
-    headers = {"Accept": "application/json"}
-    if payload is not None:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(f"{api_url.rstrip('/')}{path}", data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {e.code} {path}: {detail}") from e
-    return json.loads(body) if body else {}
 
 
 def section_matches(section: dict[str, Any], section_filter: str | None) -> bool:
@@ -116,7 +101,6 @@ def metadata(inv: dict[str, Any], chapter: dict[str, Any], section: dict[str, An
         "chunk_index": str(chunk_idx),
         "chunk_count": str(chunk_count),
         "text_author": "User",
-        "reader": "Assistant",
     }
     if inv.get("commit"):
         data["commit"] = str(inv["commit"])
@@ -144,9 +128,17 @@ def tags(chapter: dict[str, Any], section: dict[str, Any]) -> list[str]:
 
 def context(chapter: dict[str, Any], section: dict[str, Any]) -> str:
     url = section.get("url") or chapter.get("url")
+    chapter_title = str(chapter.get("title") or chapter.get("chapter") or "")
+    chapter_slug = str(chapter.get("chapter") or "")
+    section_heading = str(section.get("heading") or "")
+    section_uid = str(section.get("section_uid") or "")
+    chapter_label = "Published" if str(chapter.get("status") or "").lower() == "published" else "Draft"
     return (
-        "WTD roots corpus authored by User; Assistant is reader. "
-        f"{chapter['status']} chapter {chapter['chapter']}, section «{section['heading']}». URL: {url}"
+        "WTD roots corpus source text is authored by User.\n"
+        "Assistant/Hermes role is reader and reflector of this text, not the source author.\n"
+        f"{chapter_label} chapter: «{chapter_title}», {chapter_slug}\n"
+        f"Section: «{section_heading}», {section_uid}\n"
+        f"URL: {url}"
     )
 
 
@@ -177,8 +169,8 @@ def build_item(
     return item
 
 
-def retain_batch(api_url: str, bank: str, items: list[dict[str, Any]], timeout: int) -> None:
-    request_json(api_url, "POST", f"/v1/default/banks/{bank}/memories", {"items": items, "async": False}, timeout=timeout)
+def retain_batch(api_url: str, bank: str, items: list[dict[str, Any]], timeout: int, retain_async: bool) -> None:
+    request_json(api_url, "POST", f"/v1/default/banks/{bank}/memories", {"items": items, "async": retain_async}, timeout=timeout)
 
 
 def is_retryable(exc: BaseException) -> bool:
@@ -219,19 +211,16 @@ def preview(inv: dict[str, Any], chapter_filter: str | None, section_filter: str
         print(f"- {chapter['chapter']}#{section['section_uid']} ({chapter['status']}) chunk {chunk_idx + 1}/{chunk_count}: {len(chunk):,} chars")
         print(f"  heading: {section['heading']}")
         print(f"  document_id: {document_id(chapter, section, chunk_idx)}")
-        print(f"  url: {section.get('url') or chapter.get('url')}")
-        print(f"  created: {doc_meta.get('chapter_created') or '-'}")
-        print(f"  published: {doc_meta.get('chapter_published') or '-'}")
-        print(f"  changed: {doc_meta.get('changed_at') or doc_meta.get('chapter_changed') or '-'}")
-        print(f"  author: {doc_meta.get('text_author')}")
-        print(f"  reader: {doc_meta.get('reader')}")
+        print(f"  url: {doc_meta.get('url') or '-'}")
+        print(f"  chapter_created: {doc_meta.get('chapter_created') or '-'}")
+        print(f"  chapter_published: {doc_meta.get('chapter_published') or '-'}")
+        print(f"  changed_at: {doc_meta.get('changed_at') or doc_meta.get('chapter_changed') or '-'}")
+        print(f"  text_author: {doc_meta.get('text_author') or '-'}")
         print(f"  tags: {', '.join(tags(chapter, section))}")
     print(f"\nTOTAL selected preview: {len(shown)} chunks, {total_chars:,} chars")
 
 
-def ingest(inv: dict[str, Any], args: argparse.Namespace) -> int:
-    docs = list(iter_documents(inv, args.chapter, args.section, args.chunk_size))
-    selected = docs if args.limit is None else docs[: args.limit]
+def ingest(inv: dict[str, Any], selected: list[tuple[dict[str, Any], dict[str, Any], int, int, str]], args: argparse.Namespace) -> int:
     if not selected:
         return 0
     sent = 0
@@ -267,6 +256,7 @@ def ingest(inv: dict[str, Any], args: argparse.Namespace) -> int:
             bank=args.bank,
             items=items,
             timeout=args.retain_timeout,
+            retain_async=args.retain_async,
             retries=args.retries,
             retry_delay=args.retry_delay,
         )
@@ -293,6 +283,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Preview only; default unless --yes is passed")
     parser.add_argument("--yes", action="store_true", help="Actually retain memories")
     parser.add_argument("--retain-timeout", type=int, default=600)
+    parser.add_argument("--retain-async", dest="retain_async", action="store_true", default=True, help="Submit retain batches asynchronously (default)")
+    parser.add_argument("--retain-sync", dest="retain_async", action="store_false", help="Wait for retain processing before returning")
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-delay", type=float, default=30.0)
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY)
@@ -304,8 +296,7 @@ def main() -> int:
     if args.delta:
         args.update_mode = "append"
 
-    os.environ.setdefault("NO_PROXY", "*")
-    os.environ.setdefault("no_proxy", "*")
+    ensure_no_proxy()
 
     inv = load_inventory(args.inventory)
     errors = validate_documents(inv, args.chapter, args.section, args.chunk_size)
@@ -316,6 +307,7 @@ def main() -> int:
         return 1
 
     docs = list(iter_documents(inv, args.chapter, args.section, args.chunk_size))
+    selected = docs if args.limit is None else docs[: args.limit]
     published = sum(1 for ch in inv["chapters"] if ch["status"] == "published")
     draft = sum(1 for ch in inv["chapters"] if ch["status"] == "draft")
     print(f"Inventory commit: {inv.get('commit')}")
@@ -323,6 +315,7 @@ def main() -> int:
     print(f"Chapters: {len(inv['chapters'])} ({published} published, {draft} draft), chunks selected: {len(docs)}")
     print(f"API: {args.api_url}, bank: {args.bank}")
     print(f"Retain strategy: {args.strategy or '(bank default)'}")
+    print(f"Retain mode: {'async' if args.retain_async else 'sync'}")
     print(f"Update mode: {args.update_mode}")
     print(f"Batch size: {args.batch_size}")
     if args.chapter:
@@ -340,7 +333,7 @@ def main() -> int:
         print("\nNo writes performed. Pass --yes to ingest.")
         return 0
 
-    sent = ingest(inv, args)
+    sent = ingest(inv, selected, args)
     print(f"\nchunks sent: {sent}")
     return 0
 

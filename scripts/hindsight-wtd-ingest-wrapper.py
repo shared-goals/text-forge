@@ -18,6 +18,8 @@ import subprocess
 import sys
 import tempfile
 
+from hindsight_common import ensure_no_proxy
+
 DEFAULT_TEXT_FORGE = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_API_URL = "http://localhost:8889"
 DEFAULT_BANK = "hermes"
@@ -56,8 +58,7 @@ def main() -> int:
     parser.add_argument("--delta", action="store_true", help="Alias for --update-mode append")
     args = parser.parse_args()
 
-    os.environ.setdefault("NO_PROXY", "*")
-    os.environ.setdefault("no_proxy", "*")
+    ensure_no_proxy()
 
     text_forge = args.text_forge.expanduser().resolve()
     wtd_root = args.root.expanduser().resolve()
