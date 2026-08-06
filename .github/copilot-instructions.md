@@ -22,7 +22,7 @@
 - Fast preview (no EPUB): `make CONTENT_ROOT=/abs/path/to/content serve`.
 - Full build: `make CONTENT_ROOT=/abs/path/to/content all`.
 - Tests (fixtures): `make CONTENT_ROOT=/abs/path/to/content test`.
-- i18n keys check: `make check-i18n` (validates `mkdocs/overrides/assets/js/translations.json`).
+- `make format` runs Ruff check --fix and Ruff format; `make test` runs the i18n check and unit tests.
 - MkDocs strict mode note: the Makefile defaults `MKDOCS_GIT_COMMITTERS_ENABLED=false` to avoid rate-limit warnings becoming errors under `--strict`.
 
 ## CI / GitHub Action

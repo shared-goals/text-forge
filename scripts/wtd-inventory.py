@@ -14,17 +14,14 @@ import argparse
 import json
 import re
 import subprocess
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
-
-from mkdocs_common import flatten_nav_files, load_yaml_config, remove_frontmatter
-
-HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*(\{[^}]*\})\s*$")
-ID_ATTR_RE = re.compile(r"(?:^|\s)#([^\s}]+)")
-CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+from mkdocs_common import flatten_nav_files, load_yaml_config
+from wtd_sections_common import CODE_FENCE_RE, anchored_headings
 
 
 @dataclass
@@ -69,7 +66,7 @@ class Inventory:
 
 
 def slug_for_path(path: str) -> str:
-    return path[:-3] if path.endswith(".md") else path
+    return path.removesuffix(".md")
 
 
 def page_url(site_url: str | None, chapter: str) -> str | None:
@@ -89,14 +86,15 @@ def anchor_url(base_url: str | None, anchor: str | None) -> str | None:
     return f"{base_url.rstrip('/')}/#{anchor}"
 
 
-def repo_blob_url(repo_url: str | None, commit: str | None, source_path: str, start: int, end: int) -> str | None:
+def repo_blob_url(
+    repo_url: str | None, commit: str | None, source_path: str, start: int, end: int
+) -> str | None:
     if not repo_url or not commit:
         return None
     repo = repo_url.rstrip("/")
     if repo.startswith("git@github.com:"):
         repo = "https://github.com/" + repo.removeprefix("git@github.com:")
-    if repo.endswith(".git"):
-        repo = repo[:-4]
+    repo = repo.removesuffix(".git")
     if "github.com" not in repo:
         return None
     return f"{repo}/blob/{commit}/{source_path}#L{start}-L{end}"
@@ -112,7 +110,7 @@ def git_commit(repo_root: Path) -> str | None:
             timeout=5,
         )
         return result.stdout.strip() or None
-    except Exception:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
 
@@ -126,28 +124,48 @@ def git_commit_date(repo_root: Path) -> str | None:
             timeout=5,
         )
         return result.stdout.strip() or None
-    except Exception:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
 
 def git_file_commit_date(repo_root: Path, source_path: str) -> str | None:
     try:
         result = subprocess.run(
-            ["git", "-C", str(repo_root), "log", "-1", "--format=%cI", "--", source_path],
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "log",
+                "-1",
+                "--format=%cI",
+                "--",
+                source_path,
+            ],
             check=True,
             capture_output=True,
             text=True,
             timeout=5,
         )
         return result.stdout.strip() or None
-    except Exception:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
 
-def git_range_commit_date(repo_root: Path, source_path: str, start_line: int, end_line: int) -> str | None:
+def git_range_commit_date(
+    repo_root: Path, source_path: str, start_line: int, end_line: int
+) -> str | None:
     try:
         result = subprocess.run(
-            ["git", "-C", str(repo_root), "log", "-1", "--format=%cI", "-L", f"{start_line},{end_line}:{source_path}"],
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "log",
+                "-1",
+                "--format=%cI",
+                "-L",
+                f"{start_line},{end_line}:{source_path}",
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -156,9 +174,12 @@ def git_range_commit_date(repo_root: Path, source_path: str, start_line: int, en
         output = result.stdout.strip()
         if not output:
             return None
-        match = re.search(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b", output)
+        match = re.search(
+            r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b",
+            output,
+        )
         return match.group(0) if match else None
-    except Exception:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
 
@@ -204,32 +225,6 @@ def first_heading(content: str, fallback: str) -> str:
     return fallback
 
 
-def anchored_headings(lines: list[str]) -> list[tuple[int, int, str, str]]:
-    """Return (line_number, level, heading_text, anchor) for headings with {#id}.
-
-    Handles attr_list with additional attributes, e.g.:
-        ## Title {#anchor style="..."}
-    """
-    out: list[tuple[int, int, str, str]] = []
-    in_fence = False
-    for idx, line in enumerate(lines, start=1):
-        if CODE_FENCE_RE.match(line):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        match = HEADING_RE.match(line)
-        if not match:
-            continue
-        hashes, raw_heading, attrs = match.groups()
-        id_match = ID_ATTR_RE.search(attrs.strip("{}"))
-        if not id_match:
-            continue
-        heading = re.sub(r"\s+", " ", raw_heading).strip()
-        out.append((idx, len(hashes), heading, id_match.group(1)))
-    return out
-
-
 def section_text(lines: list[str], start_line: int, end_line: int) -> str:
     return "\n".join(lines[start_line - 1 : end_line]).strip()
 
@@ -245,7 +240,7 @@ def split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     try:
         loaded = yaml.safe_load(fm_raw)
         frontmatter = loaded if isinstance(loaded, dict) else {}
-    except Exception:
+    except yaml.YAMLError:
         frontmatter = {}
     return frontmatter, body
 
@@ -277,7 +272,9 @@ def build_chapter(
     source_path = str(source_file.relative_to(repo_root))
     changed = git_file_commit_date(repo_root, source_path)
     base_url = page_url(site_url, chapter_slug)
-    chapter_github_url = repo_blob_url(repo_url, commit, source_path, 1, max(1, len(lines)))
+    chapter_github_url = repo_blob_url(
+        repo_url, commit, source_path, 1, max(1, len(lines))
+    )
     title = first_heading(content, chapter_slug)
 
     headings = anchored_headings(lines)
@@ -285,7 +282,9 @@ def build_chapter(
     for index, (line_no, level, heading, anchor) in enumerate(headings):
         # Every explicit anchor is a public address and a memory/graph boundary.
         # Stop at the next explicit anchor at any heading level to avoid parent/child duplication.
-        next_line = headings[index + 1][0] if index + 1 < len(headings) else len(lines) + 1
+        next_line = (
+            headings[index + 1][0] if index + 1 < len(headings) else len(lines) + 1
+        )
         end_line = max(line_no, next_line - 1)
         raw_start_line = line_offset + line_no
         raw_end_line = line_offset + end_line
@@ -296,8 +295,13 @@ def build_chapter(
                 heading_level=level,
                 heading=heading,
                 url=anchor_url(base_url, anchor),
-                github_url=repo_blob_url(repo_url, commit, source_path, line_no, end_line),
-                changed=git_range_commit_date(repo_root, source_path, raw_start_line, raw_end_line) or changed,
+                github_url=repo_blob_url(
+                    repo_url, commit, source_path, line_no, end_line
+                ),
+                changed=git_range_commit_date(
+                    repo_root, source_path, raw_start_line, raw_end_line
+                )
+                or changed,
                 start_line=line_no,
                 end_line=end_line,
                 text=section_text(lines, line_no, end_line),
@@ -347,7 +351,9 @@ def validate_inventory(chapters: list[Chapter]) -> list[str]:
                 warnings.append(f"Duplicate document key: {key}")
             seen_doc_keys.add(key)
             if section.section_uid in seen_sections:
-                warnings.append(f"Duplicate section_uid in {chapter.chapter}: {section.section_uid}")
+                warnings.append(
+                    f"Duplicate section_uid in {chapter.chapter}: {section.section_uid}"
+                )
             seen_sections.add(section.section_uid)
     return warnings
 
@@ -433,9 +439,15 @@ def summarize(inv: Inventory) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build WTD/text-forge source inventory")
+    parser = argparse.ArgumentParser(
+        description="Build WTD/text-forge source inventory"
+    )
     parser.add_argument("--config", default="mkdocs.yml", help="Path to mkdocs.yml")
-    parser.add_argument("--include-drafts", action="store_true", help="Include Markdown files under docs_dir that are not in nav")
+    parser.add_argument(
+        "--include-drafts",
+        action="store_true",
+        help="Include Markdown files under docs_dir that are not in nav",
+    )
     parser.add_argument("--format", choices=["json", "summary"], default="summary")
     args = parser.parse_args()
 

@@ -42,17 +42,18 @@ Usage:
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import yaml
 from mkdocs_common import flatten_nav_files, load_yaml_config, remove_frontmatter
 
 
 def extract_nav_items(
-    nav_config: List[Any], level: int = 0
-) -> List[Tuple[str, str, int]]:
+    nav_config: list[Any], level: int = 0
+) -> list[tuple[str, str, int]]:
     """
     Extract navigation items with hierarchy levels.
 
@@ -60,7 +61,7 @@ def extract_nav_items(
     - level 0: top-level chapters
     - level 1+: nested sections
     """
-    items: List[Tuple[str, str, int]] = []
+    items: list[tuple[str, str, int]] = []
 
     for item in nav_config:
         if isinstance(item, str):
@@ -83,7 +84,7 @@ def extract_nav_items(
     return items
 
 
-def extract_frontmatter(content: str) -> Dict[str, Any]:
+def extract_frontmatter(content: str) -> dict[str, Any]:
     """Extract YAML frontmatter as dictionary."""
     if not content.startswith("---\n"):
         return {}
@@ -101,7 +102,7 @@ def extract_frontmatter(content: str) -> Dict[str, Any]:
         return {}
 
 
-def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
+def get_git_file_dates(file_path: Path) -> tuple[str, str]:
     """
     Retrieve file dates from Git history.
 
@@ -145,6 +146,7 @@ def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
 
         created_date = None
@@ -171,6 +173,7 @@ def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
 
         updated_date = None
@@ -182,7 +185,7 @@ def get_git_file_dates(file_path: Path) -> Tuple[str, str]:
 
         return created_date or "", updated_date or ""
 
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ValueError) as e:
         print(
             f"[WARN] Could not retrieve Git dates for {file_path}: {e}", file=sys.stderr
         )
@@ -194,14 +197,16 @@ def format_git_date(date_str: str) -> str:
     try:
         from datetime import datetime
 
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        dt = datetime.strptime(date_str, "%Y-%m-%d").replace(
+            tzinfo=datetime.timezone.utc
+        )
         return dt.strftime("%d.%m.%Y")
     except ValueError:
         return ""
 
 
 def format_dates_from_frontmatter(
-    frontmatter: Dict[str, Any], file_path: Path | None = None
+    frontmatter: dict[str, Any], file_path: Path | None = None
 ) -> str:
     """
     Format dates from frontmatter as italic text.
@@ -209,7 +214,7 @@ def format_dates_from_frontmatter(
     Falls back to Git history if dates are not specified in frontmatter.
     Date format: %d.%m.%Y
     """
-    dates: List[str] = []
+    dates: list[str] = []
 
     # Get Git dates as fallback
     git_created = ""
@@ -236,12 +241,14 @@ def format_dates_from_frontmatter(
     return ""
 
 
-def adjust_heading_levels(content: str, level: int) -> Tuple[str, List[Tuple[int, Optional[str]]]]:
+def adjust_heading_levels(
+    content: str, level: int
+) -> tuple[str, list[tuple[int, str | None]]]:
     """
     Shift markdown heading levels by specified amount.
     Returns (new_content, headings) where headings is a list of (pos, anchor or None)
     """
-    headings: List[Tuple[int, Optional[str]]] = []
+    headings: list[tuple[int, str | None]] = []
 
     def replace_heading(match: "re.Match[str]") -> str:
         hashes = match.group(1)
@@ -339,7 +346,10 @@ def extract_first_heading(content: str) -> str:
 
 
 def replace_details_with_source_link(
-    content: str, site_url: str, filepath: str, headings: List[Tuple[int, Optional[str]]]
+    content: str,
+    site_url: str,
+    filepath: str,
+    headings: list[tuple[int, str | None]],
 ) -> str:
     """
     Replace content inside /// details blocks with source link.
@@ -364,8 +374,8 @@ def replace_details_with_source_link(
     # Keep filename normalized for URL building
     filename_without_md = filepath.replace(".md", "").replace("\\", "/")
 
-    def find_nearest_anchor_above(pos: int) -> Optional[str]:
-        anchor: Optional[str] = None
+    def find_nearest_anchor_above(pos: int) -> str | None:
+        anchor: str | None = None
         for hpos, hanchor in headings:
             if hpos < pos and hanchor:
                 anchor = hanchor
@@ -416,7 +426,7 @@ def mode_mkdocs(config_path: str) -> str:
         raise FileNotFoundError(f"Docs directory not found: {docs_dir}")
 
     nav_items = extract_nav_items(config["nav"])
-    combined: List[str] = []
+    combined: list[str] = []
     first_content = True
 
     for title, filepath, level in nav_items:
@@ -488,7 +498,7 @@ def mode_mkdocs(config_path: str) -> str:
 
             combined.append(output_section)
 
-        except Exception as e:
+        except (OSError, UnicodeError, ValueError) as e:
             print(f"[ERROR] Processing {filepath}: {e}", file=sys.stderr)
             continue
 
@@ -498,7 +508,7 @@ def mode_mkdocs(config_path: str) -> str:
     return result
 
 
-def extract_headings_with_anchors(content: str) -> List[Tuple[str, str]]:
+def extract_headings_with_anchors(content: str) -> list[tuple[str, str]]:
     """
     Extract all headings with {#anchor} from markdown content.
 
@@ -511,8 +521,8 @@ def extract_headings_with_anchors(content: str) -> List[Tuple[str, str]]:
 
 def mode_summary(
     config_path: str,
-    exclude: Optional[List[str]] = None,
-    index_output: Optional[str] = None,
+    exclude: list[str] | None = None,
+    index_output: str | None = None,
 ) -> str:
     """
     Mode 3: Prepare source text for AI summarization.
@@ -539,8 +549,8 @@ def mode_summary(
 
     exclude_set = set(exclude or [])
     nav_files = flatten_nav_files(config["nav"])
-    heading_index: Dict[str, str] = {}  # "filename_without_md#anchor" -> "Heading text"
-    combined: List[str] = []
+    heading_index: dict[str, str] = {}  # "filename_without_md#anchor" -> "Heading text"
+    combined: list[str] = []
 
     for filepath in nav_files:
         if filepath in exclude_set:
@@ -568,7 +578,7 @@ def mode_summary(
             # Add file marker and content
             combined.append(f"<!-- FILE: {filepath} -->\n{content_body}")
 
-        except Exception as e:
+        except (OSError, UnicodeError, ValueError) as e:
             print(f"[ERROR] Processing {filepath}: {e}", file=sys.stderr)
             continue
 
@@ -578,7 +588,10 @@ def mode_summary(
         index_path.parent.mkdir(parents=True, exist_ok=True)
         with open(index_path, "w", encoding="utf-8") as f:
             json.dump(heading_index, f, ensure_ascii=False, indent=2)
-        print(f"[INFO] Heading index: {index_path} ({len(heading_index)} entries)", file=sys.stderr)
+        print(
+            f"[INFO] Heading index: {index_path} ({len(heading_index)} entries)",
+            file=sys.stderr,
+        )
 
     return "\n\n".join(combined)
 
@@ -686,7 +699,7 @@ def main():
         print(output, end="")
         print("[INFO] Complete", file=sys.stderr)
 
-    except Exception as e:
+    except (FileNotFoundError, ValueError, OSError, yaml.YAMLError, subprocess.CalledProcessError) as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         import traceback
 

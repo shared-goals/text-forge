@@ -29,7 +29,10 @@ class TextForgePlugin(BasePlugin):
         ("nobr_emoticons_enabled", config_options.Type(bool, default=True)),
         ("downloads_enabled", config_options.Type(bool, default=False)),
         ("ai_readable_prompt", config_options.Type(str, default="")),
-        ("ai_readable_base_url", config_options.Type(str, default="https://grok.com/?q=")),
+        (
+            "ai_readable_base_url",
+            config_options.Type(str, default="https://grok.com/?q="),
+        ),
         ("auto_configure_theme", config_options.Type(bool, default=True)),
         ("epub_title", config_options.Type(str, default="")),
         ("epub_subtitle", config_options.Type(str, default="")),
@@ -125,7 +128,6 @@ class TextForgePlugin(BasePlugin):
                 # Store in page meta for later use by editor template
                 if not hasattr(page, "_text_forge_original_source"):
                     page._text_forge_original_source = original_source
-        return None  # Don't modify the source
 
     def on_files(self, files, config):
         """Add CSS, JS, and config files from plugin's custom_dir to the files collection."""
@@ -168,9 +170,8 @@ class TextForgePlugin(BasePlugin):
     def on_page_markdown(self, markdown, page, config, files):
         """Apply nobr_emoticons hook if enabled."""
         # Apply nobr_emoticons hook if enabled
-        if self.config["nobr_emoticons_enabled"] and hasattr(self, "_nobr_hook"):
-            if hasattr(self._nobr_hook, "on_page_markdown"):
-                return self._nobr_hook.on_page_markdown(markdown, page, config, files)
+        if self.config["nobr_emoticons_enabled"] and hasattr(self, "_nobr_hook") and hasattr(self._nobr_hook, "on_page_markdown"):
+            return self._nobr_hook.on_page_markdown(markdown, page, config, files)
         return markdown
 
     def on_env(self, env, config, files):
@@ -178,7 +179,9 @@ class TextForgePlugin(BasePlugin):
         env.globals["text_forge_editor_enabled"] = self.config["editor_enabled"]
         env.globals["text_forge_downloads_enabled"] = self.config["downloads_enabled"]
         env.globals["text_forge_ai_readable_prompt"] = self.config["ai_readable_prompt"]
-        env.globals["text_forge_ai_readable_base_url"] = self.config["ai_readable_base_url"]
+        env.globals["text_forge_ai_readable_base_url"] = self.config[
+            "ai_readable_base_url"
+        ]
         env.globals["text_forge_epub_filename"] = self.config["epub_filename"]
         env.globals["text_forge_combined_filename"] = self.config["combined_filename"]
         env.globals["text_forge_source_file_published_title"] = self.config[
@@ -261,7 +264,7 @@ class TextForgePlugin(BasePlugin):
                         json.dumps({"success": True, "path": str(target_path)}).encode()
                     ]
 
-                except Exception as e:
+                except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as e:
                     start_response(
                         "500 Internal Server Error",
                         [

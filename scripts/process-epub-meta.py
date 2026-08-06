@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 
@@ -53,7 +53,7 @@ def main() -> int:
     template_path = Path(args.template)
     out_path = Path(args.out)
 
-    mk: Dict[str, Any] = {}
+    mk: dict[str, Any] = {}
     if mkdocs_path.exists():
         mk = (
             yaml.load(
@@ -70,7 +70,7 @@ def main() -> int:
 
     # Read EPUB metadata from text-forge plugin config
     plugins = mk.get("plugins") or []
-    text_forge_config: Dict[str, Any] = {}
+    text_forge_config: dict[str, Any] = {}
     for plugin_entry in plugins:
         if isinstance(plugin_entry, dict) and "text-forge" in plugin_entry:
             text_forge_config = plugin_entry["text-forge"] or {}
@@ -96,7 +96,7 @@ def main() -> int:
         )
 
     text = template_path.read_text(encoding="utf-8")
-    replacements: Dict[str, str] = {
+    replacements: dict[str, str] = {
         "[title]": title,
         "[subtitle]": subtitle,
         "[author]": author,

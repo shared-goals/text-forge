@@ -35,12 +35,10 @@ Note: some environments don’t have `python` on PATH. Prefer `uv run python` / 
 - `make install`
   - Runs `uv --project <repo> sync` for this repo.
 
-### Format + Lint
+### Format
 
 - `make format`
-  - Runs import sorting + formatting via ruff.
-- `make lint`
-  - Runs ruff checks.
+  - Runs Ruff check --fix and Ruff format.
 
 If `ruff` isn’t available, add it to the project dev deps and rerun `make install`.
 
@@ -49,6 +47,11 @@ If `ruff` isn’t available, add it to the project dev deps and rerun `make inst
 - `make check-i18n`
   - Validates `mkdocs/overrides/assets/js/translations.json` against HTML/JS usage.
   - Script: `.github/skills/check-i18n/scripts/check_i18n.py`.
+
+### Tests
+
+- `make test`
+  - Runs the i18n check and the unit test suite.
 
 ### Build Pipeline (as used by content repos)
 

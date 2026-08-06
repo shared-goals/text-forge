@@ -7,7 +7,6 @@ Pipeline: mkdocs.yml → combine → normalize → pandoc → EPUB
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -141,7 +140,7 @@ def process_epub_metadata(config_path: Path, output_path: Path) -> None:
         git_tag = git_result.stdout.strip()
     except subprocess.CalledProcessError:
         pass
-    
+
     # Fallback to describe if no tag found
     if not git_tag:
         try:
@@ -157,7 +156,7 @@ def process_epub_metadata(config_path: Path, output_path: Path) -> None:
             git_tag = "dev"
 
     # Get date from last commit or use today
-    date = datetime.datetime.now().strftime("%Y-%m-%d")
+    date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
     try:
         git_result = subprocess.run(
             ["git", "log", "-1", "--format=%cs"],
@@ -172,17 +171,25 @@ def process_epub_metadata(config_path: Path, output_path: Path) -> None:
         pass
 
     # Format date with Russian month names (matching Makefile)
-    date_obj = datetime.datetime.strptime(date, "%Y-%m-%d")
+    date_obj = datetime.datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=datetime.UTC)
     russian_months = {
-        "January": "января", "February": "февраля", "March": "марта",
-        "April": "апреля", "May": "мая", "June": "июня",
-        "July": "июля", "August": "августа", "September": "сентября",
-        "October": "октября", "November": "ноября", "December": "декабря"
+        "January": "января",
+        "February": "февраля",
+        "March": "марта",
+        "April": "апреля",
+        "May": "мая",
+        "June": "июня",
+        "July": "июля",
+        "August": "августа",
+        "September": "сентября",
+        "October": "октября",
+        "November": "ноября",
+        "December": "декабря",
     }
     date_display = date_obj.strftime("%d %B %Y")
     for eng, rus in russian_months.items():
         date_display = date_display.replace(eng, rus)
-    
+
     # Combine tag and formatted date as edition (like Makefile: "v0.51.0b1, 29 января 2026")
     edition = f"{git_tag}, {date_display}"
 
@@ -213,7 +220,7 @@ def build_epub_with_pandoc(
     markdown_path: Path,
     metadata_path: Path,
     css_path: Path,
-    cover_path: Optional[Path],
+    cover_path: Path | None,
     output_path: Path,
     docs_dir: Path,
 ) -> None:
@@ -313,7 +320,7 @@ def build_epub_pipeline(
 
 
 def build_mkdocs_site(
-    config_path: Path, site_dir: Optional[Path] = None, strict: bool = False
+    config_path: Path, site_dir: Path | None = None, strict: bool = False
 ) -> Path:
     """
     Build MkDocs site.
@@ -335,13 +342,10 @@ def build_mkdocs_site(
     if strict:
         cmd.append("--strict")
 
-    try:
-        subprocess.run(
-            cmd,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        raise
+    subprocess.run(
+        cmd,
+        check=True,
+    )
 
     print(f"✓ Site built to {site_dir}")
     return site_dir
@@ -385,14 +389,14 @@ def create_legacy_redirect_404(site_dir: Path) -> None:
 
     For GitHub Pages, 404.html is served for all missing pages.
     This detects /ru/* URLs and redirects to non-prefixed versions.
-    
+
     Args:
         site_dir: Site directory where 404.html will be created
     """
     site_dir.mkdir(parents=True, exist_ok=True)
-    
+
     redirect_file = site_dir / "404.html"
-    
+
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -439,7 +443,7 @@ def create_legacy_redirect_404(site_dir: Path) -> None:
   </div>
 </body>
 </html>"""
-    
+
     redirect_file.write_text(html, encoding="utf-8")
     print(f"✓ Created 404 redirect: {redirect_file} (redirects /ru/* → /*)")
 
@@ -447,7 +451,7 @@ def create_legacy_redirect_404(site_dir: Path) -> None:
 def build_site_pipeline(
     config_path: Path,
     build_dir: Path,
-    site_dir: Optional[Path] = None,
+    site_dir: Path | None = None,
     strict: bool = False,
     copy_artifacts: bool = True,
     create_404_redirect: bool = True,
@@ -461,19 +465,16 @@ def build_site_pipeline(
     4. Create legacy URL redirect via 404.html (optional, redirects /ru/* to /*)
     """
     config_path = config_path.resolve()
-    content_root = config_path.parent
 
     # Load config
     config = load_mkdocs_config(config_path)
-    docs_dir = content_root / Path(config.get("docs_dir", "docs"))
-
     # Extract text-forge plugin config for filenames
     plugin_config = {}
     for plugin in config.get("plugins", []):
         if isinstance(plugin, dict) and "text-forge" in plugin:
             plugin_config = plugin["text-forge"]
             break
-    
+
     epub_filename = plugin_config.get("epub_filename", "text_book.epub")
     combined_filename = plugin_config.get("combined_filename", "text_combined.md")
 
@@ -488,7 +489,9 @@ def build_site_pipeline(
 
         # Step 3: Copy artifacts after site build (optional)
         if copy_artifacts:
-            copy_build_artifacts(build_dir, built_site_dir, epub_filename, combined_filename)
+            copy_build_artifacts(
+                build_dir, built_site_dir, epub_filename, combined_filename
+            )
 
         # Step 4: Create 404 redirect for legacy URLs (optional)
         if create_404_redirect:
@@ -498,6 +501,6 @@ def build_site_pipeline(
         print(f"  EPUB: {epub_file}")
         print(f"  Site: {built_site_dir}")
 
-    except Exception as e:
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError, ValueError) as e:
         print(f"\n✗ Build failed: {e}", file=sys.stderr)
         raise

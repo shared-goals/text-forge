@@ -142,7 +142,7 @@ Override default search patterns:
 
 ```python
 # In your project's pyproject.toml or config file
-[tool.check-i18n]
+[tool.check - i18n]
 translations_file = "src/locales/en.json"
 html_glob = "templates/**/*.html"
 js_glob = "static/js/**/*.js"
@@ -183,9 +183,9 @@ python scripts/check_i18n.py translations.json \
 ```python
 # In check_i18n.py, add to IGNORE_PATTERNS
 IGNORE_PATTERNS = [
-    r'^\d+$',  # Pure numbers
-    r'^[A-Z_]+$',  # CONSTANTS
-    r'^https?://',  # URLs
+    r"^\d+$",  # Pure numbers
+    r"^[A-Z_]+$",  # CONSTANTS
+    r"^https?://",  # URLs
 ]
 ```
 

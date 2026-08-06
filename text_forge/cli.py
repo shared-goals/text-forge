@@ -4,6 +4,7 @@ Command-line interface for text-forge.
 Provides commands for building EPUB, combining markdown, and other tasks.
 """
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,7 +15,6 @@ import click
 @click.version_option()
 def main():
     """text-forge - MkDocs plugin and build tools for text projects."""
-    pass
 
 
 @main.command()
@@ -45,9 +45,11 @@ def epub(config, build_dir):
         epub_filename = plugin_config.get("epub_filename", "text_book.epub")
         combined_filename = plugin_config.get("combined_filename", "text_combined.md")
 
-        epub_file = build_epub_pipeline(config, build_dir, epub_filename, combined_filename)
+        epub_file = build_epub_pipeline(
+            config, build_dir, epub_filename, combined_filename
+        )
         click.echo(f"\n✓ Success! EPUB: {epub_file}")
-    except Exception as e:
+    except (FileNotFoundError, OSError, ValueError, subprocess.CalledProcessError) as e:
         click.echo(f"\n✗ Failed: {e}", err=True)
         sys.exit(1)
 
@@ -120,7 +122,7 @@ def build(
             create_404_redirect=create_404_redirect,
         )
         click.echo("\n✓ Success! Full build complete.")
-    except Exception as e:
+    except (FileNotFoundError, OSError, ValueError, subprocess.CalledProcessError) as e:
         click.echo(f"\n✗ Failed: {e}", err=True)
         sys.exit(1)
 
@@ -140,7 +142,6 @@ def info():
 @main.group()
 def obsidian():
     """Obsidian vault setup commands."""
-    pass
 
 
 @obsidian.command("install")
@@ -173,8 +174,10 @@ def obsidian_install(vault):
 
     # Plugin (always overwrite — ensures latest version)
     click.echo("==> Installing text-forge plugin...")
-    _copy("plugins/text-forge/main.js",      ".obsidian/plugins/text-forge/main.js")
-    _copy("plugins/text-forge/manifest.json", ".obsidian/plugins/text-forge/manifest.json")
+    _copy("plugins/text-forge/main.js", ".obsidian/plugins/text-forge/main.js")
+    _copy(
+        "plugins/text-forge/manifest.json", ".obsidian/plugins/text-forge/manifest.json"
+    )
 
     # community-plugins.json — register text-forge
     plugins_file = vault / ".obsidian" / "community-plugins.json"
@@ -188,7 +191,11 @@ def obsidian_install(vault):
             click.echo("  skip  text-forge already in .obsidian/community-plugins.json")
 
     # Templater settings (skip if already configured)
-    _copy("templater.json", ".obsidian/plugins/templater-obsidian/data.json", skip_if_exists=True)
+    _copy(
+        "templater.json",
+        ".obsidian/plugins/templater-obsidian/data.json",
+        skip_if_exists=True,
+    )
 
     # Templater scripts + templates (skip if already present — user may have customised them)
     click.echo("==> Installing Templater scripts and templates...")
@@ -205,7 +212,9 @@ def obsidian_install(vault):
         added = [k for k in src_hotkeys if k not in dst_hotkeys]
         dst_hotkeys.update({k: src_hotkeys[k] for k in added})
         hotkeys_file.write_text(json.dumps(dst_hotkeys, indent=2, ensure_ascii=False))
-        click.echo(f"  hotkeys merged: {', '.join(added) if added else '(all present)'}")
+        click.echo(
+            f"  hotkeys merged: {', '.join(added) if added else '(all present)'}"
+        )
     else:
         hotkeys_file.parent.mkdir(parents=True, exist_ok=True)
         hotkeys_file.write_text(json.dumps(src_hotkeys, indent=2, ensure_ascii=False))

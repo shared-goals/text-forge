@@ -14,7 +14,6 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
 
 
 def find_translation_keys_in_files(
@@ -22,7 +21,7 @@ def find_translation_keys_in_files(
     html_glob: str = "**/*.html",
     js_glob: str = "**/*.js",
     key_pattern: str = r"\w+",
-) -> Set[str]:
+) -> set[str]:
     """Find all translation keys used in HTML and JS files."""
     keys = set()
 
@@ -47,7 +46,7 @@ def find_translation_keys_in_files(
 
 def find_hardcoded_strings(
     base_path: Path, html_glob: str = "**/*.html"
-) -> List[Tuple[Path, int, str, str]]:
+) -> list[tuple[Path, int, str, str]]:
     """
     Find hardcoded strings that should use i18n.
 
@@ -88,11 +87,11 @@ def generate_translation_key(text: str, prefix: str = "") -> str:
 
 
 def auto_fix_hardcoded_strings(
-    findings: List[Tuple[Path, int, str, str]],
-    translations: Dict[str, str],
+    findings: list[tuple[Path, int, str, str]],
+    translations: dict[str, str],
     prefix: str = "auto",
     dry_run: bool = False,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Auto-fix hardcoded strings by:
     1. Generating translation keys
@@ -146,7 +145,7 @@ def auto_fix_hardcoded_strings(
 
 def check_translations(
     filepath: str,
-    base_path: Path = None,
+    base_path: Path | None = None,
     html_glob: str = "**/*.html",
     js_glob: str = "**/*.js",
     key_pattern: str = r"\w+",
@@ -168,7 +167,7 @@ def check_translations(
     except json.JSONDecodeError as e:
         print(f"❌ Invalid JSON: {e}")
         return False
-    except Exception as e:
+    except OSError as e:
         print(f"❌ Error reading file: {e}")
         return False
 
@@ -247,7 +246,7 @@ def check_translations(
     return True
 
 
-def check_multilang(data: Dict) -> bool:
+def check_multilang(data: dict) -> bool:
     """Check multi-language translation structure."""
     keys_per_lang = {}
     for lang, translations in data.items():
@@ -260,7 +259,7 @@ def check_multilang(data: Dict) -> bool:
         print("⚠️  No languages found")
         return True
 
-    reference_lang = list(keys_per_lang.keys())[0]
+    reference_lang = next(iter(keys_per_lang))
     reference_keys = keys_per_lang[reference_lang]
 
     all_ok = True

@@ -57,10 +57,18 @@ def section_matches(section: dict[str, Any], section_filter: str | None) -> bool
     if not section_filter:
         return True
     wanted = section_filter.removeprefix("#")
-    return wanted in {str(section.get("section_uid", "")), str(section.get("anchor", ""))}
+    return wanted in {
+        str(section.get("section_uid", "")),
+        str(section.get("anchor", "")),
+    }
 
 
-def iter_documents(inv: dict[str, Any], chapter_filter: str | None, section_filter: str | None, chunk_size: int):
+def iter_documents(
+    inv: dict[str, Any],
+    chapter_filter: str | None,
+    section_filter: str | None,
+    chunk_size: int,
+):
     wanted_chapter = chapter_filter.removesuffix(".md") if chapter_filter else None
     for chapter in inv["chapters"]:
         if wanted_chapter and chapter["chapter"] != wanted_chapter:
@@ -77,11 +85,21 @@ def doc_chapter(chapter: dict[str, Any]) -> str:
     return chapter["chapter"].replace("/", "-")
 
 
-def document_id(chapter: dict[str, Any], section: dict[str, Any], chunk_idx: int) -> str:
-    return f"wtd-current-{doc_chapter(chapter)}-{section['section_uid']}-{chunk_idx:03d}"
+def document_id(
+    chapter: dict[str, Any], section: dict[str, Any], chunk_idx: int
+) -> str:
+    return (
+        f"wtd-current-{doc_chapter(chapter)}-{section['section_uid']}-{chunk_idx:03d}"
+    )
 
 
-def metadata(inv: dict[str, Any], chapter: dict[str, Any], section: dict[str, Any], chunk_idx: int, chunk_count: int) -> dict[str, str]:
+def metadata(
+    inv: dict[str, Any],
+    chapter: dict[str, Any],
+    section: dict[str, Any],
+    chunk_idx: int,
+    chunk_count: int,
+) -> dict[str, str]:
     section_changed = str(section.get("changed") or "")
     chapter_changed = str(chapter.get("changed") or "")
     data: dict[str, str] = {
@@ -132,7 +150,11 @@ def context(chapter: dict[str, Any], section: dict[str, Any]) -> str:
     chapter_slug = str(chapter.get("chapter") or "")
     section_heading = str(section.get("heading") or "")
     section_uid = str(section.get("section_uid") or "")
-    chapter_label = "Published" if str(chapter.get("status") or "").lower() == "published" else "Draft"
+    chapter_label = (
+        "Published"
+        if str(chapter.get("status") or "").lower() == "published"
+        else "Draft"
+    )
     return (
         "WTD roots corpus source text is authored by User.\n"
         "Assistant/Hermes role is reader and reflector of this text, not the source author.\n"
@@ -169,12 +191,33 @@ def build_item(
     return item
 
 
-def retain_batch(api_url: str, bank: str, items: list[dict[str, Any]], timeout: int, retain_async: bool) -> None:
-    request_json(api_url, "POST", f"/v1/default/banks/{bank}/memories", {"items": items, "async": retain_async}, timeout=timeout)
+def retain_batch(
+    api_url: str,
+    bank: str,
+    items: list[dict[str, Any]],
+    timeout: int,
+    retain_async: bool,
+) -> None:
+    request_json(
+        api_url,
+        "POST",
+        f"/v1/default/banks/{bank}/memories",
+        {"items": items, "async": retain_async},
+        timeout=timeout,
+    )
 
 
 def is_retryable(exc: BaseException) -> bool:
-    return isinstance(exc, (socket.timeout, TimeoutError, ConnectionResetError, http.client.RemoteDisconnected, urllib.error.URLError))
+    return isinstance(
+        exc,
+        (
+            socket.timeout,
+            TimeoutError,
+            ConnectionResetError,
+            http.client.RemoteDisconnected,
+            urllib.error.URLError,
+        ),
+    )
 
 
 def retain_with_retry(*, retries: int, retry_delay: float, **kwargs) -> None:
@@ -186,14 +229,24 @@ def retain_with_retry(*, retries: int, retry_delay: float, **kwargs) -> None:
             if not is_retryable(e) or attempt == retries + 1:
                 raise
             wait = retry_delay * (2 ** (attempt - 1))
-            print(f"RETRYABLE ERROR ({type(e).__name__}: {e}); retry {attempt}/{retries} after {wait:.0f}s...", flush=True)
+            print(
+                f"RETRYABLE ERROR ({type(e).__name__}: {e}); retry {attempt}/{retries} after {wait:.0f}s...",
+                flush=True,
+            )
             time.sleep(wait)
 
 
-def validate_documents(inv: dict[str, Any], chapter_filter: str | None, section_filter: str | None, chunk_size: int) -> list[str]:
+def validate_documents(
+    inv: dict[str, Any],
+    chapter_filter: str | None,
+    section_filter: str | None,
+    chunk_size: int,
+) -> list[str]:
     errors: list[str] = []
     seen_doc: set[str] = set()
-    for chapter, section, chunk_idx, _chunk_count, _chunk in iter_documents(inv, chapter_filter, section_filter, chunk_size):
+    for chapter, section, chunk_idx, _chunk_count, _chunk in iter_documents(
+        inv, chapter_filter, section_filter, chunk_size
+    ):
         did = document_id(chapter, section, chunk_idx)
         if did in seen_doc:
             errors.append(f"duplicate document_id: {did}")
@@ -201,26 +254,40 @@ def validate_documents(inv: dict[str, Any], chapter_filter: str | None, section_
     return errors
 
 
-def preview(inv: dict[str, Any], chapter_filter: str | None, section_filter: str | None, chunk_size: int, limit: int | None) -> None:
+def preview(
+    inv: dict[str, Any],
+    chapter_filter: str | None,
+    section_filter: str | None,
+    chunk_size: int,
+    limit: int | None,
+) -> None:
     docs = list(iter_documents(inv, chapter_filter, section_filter, chunk_size))
     shown = docs if limit is None else docs[:limit]
     total_chars = 0
     for chapter, section, chunk_idx, chunk_count, chunk in shown:
         total_chars += len(chunk)
         doc_meta = metadata(inv, chapter, section, chunk_idx, chunk_count)
-        print(f"- {chapter['chapter']}#{section['section_uid']} ({chapter['status']}) chunk {chunk_idx + 1}/{chunk_count}: {len(chunk):,} chars")
+        print(
+            f"- {chapter['chapter']}#{section['section_uid']} ({chapter['status']}) chunk {chunk_idx + 1}/{chunk_count}: {len(chunk):,} chars"
+        )
         print(f"  heading: {section['heading']}")
         print(f"  document_id: {document_id(chapter, section, chunk_idx)}")
         print(f"  url: {doc_meta.get('url') or '-'}")
         print(f"  chapter_created: {doc_meta.get('chapter_created') or '-'}")
         print(f"  chapter_published: {doc_meta.get('chapter_published') or '-'}")
-        print(f"  changed_at: {doc_meta.get('changed_at') or doc_meta.get('chapter_changed') or '-'}")
+        print(
+            f"  changed_at: {doc_meta.get('changed_at') or doc_meta.get('chapter_changed') or '-'}"
+        )
         print(f"  text_author: {doc_meta.get('text_author') or '-'}")
         print(f"  tags: {', '.join(tags(chapter, section))}")
     print(f"\nTOTAL selected preview: {len(shown)} chunks, {total_chars:,} chars")
 
 
-def ingest(inv: dict[str, Any], selected: list[tuple[dict[str, Any], dict[str, Any], int, int, str]], args: argparse.Namespace) -> int:
+def ingest(
+    inv: dict[str, Any],
+    selected: list[tuple[dict[str, Any], dict[str, Any], int, int, str]],
+    args: argparse.Namespace,
+) -> int:
     if not selected:
         return 0
     sent = 0
@@ -237,7 +304,9 @@ def ingest(inv: dict[str, Any], selected: list[tuple[dict[str, Any], dict[str, A
                     content=chunk,
                     context_text=context(chapter, section),
                     document_id_value=did,
-                    metadata_value=metadata(inv, chapter, section, chunk_idx, chunk_count),
+                    metadata_value=metadata(
+                        inv, chapter, section, chunk_idx, chunk_count
+                    ),
                     tags_value=tags(chapter, section),
                     strategy=args.strategy,
                     observation_scopes=args.observation_scopes,
@@ -270,27 +339,71 @@ def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True, write_through=True)
 
-    parser = argparse.ArgumentParser(description="Ingest text-forge inventory JSON into Hindsight")
-    parser.add_argument("--inventory", default="-", help="Inventory JSON path, or '-' for stdin")
-    parser.add_argument("--api-url", required=True, help="Hindsight API URL, e.g. http://localhost:8889")
+    parser = argparse.ArgumentParser(
+        description="Ingest text-forge inventory JSON into Hindsight"
+    )
+    parser.add_argument(
+        "--inventory", default="-", help="Inventory JSON path, or '-' for stdin"
+    )
+    parser.add_argument(
+        "--api-url", required=True, help="Hindsight API URL, e.g. http://localhost:8889"
+    )
     parser.add_argument("--bank", required=True, help="Hindsight bank id")
-    parser.add_argument("--strategy", default=None, help="Named Hindsight retain strategy")
-    parser.add_argument("--observation-scopes", default="combined", choices=["per_tag", "combined", "all_combinations"], help="Hindsight observation_scopes value")
-    parser.add_argument("--chapter", help="Ingest only one chapter slug, e.g. p2-200-text")
-    parser.add_argument("--section", help="Ingest only one section_uid or anchor, e.g. digital_format_freedom")
-    parser.add_argument("--limit", type=int, default=None, help="Limit number of chunks")
+    parser.add_argument(
+        "--strategy", default=None, help="Named Hindsight retain strategy"
+    )
+    parser.add_argument(
+        "--observation-scopes",
+        default="combined",
+        choices=["per_tag", "combined", "all_combinations"],
+        help="Hindsight observation_scopes value",
+    )
+    parser.add_argument(
+        "--chapter", help="Ingest only one chapter slug, e.g. p2-200-text"
+    )
+    parser.add_argument(
+        "--section",
+        help="Ingest only one section_uid or anchor, e.g. digital_format_freedom",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Limit number of chunks"
+    )
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
-    parser.add_argument("--dry-run", action="store_true", help="Preview only; default unless --yes is passed")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview only; default unless --yes is passed",
+    )
     parser.add_argument("--yes", action="store_true", help="Actually retain memories")
     parser.add_argument("--retain-timeout", type=int, default=600)
-    parser.add_argument("--retain-async", dest="retain_async", action="store_true", default=True, help="Submit retain batches asynchronously (default)")
-    parser.add_argument("--retain-sync", dest="retain_async", action="store_false", help="Wait for retain processing before returning")
+    parser.add_argument(
+        "--retain-async",
+        dest="retain_async",
+        action="store_true",
+        default=True,
+        help="Submit retain batches asynchronously (default)",
+    )
+    parser.add_argument(
+        "--retain-sync",
+        dest="retain_async",
+        action="store_false",
+        help="Wait for retain processing before returning",
+    )
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-delay", type=float, default=30.0)
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY)
-    parser.add_argument("--batch-size", type=int, default=25, help="Items per retain request")
-    parser.add_argument("--update-mode", choices=["replace", "append"], default="replace", help="Document update policy for existing document_id")
-    parser.add_argument("--delta", action="store_true", help="Alias for --update-mode append")
+    parser.add_argument(
+        "--batch-size", type=int, default=25, help="Items per retain request"
+    )
+    parser.add_argument(
+        "--update-mode",
+        choices=["replace", "append"],
+        default="replace",
+        help="Document update policy for existing document_id",
+    )
+    parser.add_argument(
+        "--delta", action="store_true", help="Alias for --update-mode append"
+    )
     args = parser.parse_args()
 
     if args.delta:
@@ -312,7 +425,9 @@ def main() -> int:
     draft = sum(1 for ch in inv["chapters"] if ch["status"] == "draft")
     print(f"Inventory commit: {inv.get('commit')}")
     print(f"Inventory commit_date: {inv.get('commit_date')}")
-    print(f"Chapters: {len(inv['chapters'])} ({published} published, {draft} draft), chunks selected: {len(docs)}")
+    print(
+        f"Chapters: {len(inv['chapters'])} ({published} published, {draft} draft), chunks selected: {len(docs)}"
+    )
     print(f"API: {args.api_url}, bank: {args.bank}")
     print(f"Retain strategy: {args.strategy or '(bank default)'}")
     print(f"Retain mode: {'async' if args.retain_async else 'sync'}")

@@ -376,9 +376,8 @@ make test
 Useful commands:
 
 ```bash
-make format      # Format code with ruff
-make lint        # Run linters
-make test        # Run tests with pytest
+make format      # Run Ruff check --fix and Ruff format
+make test        # Run i18n check and tests with pytest
 make check-i18n  # Validate translation keys
 make release     # Interactive release: bump version, tag, push
 ```

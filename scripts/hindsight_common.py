@@ -33,7 +33,9 @@ def request_json(
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(f"{api_url.rstrip('/')}{path}", data=data, headers=headers, method=method)
+    req = urllib.request.Request(
+        f"{api_url.rstrip('/')}{path}", data=data, headers=headers, method=method
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")

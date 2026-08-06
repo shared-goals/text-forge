@@ -12,17 +12,16 @@ UV := uv --project $(TEXT_FORGE_DIR)
 UV_RUN := $(UV) run
 PYTHON := $(UV_RUN) python
 
-.PHONY: help install format lint check-i18n test clean info release
+.PHONY: help install format check-i18n test clean info release
 
 help:
 	@echo "text-forge - Development Tools"
 	@echo ""
 	@echo "Targets:"
 	@echo "  make install       Sync Python dependencies (uv sync)"
-	@echo "  make format        Format Python code with ruff"
-	@echo "  make lint          Run lint checks via ruff"
+	@echo "  make format        Run Ruff check --fix and Ruff format"
 	@echo "  make check-i18n    Check translation files for consistency"
-	@echo "  make test          Run validation tests (uses whattodo as fixture)"
+	@echo "  make test          Run i18n check and validation tests (uses whattodo as fixture)"
 	@echo "  make clean         Remove build artifacts from whattodo"
 	@echo "  make info          Show project paths"
 	@echo "  make release       Tag and push release (triggers PyPI publish via CI/CD)"
@@ -35,15 +34,10 @@ install:
 	@echo "✓ Dependencies installed"
 
 format:
-	@echo "==> Formatting Python code with ruff..."
-	@$(UV_RUN) ruff check --select I --fix $(TEXT_FORGE_DIR)
+	@echo "==> Running Ruff fix and format..."
+	@$(UV_RUN) ruff check --fix $(TEXT_FORGE_DIR)
 	@$(UV_RUN) ruff format $(TEXT_FORGE_DIR)
 	@echo "✓ Code formatted"
-
-lint:
-	@echo "==> Running lint checks..."
-	@$(UV_RUN) ruff check $(TEXT_FORGE_DIR)
-	@echo "✓ Lint checks complete"
 
 check-i18n:
 	@echo "==> Checking i18n translation files..."
@@ -56,6 +50,7 @@ check-i18n:
 
 test:
 	@echo "==> Running unit tests with minimal fixtures..."
+	@$(MAKE) check-i18n
 	@$(PYTHON) -m pytest tests/test_pipeline.py -v
 	@echo "✓ Tests passed"
 

@@ -20,12 +20,22 @@ DEFAULT_BANK_ID = "hermes"
 DEFAULT_DELAY = 0.1
 
 
-def list_documents(api_url: str, bank_id: str, limit: int, offset: int) -> dict[str, Any]:
+def list_documents(
+    api_url: str, bank_id: str, limit: int, offset: int
+) -> dict[str, Any]:
     qs = urllib.parse.urlencode({"limit": str(limit), "offset": str(offset)})
-    return request_json(api_url, "GET", f"/v1/default/banks/{bank_id}/documents?{qs}", timeout=120)
+    return request_json(
+        api_url, "GET", f"/v1/default/banks/{bank_id}/documents?{qs}", timeout=120
+    )
 
 
-def matching_documents(api_url: str, bank_id: str, required_tags: set[str], page_size: int, max_docs: int | None) -> list[dict[str, Any]]:
+def matching_documents(
+    api_url: str,
+    bank_id: str,
+    required_tags: set[str],
+    page_size: int,
+    max_docs: int | None,
+) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     offset = 0
     while True:
@@ -48,31 +58,53 @@ def matching_documents(api_url: str, bank_id: str, required_tags: set[str], page
 
 def delete_document(api_url: str, bank_id: str, document_id: str) -> dict[str, Any]:
     quoted = quote_path_part(document_id)
-    return request_json(api_url, "DELETE", f"/v1/default/banks/{bank_id}/documents/{quoted}", timeout=120)
+    return request_json(
+        api_url,
+        "DELETE",
+        f"/v1/default/banks/{bank_id}/documents/{quoted}",
+        timeout=120,
+    )
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Delete Hindsight documents matching all requested tags")
+    parser = argparse.ArgumentParser(
+        description="Delete Hindsight documents matching all requested tags"
+    )
     parser.add_argument("--api-url", default=DEFAULT_API_URL, help="Hindsight API URL")
     parser.add_argument("--bank", default=DEFAULT_BANK_ID, help="Hindsight bank id")
-    parser.add_argument("--tag", action="append", required=True, help="Required tag; repeat for AND semantics")
-    parser.add_argument("--yes", action="store_true", help="Actually delete matching documents")
+    parser.add_argument(
+        "--tag",
+        action="append",
+        required=True,
+        help="Required tag; repeat for AND semantics",
+    )
+    parser.add_argument(
+        "--yes", action="store_true", help="Actually delete matching documents"
+    )
     parser.add_argument("--page-size", type=int, default=100)
-    parser.add_argument("--limit", type=int, default=None, help="Maximum matching docs to process")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Maximum matching docs to process"
+    )
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY)
-    parser.add_argument("--show", type=int, default=50, help="How many matching document IDs to print")
+    parser.add_argument(
+        "--show", type=int, default=50, help="How many matching document IDs to print"
+    )
     args = parser.parse_args()
 
     ensure_no_proxy()
     required_tags = set(args.tag)
     print(f"API: {args.api_url}, bank: {args.bank}")
     print(f"Required tags: {', '.join(sorted(required_tags))}")
-    docs = matching_documents(args.api_url, args.bank, required_tags, args.page_size, args.limit)
+    docs = matching_documents(
+        args.api_url, args.bank, required_tags, args.page_size, args.limit
+    )
     total_units = sum(int(doc.get("memory_unit_count") or 0) for doc in docs)
     print(f"Matching documents: {len(docs)}")
     print(f"Memory units in matching docs: {total_units}")
     for doc in docs[: args.show]:
-        print(f"- {doc.get('id')} units={doc.get('memory_unit_count')} tags={','.join(doc.get('tags') or [])}")
+        print(
+            f"- {doc.get('id')} units={doc.get('memory_unit_count')} tags={','.join(doc.get('tags') or [])}"
+        )
     if len(docs) > args.show:
         print(f"... {len(docs) - args.show} more")
 
