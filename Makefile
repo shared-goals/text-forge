@@ -69,11 +69,6 @@ info:
 
 release:
 	@echo "==> Creating release..."
-	@if ! git diff --quiet --ignore-submodules=all || ! git diff --cached --quiet --ignore-submodules=all; then \
-		echo "Error: You have uncommitted changes. Please commit or stash them before releasing:"; \
-		git status --short --ignore-submodules=all; \
-		exit 1; \
-	fi
 	@CURRENT=$$(grep '^version = ' pyproject.toml | cut -d'"' -f2); \
 	if [ -z "$$CURRENT" ]; then \
 		echo "Error: Could not extract version from pyproject.toml"; \
@@ -91,15 +86,13 @@ release:
 		*) echo "Error: Invalid bump type. Use patch, minor, or major"; exit 1 ;; \
 	esac; \
 	echo "New version: $$NEW"; \
-	echo "Update pyproject.toml and create release? [y/N]"; \
-	read CONFIRM; \
-	if [ "$$CONFIRM" != "y" ] && [ "$$CONFIRM" != "Y" ]; then \
-		echo "Cancelled"; \
-		exit 1; \
-	fi; \
 	sed -i.bak "s/^version = \"$$CURRENT\"/version = \"$$NEW\"/" pyproject.toml && rm pyproject.toml.bak; \
-	git add pyproject.toml; \
-	git commit -m "chore: bump version to $$NEW"; \
+	$(UV) lock; \
+	echo "Commit message (default: chore: bump version to v$$NEW). Press Ctrl+C to cancel."; \
+	read -r COMMIT_MESSAGE; \
+	COMMIT_MESSAGE=$${COMMIT_MESSAGE:-chore: bump version to v$$NEW}; \
+	git add -A; \
+	git commit -m "$$COMMIT_MESSAGE"; \
 	git tag -a "v$$NEW" -m "Release v$$NEW"; \
 	git push origin main "v$$NEW"; \
 	echo "✓ Released v$$NEW (CI/CD will publish to PyPI)"; \
