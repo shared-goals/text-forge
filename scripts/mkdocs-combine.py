@@ -197,11 +197,9 @@ def format_git_date(date_str: str) -> str:
     try:
         from datetime import datetime
 
-        dt = datetime.strptime(date_str, "%Y-%m-%d").replace(
-            tzinfo=datetime.timezone.utc
-        )
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
         return dt.strftime("%d.%m.%Y")
-    except ValueError:
+    except (TypeError, ValueError):
         return ""
 
 
