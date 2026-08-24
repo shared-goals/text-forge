@@ -10,6 +10,9 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+# Tags every WTD roots ingestion writes; used to locate previously ingested docs.
+WTD_BASE_TAGS = ("wtd", "roots", "current")
+
 
 def ensure_no_proxy() -> None:
     """Avoid proxy ambiguity when targeting local/LAN Hindsight services."""
@@ -45,3 +48,33 @@ def request_json(
     if not body:
         return {}
     return json.loads(body)
+
+
+def latest_document(
+    api_url: str,
+    bank_id: str,
+    tags: tuple[str, ...] = WTD_BASE_TAGS,
+    page_size: int = 100,
+) -> dict[str, Any] | None:
+    """Return the most recently updated document carrying all given tags."""
+    newest: dict[str, Any] | None = None
+    offset = 0
+    while True:
+        query = [("limit", str(page_size)), ("offset", str(offset))]
+        query.extend(("tags", tag) for tag in tags)
+        page = request_json(
+            api_url,
+            "GET",
+            f"/v1/default/banks/{bank_id}/documents?{urllib.parse.urlencode(query)}",
+        )
+        items = page.get("items") or []
+        if not items:
+            return newest
+        for item in items:
+            if newest is None or str(item.get("updated_at", "")) > str(
+                newest.get("updated_at", "")
+            ):
+                newest = item
+        offset += len(items)
+        if offset >= int(page.get("total", 0)):
+            return newest

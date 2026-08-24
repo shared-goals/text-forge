@@ -22,7 +22,7 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
-from hindsight_common import ensure_no_proxy, request_json
+from hindsight_common import WTD_BASE_TAGS, ensure_no_proxy, request_json
 
 DEFAULT_CHUNK_SIZE = 8000
 DEFAULT_DELAY = 0.5
@@ -132,9 +132,7 @@ def metadata(
 
 def tags(chapter: dict[str, Any], section: dict[str, Any]) -> list[str]:
     out = [
-        "wtd",
-        "roots",
-        "current",
+        *WTD_BASE_TAGS,
         str(chapter["status"]),
         f"chapter:{doc_chapter(chapter)}",
         f"section:{section['section_uid']}",
@@ -314,12 +312,13 @@ def ingest(
                 )
             )
 
-        print(
-            f"\n[batch {batch_index + 1}/{total_batches}] retain {len(items)} items "
-            f"(chunks {start + 1}-{end}/{len(selected)})...",
-            end=" ",
-            flush=True,
-        )
+        if not args.brief:
+            print(
+                f"\n[batch {batch_index + 1}/{total_batches}] retain {len(items)} items "
+                f"(chunks {start + 1}-{end}/{len(selected)})...",
+                end=" ",
+                flush=True,
+            )
         retain_with_retry(
             api_url=args.api_url,
             bank=args.bank,
@@ -330,7 +329,8 @@ def ingest(
             retry_delay=args.retry_delay,
         )
         sent += len(items)
-        print("OK")
+        if not args.brief:
+            print("OK")
         time.sleep(args.delay)
     return sent
 
@@ -351,6 +351,11 @@ def main() -> int:
     parser.add_argument("--bank", required=True, help="Hindsight bank id")
     parser.add_argument(
         "--strategy", default=None, help="Named Hindsight retain strategy"
+    )
+    parser.add_argument(
+        "--brief",
+        action="store_true",
+        help="Print one summary line for this scope instead of full report",
     )
     parser.add_argument(
         "--observation-scopes",
@@ -421,6 +426,19 @@ def main() -> int:
 
     docs = list(iter_documents(inv, args.chapter, args.section, args.chunk_size))
     selected = docs if args.limit is None else docs[: args.limit]
+
+    if args.brief:
+        scope = args.chapter or "all"
+        if args.section:
+            scope = f"{scope}#{args.section}"
+        chars = sum(len(chunk) for *_, chunk in selected)
+        if not args.yes:
+            print(f"- {scope}: {len(selected)} chunks, {chars:,} chars")
+            return 0
+        sent = ingest(inv, selected, args)
+        print(f"- {scope}: {sent} chunks sent, {chars:,} chars")
+        return 0
+
     published = sum(1 for ch in inv["chapters"] if ch["status"] == "published")
     draft = sum(1 for ch in inv["chapters"] if ch["status"] == "draft")
     print(f"Inventory commit: {inv.get('commit')}")

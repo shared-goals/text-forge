@@ -21,7 +21,7 @@ import subprocess
 import sys
 import tempfile
 
-from hindsight_common import ensure_no_proxy
+from hindsight_common import WTD_BASE_TAGS, ensure_no_proxy, latest_document
 from wtd_sections_common import anchored_headings
 
 DEFAULT_TEXT_FORGE = pathlib.Path(__file__).resolve().parents[1]
@@ -39,6 +39,32 @@ def chapter_from_text_path(path: str) -> str | None:
     if not path.startswith("text/") or not path.endswith(".md"):
         return None
     return pathlib.Path(path).stem
+
+
+def print_last_ingest(api_url: str, bank: str) -> None:
+    try:
+        doc = latest_document(api_url, bank, WTD_BASE_TAGS)
+    except (RuntimeError, OSError) as exc:
+        print(f"Last ingest: unavailable ({exc})")
+        return
+    if not doc:
+        print(f"Last ingest: no documents tagged {'+'.join(WTD_BASE_TAGS)}")
+        return
+    meta = doc.get("document_metadata") or {}
+    print(
+        "Last ingest: "
+        f"updated_at={doc.get('updated_at', 'unknown')} "
+        f"commit={meta.get('commit', 'unknown')} "
+        f"document={doc.get('id', 'unknown')}"
+    )
+    for label, key in (
+        ("chapter", "chapter"),
+        ("section", "section_uid"),
+        ("status", "status"),
+        ("changed_at", "changed_at"),
+    ):
+        if meta.get(key):
+            print(f"  {label}: {meta[key]}")
 
 
 def changed_line_ranges(
@@ -151,19 +177,27 @@ def build_diff_plan(
 def resolve_diff_range(
     repo_root: pathlib.Path,
     from_commit: str | None,
+    since_commit: str | None = None,
+    after_commit: str | None = None,
 ) -> tuple[str, str] | None:
-    if from_commit:
-        commit = subprocess.check_output(
-            ["git", "-C", str(repo_root), "rev-parse", f"{from_commit}^{{commit}}"],
-            text=True,
+    def rev_parse(rev: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(repo_root), "rev-parse", rev], text=True
         ).strip()
+
+    def parent_of(commit: str) -> str:
         try:
-            parent = subprocess.check_output(
-                ["git", "-C", str(repo_root), "rev-parse", f"{commit}^"], text=True
-            ).strip()
+            return rev_parse(f"{commit}^")
         except subprocess.CalledProcessError:
-            parent = commit
-        return parent, commit
+            return commit
+
+    if after_commit:
+        return rev_parse(f"{after_commit}^{{commit}}"), rev_parse("HEAD")
+    if since_commit:
+        return parent_of(rev_parse(f"{since_commit}^{{commit}}")), rev_parse("HEAD")
+    if from_commit:
+        commit = rev_parse(f"{from_commit}^{{commit}}")
+        return parent_of(commit), commit
     return None
 
 
@@ -195,12 +229,19 @@ def python_runner_for_text_forge(text_forge: pathlib.Path) -> tuple[list[str], s
     return [sys.executable], "system_python"
 
 
-def run(cmd: list[str], *, cwd: pathlib.Path | None = None, stdout=None) -> None:
-    printable = " ".join(cmd)
-    if cwd:
-        print(f"$ (cd {cwd} && {printable})")
-    else:
-        print(f"$ {printable}")
+def run(
+    cmd: list[str],
+    *,
+    cwd: pathlib.Path | None = None,
+    stdout=None,
+    quiet: bool = False,
+) -> None:
+    if not quiet:
+        printable = " ".join(cmd)
+        if cwd:
+            print(f"$ (cd {cwd} && {printable})")
+        else:
+            print(f"$ {printable}")
     env = os.environ.copy()
     env.pop("VIRTUAL_ENV", None)
     subprocess.run(cmd, cwd=cwd, check=True, stdout=stdout, env=env)
@@ -233,6 +274,14 @@ def main() -> int:
         help="Commit SHA to ingest only changed sections from its parent..commit range",
     )
     parser.add_argument(
+        "--since-commit",
+        help="Commit SHA to ingest changed sections from that commit through HEAD",
+    )
+    parser.add_argument(
+        "--after-commit",
+        help="Commit SHA to ingest changed sections after that commit through HEAD",
+    )
+    parser.add_argument(
         "--plan-only",
         action="store_true",
         help="Only print computed section/chapter plan",
@@ -263,6 +312,11 @@ def main() -> int:
     parser.add_argument(
         "--delta", action="store_true", help="Alias for --update-mode append"
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Process the whole corpus (rare full reingest)",
+    )
     args = parser.parse_args()
 
     ensure_no_proxy()
@@ -283,15 +337,37 @@ def main() -> int:
     include_drafts = not args.no_drafts
     py_cmd, runtime_mode = python_runner_for_text_forge(text_forge)
     print(f"Runtime mode: {runtime_mode}")
+    print_last_ingest(args.api_url, args.bank)
 
     if args.section and not args.chapter:
         print("ERROR: --section requires --chapter", file=sys.stderr)
         return 1
 
-    diff_range = resolve_diff_range(wtd_root, args.from_commit)
+    commit_scopes = [
+        name
+        for name, value in (
+            ("--from-commit", args.from_commit),
+            ("--since-commit", args.since_commit),
+            ("--after-commit", args.after_commit),
+        )
+        if value
+    ]
+    if len(commit_scopes) > 1:
+        print(
+            f"ERROR: use only one of {', '.join(commit_scopes)}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not (args.chapter or commit_scopes or args.all):
+        return 0
+
+    diff_range = resolve_diff_range(
+        wtd_root, args.from_commit, args.since_commit, args.after_commit
+    )
     if diff_range and (args.chapter or args.section):
         print(
-            "ERROR: --from-commit cannot be combined with --chapter/--section",
+            "ERROR: commit range cannot be combined with --chapter/--section",
             file=sys.stderr,
         )
         return 1
@@ -315,6 +391,14 @@ def main() -> int:
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
 
+    targets: list[tuple[str, str | None]] = []
+    if sections_plan or fallback_chapters:
+        targets.extend((chapter, section) for chapter, section in sections_plan)
+        targets.extend((chapter, None) for chapter in fallback_chapters)
+    elif args.chapter:
+        targets.append((args.chapter, args.section))
+    brief = len(targets) > 1
+
     inventory_base = [*py_cmd, str(inventory_script), "--config", str(config)]
     if include_drafts:
         inventory_base.append("--include-drafts")
@@ -328,7 +412,12 @@ def main() -> int:
 
     try:
         with inventory_path.open("w", encoding="utf-8") as out:
-            run(inventory_base + ["--format", "json"], cwd=text_forge, stdout=out)
+            run(
+                inventory_base + ["--format", "json"],
+                cwd=text_forge,
+                stdout=out,
+                quiet=brief,
+            )
 
         base_ingest_cmd = [
             *py_cmd,
@@ -353,21 +442,25 @@ def main() -> int:
         if args.delta:
             base_ingest_cmd.append("--delta")
 
-        targets: list[tuple[str, str | None]] = []
-        if sections_plan or fallback_chapters:
-            targets.extend((chapter, section) for chapter, section in sections_plan)
-            targets.extend((chapter, None) for chapter in fallback_chapters)
-        elif args.chapter:
-            targets.append((args.chapter, args.section))
-
         if not targets:
             run(base_ingest_cmd, cwd=text_forge)
         else:
+            if brief:
+                inv = json.loads(inventory_path.read_text(encoding="utf-8"))
+                print(
+                    f"\nInventory commit: {inv.get('commit')} ({inv.get('commit_date')})"
+                )
+                print(f"API: {args.api_url}, bank: {args.bank}")
+                print(f"Mode: {'live ingest' if args.yes else 'preview'}")
+                print(f"\nTargets ({len(targets)}):")
+                base_ingest_cmd.append("--brief")
             for chapter, section in targets:
                 ingest_cmd = [*base_ingest_cmd, "--chapter", chapter]
                 if section:
                     ingest_cmd.extend(["--section", section])
-                run(ingest_cmd, cwd=text_forge)
+                run(ingest_cmd, cwd=text_forge, quiet=brief)
+            if brief and not args.yes:
+                print("\nNo writes performed. Pass --yes to ingest.")
     finally:
         try:
             inventory_path.unlink()
