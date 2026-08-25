@@ -4,6 +4,18 @@ Text Forge is a toolkit for working with long-form Markdown as a living text: a 
 
 It grew out of the `whattodo` / WTD approach — **Жизнь как Текст** (“Life as Text”): important thinking should remain plain, readable, public, versioned, and useful to both humans and agents. Markdown stays the roots. Everything else is a projection.
 
+## Shared Goals Repository Map
+
+Read the repositories in this order when you need the whole system context:
+
+1. [shared-goals/prd](https://github.com/shared-goals/prd) — product decisions, acceptance criteria, implementation contract, history, and research.
+2. [shared-goals/instance](https://github.com/shared-goals/instance) — platform API, persistence, authentication, and backend tests.
+3. [shared-goals/skill](https://github.com/shared-goals/skill) — Hermes skill set and local client connector for agents.
+4. [shared-goals/text-forge](https://github.com/shared-goals/text-forge) — Markdown tooling, Obsidian helpers, publishing, inventory, and Hindsight projection.
+5. [bongiozzo/whattodo](https://github.com/bongiozzo/whattodo) — public WTD Markdown text and laptop operator workflow.
+
+This repository owns the text tooling and projection layer. It does not own platform goals, contracts, commits, or private `Compass.md` updates. The canonical component map lives in `shared-goals/prd`.
+
 [![PyPI](https://img.shields.io/pypi/v/sg-text-forge)](https://pypi.org/project/sg-text-forge/)
 [![Python](https://img.shields.io/pypi/pyversions/sg-text-forge)](https://pypi.org/project/sg-text-forge/)
 [![License](https://img.shields.io/github/license/shared-goals/text-forge)](LICENSE)
@@ -14,7 +26,7 @@ A meaningful text is not only a page to publish. It is also:
 
 - a book to read offline;
 - a website with stable public addresses;
-- an editor for continuous work;
+- an Obsidian workspace for continuous work;
 - a corpus for search, review, and AI feedback;
 - a memory substrate for agents;
 - a future graph of sections, concepts, references, aliases, and changes.
@@ -26,7 +38,7 @@ plain Markdown + MkDocs navigation + Git history
         ↓
 Text Forge source model
         ↓
-website / EPUB / editor / AI-readable export
+website / EPUB / Obsidian helpers / AI-readable export
         ↓
 inventory → memory projections → meaning graph projections
 ```
@@ -56,7 +68,8 @@ Text Forge extends MkDocs Material with:
 - theme overrides;
 - custom partials and assets;
 - source links;
-- editor/download/header integrations;
+- download/header integrations;
+- experimental browser editor integration;
 - custom content blocks used by long-form text projects.
 
 ### Build an EPUB
@@ -69,16 +82,19 @@ The same source can become an EPUB:
 - metadata can include Git-derived dates/versioning;
 - output is compatible with normal e-readers.
 
-### Edit text in the browser
+### Edit text in Obsidian
 
-The live editor supports:
+The primary editing workflow is local Markdown editing in Obsidian. Text Forge
+ships Obsidian helpers for block insertion, internal links, image insertion,
+and repeatable vault setup through content-repo Makefile targets such as
+`make obsidian`.
 
-- browser-based Markdown editing;
-- real-time preview through Pyodide + PyMdown Extensions;
-- local save during `mkdocs serve`;
-- GitHub API commits in production;
-- split-pane interface with synchronized scrolling;
-- Russian translations.
+### Browser editor experiment
+
+The browser-based live editor is experimental and currently parked. It remains
+available as a code path for experiments, but it is not the main writing
+workflow. Prefer Obsidian for real text editing, then use Text Forge to publish,
+export, inventory, and project the text into agent memory.
 
 ### Export for AI and agents
 
@@ -151,7 +167,7 @@ Text Forge is not meant to become a monolith. It should be the reusable source-m
         │                   │                    │
 ┌───────▼────────┐  ┌───────▼────────┐  ┌────────▼─────────┐
 │ Website / EPUB │  │ Agent memory   │  │ Meaning graph    │
-│ Editor / AI md │  │ Hindsight etc. │  │ future layer     │
+│ EPUB / AI md   │  │ Hindsight etc. │  │ future layer     │
 └────────────────┘  └────────────────┘  └──────────────────┘
 ```
 
@@ -237,13 +253,17 @@ Add the plugin to `mkdocs.yml`:
 ```yaml
 plugins:
   - text-forge:
-      editor_enabled: true
+      editor_enabled: false
       nobr_emoticons_enabled: true
       downloads_enabled: false
       ai_readable_enabled: false
       epub_title: "My Book"
       epub_author: "Author Name"
 ```
+
+Keep `editor_enabled` off unless you are explicitly testing the parked browser
+editor. For day-to-day writing, use the Obsidian helper workflow from the
+content repository.
 
 Build EPUB:
 
@@ -312,7 +332,7 @@ Options:
 plugins:
   - text-forge:
       # Editor
-      editor_enabled: true
+      editor_enabled: false
       nobr_emoticons_enabled: true
 
       # Downloads and AI-readable export
