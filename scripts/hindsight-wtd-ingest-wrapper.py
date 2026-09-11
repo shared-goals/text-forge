@@ -41,11 +41,18 @@ def chapter_from_text_path(path: str) -> str | None:
     return pathlib.Path(path).stem
 
 
-def print_last_ingest(api_url: str, bank: str) -> None:
+def last_ingest_document(
+    api_url: str, bank: str
+) -> tuple[dict | None, Exception | None]:
     try:
-        doc = latest_document(api_url, bank, WTD_BASE_TAGS)
+        return latest_document(api_url, bank, WTD_BASE_TAGS), None
     except (RuntimeError, OSError) as exc:
-        print(f"Last ingest: unavailable ({exc})")
+        return None, exc
+
+
+def print_last_ingest(doc: dict | None, error: Exception | None) -> None:
+    if error is not None:
+        print(f"Last ingest: unavailable ({error})")
         return
     if not doc:
         print(f"Last ingest: no documents tagged {'+'.join(WTD_BASE_TAGS)}")
@@ -176,28 +183,28 @@ def build_diff_plan(
 
 def resolve_diff_range(
     repo_root: pathlib.Path,
-    from_commit: str | None,
-    since_commit: str | None = None,
-    after_commit: str | None = None,
+    commit: str | None,
+    since: str | None = None,
+    after: str | None = None,
 ) -> tuple[str, str] | None:
     def rev_parse(rev: str) -> str:
         return subprocess.check_output(
             ["git", "-C", str(repo_root), "rev-parse", rev], text=True
         ).strip()
 
-    def parent_of(commit: str) -> str:
+    def parent_of(rev: str) -> str:
         try:
-            return rev_parse(f"{commit}^")
+            return rev_parse(f"{rev}^")
         except subprocess.CalledProcessError:
-            return commit
+            return rev
 
-    if after_commit:
-        return rev_parse(f"{after_commit}^{{commit}}"), rev_parse("HEAD")
-    if since_commit:
-        return parent_of(rev_parse(f"{since_commit}^{{commit}}")), rev_parse("HEAD")
-    if from_commit:
-        commit = rev_parse(f"{from_commit}^{{commit}}")
-        return parent_of(commit), commit
+    if after:
+        return rev_parse(f"{after}^{{commit}}"), rev_parse("HEAD")
+    if since:
+        return parent_of(rev_parse(f"{since}^{{commit}}")), rev_parse("HEAD")
+    if commit:
+        commit_sha = rev_parse(f"{commit}^{{commit}}")
+        return parent_of(commit_sha), commit_sha
     return None
 
 
@@ -270,16 +277,16 @@ def main() -> int:
         help="Process one section_uid or anchor, e.g. digital_format_freedom",
     )
     parser.add_argument(
-        "--from-commit",
-        help="Commit SHA to ingest only changed sections from its parent..commit range",
+        "--commit",
+        help="Ingest only sections changed by this single commit (parent..commit)",
     )
     parser.add_argument(
-        "--since-commit",
-        help="Commit SHA to ingest changed sections from that commit through HEAD",
+        "--since",
+        help="Ingest sections changed from this ref (inclusive) through HEAD",
     )
     parser.add_argument(
-        "--after-commit",
-        help="Commit SHA to ingest changed sections after that commit through HEAD",
+        "--after",
+        help="Ingest sections changed after this ref (exclusive) through HEAD",
     )
     parser.add_argument(
         "--plan-only",
@@ -337,7 +344,8 @@ def main() -> int:
     include_drafts = not args.no_drafts
     py_cmd, runtime_mode = python_runner_for_text_forge(text_forge)
     print(f"Runtime mode: {runtime_mode}")
-    print_last_ingest(args.api_url, args.bank)
+    last_doc, last_err = last_ingest_document(args.api_url, args.bank)
+    print_last_ingest(last_doc, last_err)
 
     if args.section and not args.chapter:
         print("ERROR: --section requires --chapter", file=sys.stderr)
@@ -346,9 +354,9 @@ def main() -> int:
     commit_scopes = [
         name
         for name, value in (
-            ("--from-commit", args.from_commit),
-            ("--since-commit", args.since_commit),
-            ("--after-commit", args.after_commit),
+            ("--commit", args.commit),
+            ("--since", args.since),
+            ("--after", args.after),
         )
         if value
     ]
@@ -359,12 +367,37 @@ def main() -> int:
         )
         return 1
 
+    auto_scope = False
     if not (args.chapter or commit_scopes or args.all):
-        return 0
+        # Default scope: everything after the last ingested commit.
+        if last_err is not None:
+            print(
+                "ERROR: last ingest unknown; pass a scope explicitly (e.g. --after <ref>)",
+                file=sys.stderr,
+            )
+            return 1
+        last_commit = ((last_doc or {}).get("document_metadata") or {}).get("commit")
+        if not last_commit:
+            print(
+                "ERROR: no previous ingest found; run with --all for the first ingest",
+                file=sys.stderr,
+            )
+            return 1
+        args.after = str(last_commit)
+        auto_scope = True
+        print(f"Default scope: --after {args.after} (last ingested commit)")
 
-    diff_range = resolve_diff_range(
-        wtd_root, args.from_commit, args.since_commit, args.after_commit
-    )
+    diff_range = None
+    if args.commit or args.since or args.after:
+        scope_ref = args.commit or args.since or args.after
+        try:
+            diff_range = resolve_diff_range(wtd_root, args.commit, args.since, args.after)
+        except subprocess.CalledProcessError:
+            print(
+                f"ERROR: cannot resolve ref {scope_ref!r}; pass an explicit --after <ref>",
+                file=sys.stderr,
+            )
+            return 1
     if diff_range and (args.chapter or args.section):
         print(
             "ERROR: commit range cannot be combined with --chapter/--section",
@@ -389,6 +422,9 @@ def main() -> int:
         fallback_chapters = list(plan["fallback_chapters"])  # type: ignore[arg-type]
         if args.plan_only:
             print(json.dumps(plan, ensure_ascii=False, indent=2))
+            return 0
+        if not sections_plan and not fallback_chapters:
+            print(f"No changes in text/*.md for range {before[:12]}..{after[:12]}")
             return 0
 
     targets: list[tuple[str, str | None]] = []
@@ -453,14 +489,33 @@ def main() -> int:
                 print(f"API: {args.api_url}, bank: {args.bank}")
                 print(f"Mode: {'live ingest' if args.yes else 'preview'}")
                 print(f"\nTargets ({len(targets)}):")
+                for chapter, section in targets[:20]:
+                    print(f"  {chapter}" + (f" #{section}" if section else ""))
+                if len(targets) > 20:
+                    print(f"  … and {len(targets) - 20} more")
                 base_ingest_cmd.append("--brief")
             for chapter, section in targets:
                 ingest_cmd = [*base_ingest_cmd, "--chapter", chapter]
                 if section:
                     ingest_cmd.extend(["--section", section])
                 run(ingest_cmd, cwd=text_forge, quiet=brief)
-            if brief and not args.yes:
-                print("\nNo writes performed. Pass --yes to ingest.")
+        if not args.yes:
+            print("\nPreview only — no writes performed.")
+            if auto_scope:
+                hint = "make ingest"
+            elif args.chapter:
+                hint = f"make ingest CHAPTER={args.chapter}"
+                if args.section:
+                    hint += f" SECTION={args.section}"
+            elif args.commit:
+                hint = f"make ingest COMMIT={args.commit}"
+            elif args.since:
+                hint = f"make ingest SINCE={args.since}"
+            elif args.after:
+                hint = f"make ingest AFTER={args.after}"
+            else:
+                hint = "make ingest FULL=yes"
+            print(f"To apply: {hint} APPLY=yes")
     finally:
         try:
             inventory_path.unlink()
