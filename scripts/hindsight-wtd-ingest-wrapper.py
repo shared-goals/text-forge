@@ -391,7 +391,9 @@ def main() -> int:
     if args.commit or args.since or args.after:
         scope_ref = args.commit or args.since or args.after
         try:
-            diff_range = resolve_diff_range(wtd_root, args.commit, args.since, args.after)
+            diff_range = resolve_diff_range(
+                wtd_root, args.commit, args.since, args.after
+            )
         except subprocess.CalledProcessError:
             print(
                 f"ERROR: cannot resolve ref {scope_ref!r}; pass an explicit --after <ref>",

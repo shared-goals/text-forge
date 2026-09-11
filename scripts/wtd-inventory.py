@@ -110,7 +110,12 @@ def git_commit(repo_root: Path) -> str | None:
             timeout=5,
         )
         return result.stdout.strip() or None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ):
         return None
 
 
@@ -124,7 +129,12 @@ def git_commit_date(repo_root: Path) -> str | None:
             timeout=5,
         )
         return result.stdout.strip() or None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ):
         return None
 
 
@@ -147,7 +157,12 @@ def git_file_commit_date(repo_root: Path, source_path: str) -> str | None:
             timeout=5,
         )
         return result.stdout.strip() or None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ):
         return None
 
 
@@ -179,7 +194,12 @@ def git_range_commit_date(
             output,
         )
         return match.group(0) if match else None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ):
         return None
 
 

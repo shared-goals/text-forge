@@ -195,9 +195,9 @@ def get_git_file_dates(file_path: Path) -> tuple[str, str]:
 def format_git_date(date_str: str) -> str:
     """Convert date from YYYY-MM-DD format to %d.%m.%Y format."""
     try:
-        from datetime import datetime
+        from datetime import date
 
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        dt = date.fromisoformat(date_str)
         return dt.strftime("%d.%m.%Y")
     except (TypeError, ValueError):
         return ""
@@ -697,7 +697,13 @@ def main():
         print(output, end="")
         print("[INFO] Complete", file=sys.stderr)
 
-    except (FileNotFoundError, ValueError, OSError, yaml.YAMLError, subprocess.CalledProcessError) as e:
+    except (
+        FileNotFoundError,
+        ValueError,
+        OSError,
+        yaml.YAMLError,
+        subprocess.CalledProcessError,
+    ) as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         import traceback
 

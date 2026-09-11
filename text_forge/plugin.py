@@ -170,7 +170,11 @@ class TextForgePlugin(BasePlugin):
     def on_page_markdown(self, markdown, page, config, files):
         """Apply nobr_emoticons hook if enabled."""
         # Apply nobr_emoticons hook if enabled
-        if self.config["nobr_emoticons_enabled"] and hasattr(self, "_nobr_hook") and hasattr(self._nobr_hook, "on_page_markdown"):
+        if (
+            self.config["nobr_emoticons_enabled"]
+            and hasattr(self, "_nobr_hook")
+            and hasattr(self._nobr_hook, "on_page_markdown")
+        ):
             return self._nobr_hook.on_page_markdown(markdown, page, config, files)
         return markdown
 
@@ -264,7 +268,13 @@ class TextForgePlugin(BasePlugin):
                         json.dumps({"success": True, "path": str(target_path)}).encode()
                     ]
 
-                except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as e:
+                except (
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                    OSError,
+                    json.JSONDecodeError,
+                ) as e:
                     start_response(
                         "500 Internal Server Error",
                         [
