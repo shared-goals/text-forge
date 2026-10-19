@@ -73,6 +73,12 @@ def _book_id(url: str) -> str:
     return m.group(1) if m else url
 
 
+def _review_id(url: str) -> str:
+    """Numeric id from /review/<id> (with or without slug, relative or absolute)."""
+    m = re.search(r"/review/(\d+)(?:-|$)", url)
+    return m.group(1) if m else ""
+
+
 def _work_key(title: str, author: str) -> str:
     """Normalization for matching editions of the same work.
 
@@ -187,26 +193,35 @@ def render_note(entry: dict) -> str:
     slug_url = book["book_url"]
     fm = [
         "---",
-        f'title: {book["title"]}',
+        # always double-quoted: bare scalars with ':' break Obsidian Bases YAML
+        f'title: {json.dumps(book["title"], ensure_ascii=False)}',
     ]
     if _author_valid(book.get("author") or ""):
-        fm.append(f'author: {book["author"]}')
+        author = book["author"].strip()
+        # quote when the value carries YAML-hostile characters (trailing
+        # spaces come straight from the LiveLib export)
+        if (author != book["author"] or ":" in author or "#" in author
+                or (author and author[0] in "!&*?|>%@`{}[]>,\"'")):
+            author = json.dumps(author, ensure_ascii=False)
+        fm.append(f"author: {author}")
     fm += [
         "tags:",
         "  - book",
     ]
-    if book.get("status"):
-        fm.append(f'status: {book["status"]}')
     if book.get("my_mark") is not None:
         fm.append(f'my_mark: {book["my_mark"]}')
-    fm.append(f'livelib_book: "{slug_url}"')
+    # status is always written; books outside any shelf list get 'none'
+    fm.append(f'status: {book.get("status") or "none"}')
+    fm.append(f'livelib_book: "https://www.livelib.ru/book/{_book_id(slug_url)}"')
     extra = entry["book"].get("_extra_urls") or []
     if extra:
         fm.append("livelib_editions:")
         for u in extra:
             fm.append(f'  - "{u}"')
     if entry["review"]:
-        fm.append(f'livelib_review: "https://www.livelib.ru{entry["review"]["url"]}"')
+        rid = _review_id(entry["review"]["url"])
+        if rid:
+            fm.append(f'livelib_review: "https://www.livelib.ru/review/{rid}"')
     body = ["\n".join(fm), "---", ""]
 
     if entry["review"]:
@@ -230,7 +245,8 @@ def render_note(entry: dict) -> str:
 
 
 def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path=None,
-                author_overrides_path=None, work_merges_path=None, link_mappings_path=None) -> dict:
+                author_overrides_path=None, work_merges_path=None, link_mappings_path=None,
+                book_overrides_path=None, reference_books_path=None) -> dict:
     """Build books/<slug>.md notes from LiveLib export JSON files.
 
     Editions listed in collections_path are omnibuses: their quotes violate the
@@ -250,10 +266,22 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
     # work-merge folds them into shelf notes when the work matches
     # apply manual author overrides by edition id (data-level, before grouping)
     ov_by_id = {_book_id(u): a for u, a in overrides.items()}
+    # book-overrides: patch status/author/etc. for editions missing or stale on shelves
+    book_ov = load(book_overrides_path) if book_overrides_path else {}
+    # statuses pass through as LiveLib names; the export's synthetic marker means "no shelf"
     for b in books:
         bid = _book_id(b["book_url"])
         if bid in ov_by_id:
             b["author"] = ov_by_id[bid]
+        if bid in book_ov:
+            b.update(book_ov[bid])
+        if b.get("status") == "not-on-shelf":
+            b["status"] = None
+    # reference books: works referenced from texts but absent from shelves and
+    # quotes (former not-on-shelf stubs) — kept as status-none notes
+    ref_books = load(reference_books_path) if reference_books_path else []
+    known_ids = {_book_id(b["book_url"]) for b in books}
+    books = books + [b for b in ref_books if _book_id(b["book_url"]) not in known_ids]
     for q in quotes:
         qid = _book_id(q["art_edition"]["url"])
         if qid in ov_by_id:
@@ -296,13 +324,17 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
     for qs in by_work_own.values():
         ae = qs[0]["art_edition"]
         author = ", ".join(a["full_name"] for a in ae.get("authors") or [])
+        book = {
+            "book_url": "https://www.livelib.ru" + ae["url"],
+            "title": ae["title"],
+            "author": author,
+            "status": None, "my_mark": None,
+        }
+        bid = _book_id(book["book_url"])
+        if bid in book_ov:
+            book.update(book_ov[bid])
         entries.append({
-            "book": {
-                "book_url": "https://www.livelib.ru" + ae["url"],
-                "title": ae["title"],
-                "author": author,
-                "status": None, "my_mark": None,
-            },
+            "book": book,
             "slug": make_slug(ae["title"], author or "unknown"),
             "quotes": sorted(qs, key=lambda q: q["created_at"]),
             "review": None,
@@ -318,6 +350,8 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
             continue
         if m.get("extra"):
             target["book"].setdefault("_extra_urls", []).append(m["extra"])
+        if m.get("status"):
+            target["book"]["status"] = m["status"]
         gone = entry_by_slug.get(m.get("remove", ""))
         if gone is not None:
             target["book"].setdefault("_extra_urls", []).append(gone["book"]["book_url"])

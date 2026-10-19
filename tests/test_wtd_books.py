@@ -1,5 +1,6 @@
 """Tests for wtd_books: LiveLib JSON export → books/<slug>.md note-books."""
 
+import copy
 import json
 import pathlib
 
@@ -68,16 +69,32 @@ class TestRenderNote:
     def test_frontmatter_fields(self):
         md = render_note(self.make_entry())
         assert md.startswith("---\n")
-        assert "title: Зона" in md
+        assert 'title: "Зона"' in md
         assert "author: Сергей Довлатов" in md
         assert "tags:" in md and "book" in md
-        assert 'livelib_book: "https://www.livelib.ru/book/1000699994-zona-sergej-dovlatov"' in md
+        assert 'livelib_book: "https://www.livelib.ru/book/1000699994"' in md
+
+    def test_title_is_double_quoted(self):
+        """title is always double-quoted: Obsidian Bases breaks on ':' in bare scalars."""
+        e = self.make_entry()
+        assert 'title: "Зона"' in render_note(e)
+        e = copy.deepcopy(e)
+        e["book"]["title"] = 'Раневская. "Смех сквозь слезы": мемуары'
+        assert 'title: "Раневская. \\"Смех сквозь слезы\\": мемуары"' in render_note(e)
+
+    def test_author_with_trailing_space_is_quoted_and_stripped(self):
+        """Export data carries trailing spaces: 'Аристотель ' must render quoted+clean."""
+        e = self.make_entry()
+        e = copy.deepcopy(e)
+        e["book"]["author"] = "Аристотель "
+        assert 'author: "Аристотель"' in render_note(e)
 
     def test_review_section_with_anchor(self):
         md = render_note(self.make_entry())
         assert "## Рецензия" in md
         assert "Отличная книга." in md
-        assert 'livelib_review: "https://www.livelib.ru/review/900-zona-sergej-dovlatov"' in md
+        # attribute is the short stable form; the section anchor links stay full
+        assert 'livelib_review: "https://www.livelib.ru/review/900"' in md
 
     def test_quotes_anchored_in_order(self):
         md = render_note(self.make_entry())
@@ -99,7 +116,7 @@ class TestRenderNote:
                  "slug": "lunnaya-pyl", "quotes": [], "review": None}
         md = render_note(entry)
         assert "author:" not in md
-        assert "title: Лунная пыль" in md
+        assert 'title: "Лунная пыль. Я, робот. Стальные пещеры"' in md
 
     def test_author_override_beats_omnibus_strip(self):
         """User-curated author wins even for a declared omnibus (Булгаков)."""
@@ -110,8 +127,8 @@ class TestRenderNote:
         md = render_note(entry)
         assert "author: Михаил Булгаков" in md
 
-    def test_own_note_has_no_status(self):
-        """A work that is not on any shelf has no status line."""
+    def test_own_note_has_status_none(self):
+        """A work that is not on any shelf gets status: none (status is always written)."""
         _, own = group_export(books=[BOOK_ZONA], quotes=[dict(Q1, art_edition={
             "url": "/book/911-unknown-book", "title": "Незнакомая книга",
             "authors": [{"full_name": "Незнакомый Автор"}]})], reviews=[])
@@ -120,7 +137,7 @@ class TestRenderNote:
                               "status": None, "my_mark": None},
                      "slug": "avtor-neznakomaya-kniga", "quotes": own, "review": None}
         md = render_note(own_entry)
-        assert "status:" not in md
+        assert 'status: none' in md
         assert "^quote_1" in md
 
     def test_quote_is_blockquote_without_heading(self):
@@ -130,6 +147,118 @@ class TestRenderNote:
         assert "> Вторая цитата, более ранняя" in md
         # block-id sits on the blockquote line (Obsidian anchors the quote block)
         assert "> Вторая цитата, более ранняя ^quote_1" in md
+
+    def test_book_attr_uses_short_url(self):
+        """Book attribute is the short stable form /book/<id>, like quotes."""
+        md = render_note(self.make_entry())
+        assert 'livelib_book: "https://www.livelib.ru/book/1000699994"' in md
+
+    def test_status_always_written(self):
+        """Status line is present for every book; own books get 'none'."""
+        e = self.make_entry()
+        e = copy.deepcopy(e)
+        e["book"]["status"] = "read"
+        assert 'status: read' in render_note(e)
+        e["book"]["status"] = None
+        assert 'status: none' in render_note(e)
+
+    def test_unread_passes_through(self, tmp_path):
+        """LiveLib shelf names pass through unchanged: unread stays unread."""
+        e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994", status="unread")
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out)
+        assert 'status: unread' in (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+
+    def test_wish_passes_through(self, tmp_path):
+        """The Хочу прочитать shelf status is 'wish', passed through unchanged."""
+        e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994", status="wish")
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out)
+        assert 'status: wish' in (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+
+    def test_reference_books_become_notes(self, tmp_path):
+        """reference-books.json adds works referenced from texts but absent from
+        shelves and quotes (former not-on-shelf stubs) as status-none notes."""
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text("[]", encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        ref = tmp_path / "reference-books.json"
+        ref.write_text(json.dumps([{
+            "book_url": "https://www.livelib.ru/book/1002971633",
+            "title": "Путешествие из Петербурга в Москву",
+            "author": "Александр Радищев", "status": None, "my_mark": None,
+        }], ensure_ascii=False), encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out, reference_books_path=ref)
+        md = (out / "radishchev-puteshestvie-iz-peterburga-v-moskvu.md").read_text(encoding="utf-8")
+        assert 'title: "Путешествие из Петербурга в Москву"' in md
+        assert 'status: none' in md
+
+    def test_not_on_shelf_marker_becomes_none(self, tmp_path):
+        """The export's synthetic 'not-on-shelf' marker renders as status: none."""
+        e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994", status="not-on-shelf")
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out)
+        assert 'status: none' in (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+
+    def test_book_overrides_apply_status(self, tmp_path):
+        """book-overrides.json sets status/author for editions missing from shelves."""
+        e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000284779", status=None)
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e], ensure_ascii=False), encoding="utf-8")
+        # own-note edition absent from books.json
+        q_own = dict(Q1, art_edition={"url": "/book/1009172287", "title": "Моя жизнь",
+                                      "authors": [{"full_name": "Генри Форд"}]})
+        quotes_p.write_text(json.dumps([q_own], ensure_ascii=False), encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        ov = tmp_path / "book-overrides.json"
+        ov.write_text(json.dumps({"1000284779": {"status": "read"},
+                                  "1009172287": {"status": "stop"}}, ensure_ascii=False), encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out, book_overrides_path=ov)
+        md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+        assert 'status: read' in md
+        own_md = next((out / f.name).read_text(encoding="utf-8")
+                      for f in out.glob("*.md") if "1009172287" in f.read_text(encoding="utf-8"))
+        assert 'status: stop' in own_md
+
+    def test_work_merge_sets_status(self, tmp_path):
+        """work-merges 'status' overrides the merged note's status."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994", status=None)
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e1], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        merges = tmp_path / "merges.json"
+        merges.write_text(json.dumps([{"into": "dovlatov-zona", "status": "stop"}], ensure_ascii=False), encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out, work_merges_path=merges)
+        assert 'status: stop' in (out / "dovlatov-zona.md").read_text(encoding="utf-8")
 
     def test_quote_has_livelib_url_and_text(self):
         md = render_note(self.make_entry())
@@ -141,6 +270,16 @@ class TestRenderNote:
         md = render_note(self.make_entry())
         assert 'livelib: https://www.livelib.ru/quote/101' in md
         assert 'livelib.ru/quote/101-zona' not in md
+
+    def test_review_attr_uses_short_url(self):
+        """Review attribute is the stable short form /review/<id> (livelib redirects)."""
+        e = copy.deepcopy(self.make_entry())
+        e["review"]["url"] = ("https://www.livelib.ru/review/3938821-ne-otorvatsya-pochemu"
+                             "-nash-mozg-lyubit-vsjo-novoe-i-tak-li-eto-horosho"
+                             "-v-epohu-interneta-adam-alter")
+        md = render_note(e)
+        assert 'livelib_review: "https://www.livelib.ru/review/3938821"' in md
+        assert "review/3938821-" not in md
 
     def test_book_without_review_omits_section(self):
         entries, _ = group_export(books=[BOOK_ZONA], quotes=[Q2], reviews=[])
