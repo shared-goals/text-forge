@@ -374,10 +374,11 @@ class TestBuildBooks:
         assert files == ["tolstoy-voyna-i-mir.md"]
         assert report["books"] == 1
 
-    def test_work_key_ignores_author_name_order(self):
-        """«Петр Вайль, Александр Генис» and «Вайль Петр, Генис Александр» — same work key."""
+    def test_work_key_name_order_handled_by_curation(self):
+        """Name-order variants («Петр Вайль» vs «Вайль Петр») are NOT heuristically
+        merged — they are resolved explicitly via _curation/work-merges.json."""
         from text_forge.wtd_books import _work_key
-        assert _work_key("Родная речь. Уроки изящной словесности", "Петр Вайль, Александр Генис") == \
+        assert _work_key("Родная речь. Уроки изящной словесности", "Петр Вайль, Александр Генис") != \
                _work_key("Родная речь. Уроки изящной словесности", "Вайль Петр, Генис Александр")
 
     def test_slug_collision_extends_with_title_words_not_id(self, tmp_path):
@@ -398,6 +399,73 @@ class TestBuildBooks:
         names = sorted(f.name for f in out.glob("*.md"))
         assert names == ["basinskiy-lev-tolstoy-begstvo-iz-raya.md",
                          "basinskiy-lev-tolstoy-svobodnyy-chelovek.md"]
+
+    def test_duplicate_quote_across_merged_editions_placed_once(self, tmp_path):
+        """Same quote reachable via two editions of one work — rendered once."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/7777777", my_mark=None)
+        q_ed1 = dict(Q1, quote={"quote_id": 101, "url": "/quote/101-zona"})
+        q_ed2 = dict(Q1, id=99, quote={"quote_id": 101, "url": "/quote/101-zona"},
+                     art_edition={"url": "/book/7777777", "title": "Зона",
+                                  "authors": [{"full_name": "Сергей Довлатов"}]})
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e1, e2], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text(json.dumps([q_ed1, q_ed2], ensure_ascii=False), encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        out = tmp_path / "books"
+        report = build_books(books_p, quotes_p, reviews_p, out)
+        md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+        assert md.count("/quote/101") == 1
+        assert report["quotes_placed"] == 1
+
+    def test_placed_quotes_equal_unique_input(self, tmp_path):
+        """No double counting: placed == unique quotes, even with manual merges."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1001474484",
+                  title="Родная речь", author="Вайль Петр")  # name-order variant
+        q1 = dict(Q1, art_edition={"url": "/book/1001474484", "title": "Родная речь",
+                                   "authors": [{"full_name": "Петр Вайль"}]})
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e1, e2], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text(json.dumps([Q1, Q2, q1], ensure_ascii=False), encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        out = tmp_path / "books"
+        report = build_books(books_p, quotes_p, reviews_p, out)
+        total_q = report["quotes_placed"] + report["quotes_in_collections"]
+        assert total_q == 3
+
+    def test_manual_work_merges_and_link_mappings(self, tmp_path):
+        """Curation files: work-merges.json merges stubborn duplicates;
+        link-mappings.json resolves ids that differ from note editions."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994",
+                  title="Родная речь", author="Петр Вайль")
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e1], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        out = tmp_path / "books"
+        merges = tmp_path / "work-merges.json"
+        merges.write_text(json.dumps([{"into": "vayl-rodnaya-rech", "extra": "https://www.livelib.ru/book/1001474484",
+                                       "title": "Родная речь. Уроки изящной словесности",
+                                       "author": "Петр Вайль, Александр Гениис"}], ensure_ascii=False), encoding="utf-8")
+        mappings = tmp_path / "link-mappings.json"
+        mappings.write_text(json.dumps({
+            "https://www.livelib.ru/book/1001474484": "vayl-rodnaya-rech"}, ensure_ascii=False), encoding="utf-8")
+        report = build_books(books_p, quotes_p, reviews_p, out,
+                             work_merges_path=merges, link_mappings_path=mappings)
+        md = (out / "vayl-rodnaya-rech.md").read_text(encoding="utf-8")
+        assert "1001474484" in md
+        text_dir = tmp_path / "text"
+        text_dir.mkdir(exist_ok=True)
+        (text_dir / "c.md").write_text("[x](https://www.livelib.ru/book/1001474484)", encoding="utf-8")
+        res = validate_text_links(text_dir, out, link_mappings_path=mappings)
+        assert res["resolved"] == 1
 
     def test_work_key_does_not_merge_different_works_sharing_prefix(self, tmp_path):
         """«Лев Толстой: Бегство из рая» и «Лев Толстой. Свободный человек» —

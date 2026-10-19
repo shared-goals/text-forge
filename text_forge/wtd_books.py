@@ -90,9 +90,9 @@ def _work_key(title: str, author: str) -> str:
         keep.append(p)
     t = re.sub(r"[^\w\s]", " ", " ".join(keep).lower())
     t = re.sub(r"\s+", " ", t).strip()
-    # multi-author strings vary in name order — key on the SET of name tokens
-    tokens = sorted({w for w in translit(author or "").split() if len(w) > 1})
-    return f"{t}|{','.join(tokens)}"
+    # first author's surname; stubborn name-order cases handled via work-merges.json
+    surname = translit(_surname(author.split(",")[0])) if author else ""
+    return f"{t}|{surname.lower()}"
 
 
 def group_export(books: list[dict], quotes: list[dict], reviews: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -230,7 +230,7 @@ def render_note(entry: dict) -> str:
 
 
 def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path=None,
-                author_overrides_path=None) -> dict:
+                author_overrides_path=None, work_merges_path=None, link_mappings_path=None) -> dict:
     """Build books/<slug>.md notes from LiveLib export JSON files.
 
     Editions listed in collections_path are omnibuses: their quotes violate the
@@ -285,6 +285,45 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
             q["art_edition"]["authors"] = [{"full_name": a} for a in ov_by_id[qid].split(", ")]
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    # Quotes whose work matched no shelf book -> one own entry per WORK.
+    by_work_own: dict[str, list[dict]] = {}
+    for q in own_quotes:
+        ae = q["art_edition"]
+        key = _work_key(ae["title"], (ae.get("authors") or [{}])[0].get("full_name", ""))
+        by_work_own.setdefault(key, []).append(q)
+    own_notes = 0
+    for qs in by_work_own.values():
+        ae = qs[0]["art_edition"]
+        author = ", ".join(a["full_name"] for a in ae.get("authors") or [])
+        entries.append({
+            "book": {
+                "book_url": "https://www.livelib.ru" + ae["url"],
+                "title": ae["title"],
+                "author": author,
+                "status": None, "my_mark": None,
+            },
+            "slug": make_slug(ae["title"], author or "unknown"),
+            "quotes": sorted(qs, key=lambda q: q["created_at"]),
+            "review": None,
+        })
+        own_notes += 1
+
+    # manual work merges: attach extra edition urls into an existing note (before write)
+    merges = load(work_merges_path) if work_merges_path else []
+    entry_by_slug = {e["slug"]: e for e in entries}
+    for m in merges:
+        target = entry_by_slug.get(m["into"])
+        if not target:
+            continue
+        if m.get("extra"):
+            target["book"].setdefault("_extra_urls", []).append(m["extra"])
+        gone = entry_by_slug.get(m.get("remove", ""))
+        if gone is not None:
+            target["book"].setdefault("_extra_urls", []).append(gone["book"]["book_url"])
+            target["quotes"].extend(gone["quotes"])
+            entries.remove(gone)
+
     used: set[str] = set()
 
     # collision handling BEFORE writing: extend with title words, id as last resort
@@ -302,39 +341,20 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
             e["slug"] = extended if extended not in used else f"{e['slug']}-{_book_id(e['book']['book_url'])}"
             used.add(e["slug"])
 
-    def write(entry: dict) -> None:
-        slug = entry["slug"]
-        used.add(slug)
-        (out / f"{slug}.md").write_text(render_note(entry), encoding="utf-8")
-
     for e in entries:
-        write(e)
-
-    # Quotes whose work matched no shelf book -> one own note per WORK.
-    by_work_own: dict[str, list[dict]] = {}
-    for q in own_quotes:
-        ae = q["art_edition"]
-        key = _work_key(ae["title"], (ae.get("authors") or [{}])[0].get("full_name", ""))
-        by_work_own.setdefault(key, []).append(q)
-    own_notes = 0
-    for qs in by_work_own.values():
-        ae = qs[0]["art_edition"]
-        author = ", ".join(a["full_name"] for a in ae.get("authors") or [])
-        entry = {
-            "book": {
-                "book_url": "https://www.livelib.ru" + ae["url"],
-                "title": ae["title"],
-                "author": author,
-                "status": None, "my_mark": None,
-            },
-            "slug": make_slug(ae["title"], author or "unknown"),
-            "quotes": sorted(qs, key=lambda q: q["created_at"]),
-            "review": None,
-        }
-        write(entry)
-        own_notes += 1
+        # final pass: one copy per quote id (same quote can arrive via several editions)
+        seen, uniq = set(), []
+        for q in e["quotes"]:
+            qid = (q.get("quote") or {}).get("quote_id") or q.get("id")
+            if qid in seen:
+                continue
+            seen.add(qid)
+            uniq.append(q)
+        e["quotes"] = uniq
+        (out / f"{e['slug']}.md").write_text(render_note(e), encoding="utf-8")
 
     placed = sum(len(e["quotes"]) for e in entries) + sum(len(qs) for qs in by_work_own.values())
+
     return {
         "books": len(entries),
         "quotes_placed": placed,
@@ -355,12 +375,13 @@ def _note_index(books_dir) -> dict:
     return index
 
 
-def validate_text_links(text_dir, books_dir, external_path=None) -> dict:
+def validate_text_links(text_dir, books_dir, external_path=None, link_mappings_path=None) -> dict:
     """Report-only: resolve every livelib link in text/*.md against note-books.
 
     A link resolves when its numeric id appears in any note (book/review attr or
     quote livelib URL). Links listed in external_path (old-format LiveLib pages,
-    site-only) are classified as external. Returns
+    site-only) are classified as external. link_mappings_path maps URLs to note
+    slugs when the text edition id differs from the note edition. Returns
     {total, resolved, external, unresolved: [{url, file}]}.
     """
     import re as _re
@@ -368,13 +389,16 @@ def validate_text_links(text_dir, books_dir, external_path=None) -> dict:
     external = set()
     if external_path and pathlib.Path(external_path).exists():
         external = set(json.loads(pathlib.Path(external_path).read_text(encoding="utf-8")))
+    mappings = {}
+    if link_mappings_path and pathlib.Path(link_mappings_path).exists():
+        mappings = json.loads(pathlib.Path(link_mappings_path).read_text(encoding="utf-8"))
     total, resolved, ext_n, unresolved = 0, 0, 0, []
     for chapter in sorted(pathlib.Path(text_dir).glob("*.md")):
         for m in _re.finditer(r"https://www\.livelib\.ru/(?:book|work|review|quote)/(\d+)[^)\s\"']*",
                               chapter.read_text(encoding="utf-8")):
             total += 1
             url = m.group(0).rstrip(".,;")
-            if m.group(1) in index:
+            if m.group(1) in index or url in mappings:
                 resolved += 1
             elif url in external:
                 ext_n += 1
