@@ -8,6 +8,7 @@ Design (agreed 2026-10-19):
 """
 
 import json
+import pathlib
 import re
 
 TRANSLIT = {
@@ -73,12 +74,25 @@ def _book_id(url: str) -> str:
 
 
 def _work_key(title: str, author: str) -> str:
-    """Normalization for matching editions of the same work (main title + surname)."""
-    t = _main_title(title)
-    t = re.sub(r"[^\w\s]", "", t.lower())
+    """Normalization for matching editions of the same work.
+
+    Full normalized title minus edition-info parts (тома, номера, «сборник»),
+    NOT the main-title cut — different works sharing a prefix must not merge.
+    """
+    parts = re.split(r"[:!?.(]", title)
+    keep = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if re.search(r"\d", p) or re.search(r"(?i)том|сборник|издани|комплект", p):
+            continue
+        keep.append(p)
+    t = re.sub(r"[^\w\s]", " ", " ".join(keep).lower())
     t = re.sub(r"\s+", " ", t).strip()
-    surname = translit(_surname(author)) if author else ""
-    return f"{t}|{surname.lower()}"
+    # multi-author strings vary in name order — key on the SET of name tokens
+    tokens = sorted({w for w in translit(author or "").split() if len(w) > 1})
+    return f"{t}|{','.join(tokens)}"
 
 
 def group_export(books: list[dict], quotes: list[dict], reviews: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -115,6 +129,7 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict]) -> 
         for other in group:
             if other is not primary:
                 primary["_edition_ids"] |= other["_edition_ids"]
+                primary["book"].setdefault("_extra_urls", []).append(other["book"]["book_url"])
         final.append(primary)
     by_work = {_work_key(e["book"]["title"], e["book"]["author"]): e for e in final}
 
@@ -185,6 +200,11 @@ def render_note(entry: dict) -> str:
     if book.get("my_mark") is not None:
         fm.append(f'my_mark: {book["my_mark"]}')
     fm.append(f'livelib_book: "{slug_url}"')
+    extra = entry["book"].get("_extra_urls") or []
+    if extra:
+        fm.append("livelib_editions:")
+        for u in extra:
+            fm.append(f'  - "{u}"')
     if entry["review"]:
         fm.append(f'livelib_review: "https://www.livelib.ru{entry["review"]["url"]}"')
     body = ["\n".join(fm), "---", ""]
@@ -199,7 +219,8 @@ def render_note(entry: dict) -> str:
 
     for n, q in enumerate(entry["quotes"], start=1):
         meta = q.get("quote") or {}
-        qurl = meta.get("url") or (f"/quote/{meta['quote_id']}" if meta.get("quote_id") else None)
+        qid = meta.get("quote_id") or (meta.get("url") or "").split("/quote/")[-1].split("-")[0]
+        qurl = f"/quote/{qid}" if str(qid).isdigit() else None
         block = [_blockquote(_strip_html(q["text"]), n), ""]
         if qurl:
             block.append(f"livelib: https://www.livelib.ru{qurl}")
@@ -225,8 +246,8 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
     reviews = load(reviews_path)
     collections = load(collections_path) if collections_path else {}
     overrides = load(author_overrides_path) if author_overrides_path else {}
-    # not-on-shelf editions were fetched only to hold quotes before work-merge existed
-    books = [b for b in books if b.get("status") != "not-on-shelf"]
+    # not-on-shelf editions are kept: text links need note targets even without quotes;
+    # work-merge folds them into shelf notes when the work matches
     # apply manual author overrides by edition id (data-level, before grouping)
     ov_by_id = {_book_id(u): a for u, a in overrides.items()}
     for b in books:
@@ -266,12 +287,24 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
     out.mkdir(parents=True, exist_ok=True)
     used: set[str] = set()
 
+    # collision handling BEFORE writing: extend with title words, id as last resort
+    by_base: dict[str, list[dict]] = {}
+    for e in entries:
+        by_base.setdefault(e["slug"], []).append(e)
+    for group in by_base.values():
+        if len(group) == 1:
+            continue
+        for e in group:
+            slug_words = set(e["slug"].split("-"))
+            ext_words = "-".join(w for w in translit(e["book"]["title"]).split()
+                                 if w and w not in slug_words)
+            extended = f"{e['slug']}-{ext_words}" if ext_words else e["slug"]
+            e["slug"] = extended if extended not in used else f"{e['slug']}-{_book_id(e['book']['book_url'])}"
+            used.add(e["slug"])
+
     def write(entry: dict) -> None:
-        slug, bid = entry["slug"], _book_id(entry["book"]["book_url"])
-        if slug in used:
-            slug = f"{slug}-{bid}"
+        slug = entry["slug"]
         used.add(slug)
-        entry["slug"] = slug
         (out / f"{slug}.md").write_text(render_note(entry), encoding="utf-8")
 
     for e in entries:
@@ -309,3 +342,42 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
         "quotes_unmatched": 0,
         "own_notes": own_notes,
     }
+
+
+def _note_index(books_dir) -> dict:
+    """Map every livelib id mentioned in note-books -> note path."""
+    import re as _re
+    index = {}
+    for note in sorted(pathlib.Path(books_dir).glob("*.md")):
+        text = note.read_text(encoding="utf-8")
+        for m in _re.finditer(r"livelib\.ru/(?:book|work|review|quote)/(\d+)", text):
+            index.setdefault(m.group(1), []).append(note.name)
+    return index
+
+
+def validate_text_links(text_dir, books_dir, external_path=None) -> dict:
+    """Report-only: resolve every livelib link in text/*.md against note-books.
+
+    A link resolves when its numeric id appears in any note (book/review attr or
+    quote livelib URL). Links listed in external_path (old-format LiveLib pages,
+    site-only) are classified as external. Returns
+    {total, resolved, external, unresolved: [{url, file}]}.
+    """
+    import re as _re
+    index = _note_index(books_dir)
+    external = set()
+    if external_path and pathlib.Path(external_path).exists():
+        external = set(json.loads(pathlib.Path(external_path).read_text(encoding="utf-8")))
+    total, resolved, ext_n, unresolved = 0, 0, 0, []
+    for chapter in sorted(pathlib.Path(text_dir).glob("*.md")):
+        for m in _re.finditer(r"https://www\.livelib\.ru/(?:book|work|review|quote)/(\d+)[^)\s\"']*",
+                              chapter.read_text(encoding="utf-8")):
+            total += 1
+            url = m.group(0).rstrip(".,;")
+            if m.group(1) in index:
+                resolved += 1
+            elif url in external:
+                ext_n += 1
+            else:
+                unresolved.append({"url": url, "file": chapter.name})
+    return {"total": total, "resolved": resolved, "external": ext_n, "unresolved": unresolved}

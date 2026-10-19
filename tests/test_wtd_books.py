@@ -1,10 +1,11 @@
 """Tests for wtd_books: LiveLib JSON export → books/<slug>.md note-books."""
 
 import json
+import pathlib
 
 import pytest
 
-from text_forge.wtd_books import make_slug, group_export, render_note, build_books
+from text_forge.wtd_books import make_slug, group_export, render_note, build_books, validate_text_links
 
 
 Q1 = {
@@ -132,8 +133,14 @@ class TestRenderNote:
 
     def test_quote_has_livelib_url_and_text(self):
         md = render_note(self.make_entry())
-        assert 'livelib: https://www.livelib.ru/quote/101-zona' in md
+        assert 'livelib: https://www.livelib.ru/quote/101' in md
         assert "Вторая цитата, более ранняя" in md
+
+    def test_quote_livelib_attr_uses_short_url(self):
+        """Quote attribute is the stable short form /quote/<id> (livelib redirects)."""
+        md = render_note(self.make_entry())
+        assert 'livelib: https://www.livelib.ru/quote/101' in md
+        assert 'livelib.ru/quote/101-zona' not in md
 
     def test_book_without_review_omits_section(self):
         entries, _ = group_export(books=[BOOK_ZONA], quotes=[Q2], reviews=[])
@@ -151,6 +158,65 @@ class TestRenderNote:
     def test_html_stripped_from_quote_text(self):
         md = render_note(self.make_entry())
         assert "<p>" not in md
+
+
+class TestValidateTextLinks:
+    def make_books_dir(self, tmp_path):
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([BOOK_ZONA], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text(json.dumps([Q1, Q2], ensure_ascii=False), encoding="utf-8")
+        reviews_p.write_text(json.dumps([R1], ensure_ascii=False), encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out)
+        return out
+
+    def write_text(self, tmp_path, content):
+        text_dir = tmp_path / "text"
+        text_dir.mkdir(exist_ok=True)
+        (text_dir / "chapter.md").write_text(content, encoding="utf-8")
+        return text_dir
+
+    def test_resolves_quote_review_book_links(self, tmp_path):
+        books_dir = self.make_books_dir(tmp_path)
+        text_dir = self.write_text(tmp_path, (
+            "[цитата](https://www.livelib.ru/quote/101-zona-sergej-dovlatov) "
+            "[рецензия](https://www.livelib.ru/review/900-zona-sergej-dovlatov) "
+            "[книга](https://www.livelib.ru/book/1000699994)"))
+        report = validate_text_links(text_dir, books_dir)
+        assert report["total"] == 3
+        assert report["resolved"] == 3
+        assert report["unresolved"] == []
+
+    def test_unresolved_link_reported(self, tmp_path):
+        books_dir = self.make_books_dir(tmp_path)
+        text_dir = self.write_text(tmp_path,
+            "[цитата](https://www.livelib.ru/quote/555-neizvestnaya)")
+        report = validate_text_links(text_dir, books_dir)
+        assert report["resolved"] == 0
+        assert len(report["unresolved"]) == 1
+        assert report["unresolved"][0]["url"].endswith("555-neizvestnaya")
+
+    def test_external_links_classified(self, tmp_path):
+        """Old-format quotes (site shows, API 404) are external, not errors."""
+        books_dir = self.make_books_dir(tmp_path)
+        text_dir = self.write_text(tmp_path,
+            "[цитата](https://www.livelib.ru/quote/555-neizvestnaya)")
+        ext = tmp_path / "external.json"
+        ext.write_text(json.dumps(["https://www.livelib.ru/quote/555-neizvestnaya"]), encoding="utf-8")
+        report = validate_text_links(text_dir, books_dir, external_path=ext)
+        assert report["resolved"] == 0
+        assert report["unresolved"] == []
+        assert report["external"] == 1
+
+    def test_work_links_resolve(self, tmp_path):
+        """5 work links in WTD — resolve like book links when id matches a note."""
+        books_dir = self.make_books_dir(tmp_path)
+        text_dir = self.write_text(tmp_path,
+            "[произведение](https://www.livelib.ru/work/1000699994)")
+        report = validate_text_links(text_dir, books_dir)
+        assert report["resolved"] == 1
 
 
 class TestBuildBooks:
@@ -307,6 +373,65 @@ class TestBuildBooks:
         files = sorted(f.name for f in out.glob("*.md"))
         assert files == ["tolstoy-voyna-i-mir.md"]
         assert report["books"] == 1
+
+    def test_work_key_ignores_author_name_order(self):
+        """«Петр Вайль, Александр Генис» and «Вайль Петр, Генис Александр» — same work key."""
+        from text_forge.wtd_books import _work_key
+        assert _work_key("Родная речь. Уроки изящной словесности", "Петр Вайль, Александр Генис") == \
+               _work_key("Родная речь. Уроки изящной словесности", "Вайль Петр, Генис Александр")
+
+    def test_slug_collision_extends_with_title_words_not_id(self, tmp_path):
+        """«Бегство из рая» и «Свободный человек» both cut to «Лев Толстой» —
+        collision extends with title words, never with numeric id."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1007290363",
+                  title="Лев Толстой: Бегство из рая", author="Павел Басинский")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1010116129",
+                  title="Лев Толстой. Свободный человек", author="Павел Басинский")
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e1, e2], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out)
+        names = sorted(f.name for f in out.glob("*.md"))
+        assert names == ["basinskiy-lev-tolstoy-begstvo-iz-raya.md",
+                         "basinskiy-lev-tolstoy-svobodnyy-chelovek.md"]
+
+    def test_work_key_does_not_merge_different_works_sharing_prefix(self, tmp_path):
+        """«Лев Толстой: Бегство из рая» и «Лев Толстой. Свободный человек» —
+        разные работы Басинского, несмотря на общий префикс титула."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1007290363",
+                  title="Лев Толстой: Бегство из рая", author="Павел Басинский")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1010116129",
+                  title="Лев Толстой. Свободный человек", author="Павел Басинский")
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e1, e2], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out)
+        names = sorted(f.name for f in out.glob("*.md"))
+        assert len(names) == 2
+
+    def test_merged_editions_keep_their_livelib_urls(self, tmp_path):
+        """Every merged edition URL stays in the note (validator + converter need them)."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/7777777", my_mark=None)
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e1, e2], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out)
+        md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+        assert "livelib_editions:" in md
+        assert "7777777" in md
 
     def test_shelf_editions_of_same_work_merge_into_one_note(self, tmp_path):
         """Six read editions of Тяжелый песок = ONE book note with all their quotes."""
