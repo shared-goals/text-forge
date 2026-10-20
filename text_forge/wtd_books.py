@@ -238,7 +238,7 @@ def render_note(entry: dict) -> str:
         qurl = f"/quote/{qid}" if str(qid).isdigit() else None
         block = [_blockquote(_strip_html(q["text"]), n), ""]
         if qurl:
-            block.append(f"livelib: https://www.livelib.ru{qurl}")
+            block.append(f"— [LiveLib](https://www.livelib.ru{qurl})")
             block.append("")
         body += block
     return "\n".join(body).rstrip() + "\n"

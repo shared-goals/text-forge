@@ -262,13 +262,13 @@ class TestRenderNote:
 
     def test_quote_has_livelib_url_and_text(self):
         md = render_note(self.make_entry())
-        assert 'livelib: https://www.livelib.ru/quote/101' in md
+        assert '— [LiveLib](https://www.livelib.ru/quote/101)' in md
         assert "Вторая цитата, более ранняя" in md
 
     def test_quote_livelib_attr_uses_short_url(self):
-        """Quote attribute is the stable short form /quote/<id> (livelib redirects)."""
+        """Quote source keeps the stable short form /quote/<id> (livelib redirects)."""
         md = render_note(self.make_entry())
-        assert 'livelib: https://www.livelib.ru/quote/101' in md
+        assert '— [LiveLib](https://www.livelib.ru/quote/101)' in md
         assert 'livelib.ru/quote/101-zona' not in md
 
     def test_review_attr_uses_short_url(self):
@@ -292,6 +292,26 @@ class TestRenderNote:
         md = render_note(entry[0])
         assert "Вторая цитата, более ранняя" in md
         assert "^quote_1" in md
+        assert "livelib:" not in md
+
+    def test_quote_source_is_markdown_link(self):
+        """Quote source is an active link, not a bare URL: the site shows '— LiveLib'."""
+        md = render_note(self.make_entry())
+        assert "— [LiveLib](https://www.livelib.ru/quote/101)" in md
+        assert "livelib: https://www.livelib.ru/quote/101" not in md
+
+    def test_quote_link_keeps_short_url(self):
+        """Only the rendering changes: the URL stays the stable short /quote/<id>."""
+        md = render_note(self.make_entry())
+        assert "(https://www.livelib.ru/quote/101)" in md
+        assert "quote/101-" not in md
+
+    def test_quote_without_url_still_renders_nothing(self):
+        """Quotes lacking quote.url keep having no source line at all."""
+        entry, _ = group_export(books=[BOOK_ZONA], quotes=[dict(Q2, quote=None)], reviews=[])
+        md = render_note(entry[0])
+        assert "^quote_1" in md
+        assert "LiveLib" not in md
         assert "livelib:" not in md
 
     def test_html_stripped_from_quote_text(self):
