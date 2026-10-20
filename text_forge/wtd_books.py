@@ -520,9 +520,18 @@ def parse_reference_lines(md: str, mappings: dict | None = None) -> list[dict]:
 
 
 def _fm_scalar(fm: str, key: str) -> str | None:
-    """Scalar value of a frontmatter key ('' for `key:` with no value)."""
+    """Scalar value of a frontmatter key ('' for `key:` with no value).
+
+    Quoted values are JSON-unescaped, so `\\"` inside titles survives
+    frontmatter round-trips without leaking backslashes into output.
+    """
     m = re.search(rf"^{key}:[ \t]*(.*?)[ \t]*$", fm, re.M)
-    return m.group(1).strip('"') if m else None
+    if not m:
+        return None
+    raw = m.group(1)
+    if len(raw) >= 2 and raw.startswith('"') and raw.endswith('"'):
+        return json.loads(raw)
+    return raw
 
 
 def important_books(books_dir) -> list[dict]:

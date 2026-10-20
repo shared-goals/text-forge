@@ -911,6 +911,21 @@ class TestRenderP3References:
         assert ('- Про Счастье и Цифру: [Модель количественной оценки уровня счастья]'
                 '(https://www.livelib.ru/review/6390790)') in out["text"]
 
+    def test_fm_scalar_unescapes_quoted_titles(self, tmp_path):
+        """Frontmatter `\\"` escapes must not leak into rendered link text."""
+        note = tmp_path / "tikhon-nesvyatye.md"
+        note.write_text(
+            '---\ntitle: "\\"Несвятые святые\\" и другие рассказы"\n'
+            'tags:\n  - book\nimportant: true\nweight: 13\n'
+            'livelib_book: "https://www.livelib.ru/book/1003089869"\n'
+            'livelib_review: "https://www.livelib.ru/review/6390922"\n---\nbody\n',
+            encoding="utf-8")
+        books = important_books(tmp_path)
+        assert books[0]["title"] == '"Несвятые святые" и другие рассказы'
+        out = render_p3_references(tmp_path, [])
+        assert '[\"Несвятые святые\" и другие рассказы]' in out["text"]
+        assert '\\"' not in out["text"]
+
     def test_important_ordering_by_weight(self, tmp_path):
         a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=2, book_id="1")
         b = TestRenderP3References.note("Б", "https://www.livelib.ru/review/2", important=True, weight=1, book_id="2")
