@@ -447,17 +447,24 @@ def validate_text_links(text_dir, books_dir, external_path=None, link_mappings_p
 #   importance   -> book frontmatter (`important: true` + `weight: <line number>`)
 #   thesis       -> title of the book's own LiveLib review
 #   link text    -> the book note's frontmatter title
-#   link target  -> short canonical livelib URL (/review/<id> or /book/<id>)
+#   link target  -> short canonical livelib URL of that very note
 # The generator NEVER invents a thesis: when neither the review nor the curated
 # line offers one, the bullet is emitted without the `thesis: ` prefix and the
 # book is reported in `warnings`.
 
 REF_BULLET = re.compile(r"^- (?P<body>.*\S)\s*$")
-REF_LINK = re.compile(r"\[(?P<name>[^\]]*)\]\((https?://(?:www\.)?livelib\.ru/(?P<kind>book|work|review)/(?P<id>\d+)[^)]*)\)")
+REF_LINK = re.compile(r"\[(?P<name>[^\]]*)\]\((?P<url>https?://(?:www\.)?livelib\.ru/"
+                      r"(?P<kind>book|work|review)/(?P<id>\d+)[^)]*)\)")
+# /work/<id> -> slug: only work ids that appear in NO note frontmatter (the
+# curated link points at the 'all editions' page while our note is an edition).
+WORK_ID_TO_SLUG = {
+    "1008288064": "andreev-model-kolichestvennoy-otsenki-urovnya-schastya",
+    "1001474484": "vayl-rodnaya-rech",
+}
 
 
 def _link_key(url: str) -> tuple[str, str] | None:
-    """(kind, id) of a livelib URL, or None when it is not a livelib book link."""
+    """(kind, id) of a livelib URL, or None when it is not a livelib link."""
     m = re.match(r"https?://(?:www\.)?livelib\.ru/(book|work|review)/(\d+)", url)
     return (m.group(1), m.group(2)) if m else None
 
@@ -496,10 +503,10 @@ def parse_reference_lines(md: str, mappings: dict | None = None) -> list[dict]:
             })
         if not links:
             continue
-        # text left after dropping links: 'thesis: , leftovers' — separators
+        # text left after dropping the links: 'thesis: , leftovers'; separators
         # between links belong to the links, not to the prose
         residue = REF_LINK.sub("", body)
-        thesis = re.split(r":", residue, maxsplit=1)[0].strip(" ,:\u2028")
+        thesis = residue.split(":", 1)[0].strip(" ,")
         if not thesis or len(thesis.split()) < 2:
             thesis = ""  # no 'thesis: ' prefix on this line
         lines.append({
@@ -534,15 +541,14 @@ def important_books(books_dir) -> list[dict]:
         out.append({
             "slug": note.stem,
             "title": _fm_scalar(fm, "title") or note.stem,
-            "weight": int(weight) if weight and weight.isdigit() else 10 ** 6,
+            # no weight => the note matters but was never placed in the list
+            "weight": int(weight) if weight and weight.isdigit() else None,
             "book_id": _book_id(book_url) if book_url else "",
             "review_id": _review_id(review_url),
-            # a review belongs to this note only when its own URL names the book
-            "review_book_id": _book_id(review_url) if review_url else "",
             "edition_ids": {m2.group(1) for m2 in re.finditer(
                 r'^\s*-\s*"?https?://(?:www\.)?livelib\.ru/(?:book|work)/(\d+)', fm, re.M)},
         })
-    out.sort(key=lambda b: (b["weight"], b["slug"]))
+    out.sort(key=lambda b: (b["weight"] is None, b["weight"] or 0, b["slug"]))
     return out
 
 
@@ -556,12 +562,11 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
     the same fallback for callers that pass no lines. Without either, every
     important book becomes its own line, thesis taken from its review only.
 
-    Returns {"text": ..., "items": [...], "warnings": [...]}; a warning is
-    {"slug", "reason", ...} with reason 'no-thesis' (line emitted without a
-    thesis), 'untitled-review' (review exists but is untitled, so the curated
-    line's thesis was used), 'foreign-review' (the note's review belongs to a
-    different work) or 'unmatched-link' (a curated link resolves to no note: the
-    line is kept verbatim).
+    Returns {"text", "items", "warnings"}; a warning is {"slug", "reason", ...}
+    with reason 'no-thesis' (line emitted without a thesis), 'untitled-review'
+    (review exists but carries no title, so the curated line's thesis was used),
+    'foreign-review' (the note's review belongs to a different work) or
+    'unmatched-link' (a curated link resolves to no note: kept verbatim).
     """
     books = important_books(books_dir)
     by_slug = {b["slug"]: b for b in books}
@@ -573,19 +578,42 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
         for eid in b["edition_ids"]:
             by_book.setdefault(eid, b)
     review_by_id = {str(r["id"]): r for r in reviews}
+    notes_with_review = {b["review_id"] for b in books if b["review_id"]}
     line_thesis = line_thesis or {}
     warnings: list[dict] = []
     items: list[tuple[int, int, str]] = []
 
+    def warn(slug, reason, weight, title, review_id=None, url=None):
+        warnings.append({"slug": slug, "reason": reason, "weight": weight,
+                        "title": title, "review_id": review_id, "url": url})
+
     def resolve(link: dict) -> dict | None:
-        return by_slug.get(link["slug"]) or by_review.get(link["review_id"]) or by_book.get(link["book_id"])
+        """Curated link -> note: mapping slug, then review id, then edition id.
 
-    def own_review(book: dict) -> dict | None:
-        """The note's review, and only when it is a review of that very book.
+        A /review/ link is keyed by the review id: a review belongs to one
+        edition, so this finds the note even when the curated URL names a
+        different edition or a collection. /work/ ids that live in no note fall
+        back to WORK_ID_TO_SLUG; anything else stays unmatched.
+        """
+        if link["slug"] and link["slug"] in by_slug:
+            return by_slug[link["slug"]]
+        if link["review_id"] and link["review_id"] in by_review:
+            return by_review[link["review_id"]]
+        if link["book_id"] and link["book_id"] in by_book:
+            return by_book[link["book_id"]]
+        if link["kind"] == "work":
+            for candidate in (link["book_id"], link["review_id"]):
+                if candidate in WORK_ID_TO_SLUG and WORK_ID_TO_SLUG[candidate] in by_slug:
+                    return by_slug[WORK_ID_TO_SLUG[candidate]]
+        return None
 
-        A note keeps the review of a merged edition; borrowing the thesis of a
-        review that belongs to a different work would invent a claim, so such a
-        review is ignored and the case is reported as 'foreign-review'.
+    def note_review(book: dict) -> dict | None:
+        """The note's own review as recorded in the export, else None.
+
+        A review belongs to one edition: if the export says it is about another
+        work, it cannot supply this book's thesis (the case is reported as
+        'foreign-review'). A review id the export does not carry is simply
+        unknown — reported once by the caller that needed it.
         """
         if not book["review_id"]:
             return None
@@ -593,15 +621,14 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
         if review is None:
             return None
         target = _book_id((review.get("art_edition") or {}).get("url") or "")
-        book_ids = {book["book_id"], *book["edition_ids"]}
-        if target and target not in book_ids:
-            warnings.append({"slug": book["slug"], "reason": "foreign-review", "weight": None,
-                            "title": book["title"], "review_id": book["review_id"]})
+        if target and target not in {book["book_id"], *book["edition_ids"]}:
+            warn(book["slug"], "foreign-review", book["weight"], book["title"],
+                 review_id=book["review_id"])
             return None
         return review
 
-    def bullet(book: dict, thesis: str, weight: int, order: int) -> None:
-        review = own_review(book)
+    def emit(book: dict, thesis: str, weight: int, order: int) -> None:
+        review = note_review(book)
         if review is not None and (review.get("title") or "").strip():
             text, reason = review["title"].strip(), None
         elif thesis or line_thesis.get(book["slug"]):
@@ -609,8 +636,8 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
         else:
             text, reason = "", "no-thesis"
         if reason:
-            warnings.append({"slug": book["slug"], "reason": reason, "weight": weight,
-                            "title": book["title"], "review_id": book["review_id"] or None})
+            warn(book["slug"], reason, weight, book["title"], book["review_id"] or None)
+        # short canonical URL of the resolved note itself
         url = (f"https://www.livelib.ru/review/{book['review_id']}" if review
                else f"https://www.livelib.ru/book/{book['book_id']}")
         link = f"[{book['title']}]({url})"
@@ -618,28 +645,37 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
 
     if lines is None:
         for order, b in enumerate(books):
-            bullet(b, "", b["weight"], order)
+            emit(b, "", b["weight"], order)
     else:
+        # curated grouping: a bullet's links keep their order and share its
+        # weight, so a multi-book line emits one line per book
         for ln in lines:
             weight = ln["weight"]
-            picked = []
-            for link in ln["links"]:
-                book = resolve(link)
-                if book is None:
-                    warnings.append({"slug": None, "reason": "unmatched-link", "weight": weight,
-                                   "title": link["name"], "url": link["url"]})
-                else:
-                    picked.append(book)
-            if not picked:
+            known = [(link, resolve(link)) for link in ln["links"]]
+            if all(book is None for _, book in known):
+                # nothing in this line resolves: keep the curated line verbatim
+                for link in ln["links"]:
+                    warn(None, "unmatched-link", weight, link["name"], url=link["url"])
                 items.append((weight, len(items), ln["raw"]))
                 continue
-            for order, book in enumerate(picked):
-                bullet(book, ln["thesis"], weight, len(items) + order)
+            for link, book in known:
+                if link["review_id"] and link["review_id"] not in review_by_id and book is not None:
+                    warn(book["slug"], "unknown-review", weight, book["title"],
+                         review_id=link["review_id"])
+            for link, book in known:
+                if book is None:
+                    # the curated link names nothing in the corpus: keep it verbatim
+                    warn(None, "unmatched-link", weight, link["name"], url=link["url"])
+                    items.append((weight, len(items),
+                                f"- {ln['thesis']}: [{link['name']}]({link['url']})"
+                                if ln["thesis"] else f"- [{link['name']}]({link['url']})"))
+                    continue
+                emit(book, ln["thesis"], weight, len(items))
             if ln["plain"].strip(", :"):
                 # 'to be published' style leftovers stay in the line, unlinked
                 w, o, text = items[-1]
                 items[-1] = (w, o, f"{text}, {ln['plain'].strip().lstrip(',').strip()}")
-    items.sort(key=lambda t: (t[0], t[1]))
+    items.sort(key=lambda t: (t[0] is None, t[0] or 0, t[1]))
     warnings.sort(key=lambda w: (w.get("weight") or 0, w.get("slug") or "", w.get("url") or ""))
     text = header.rstrip("\n") + "\n" if header else ""
     if items:

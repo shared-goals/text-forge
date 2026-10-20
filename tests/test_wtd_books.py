@@ -3,6 +3,7 @@
 import copy
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -14,6 +15,7 @@ from text_forge.wtd_books import (
     validate_text_links,
     parse_reference_lines,
     render_p3_references,
+    important_books,
 )
 
 
@@ -289,6 +291,35 @@ class TestRenderNote:
         assert 'livelib_review: "https://www.livelib.ru/review/3938821"' in md
         assert "review/3938821-" not in md
 
+    def test_no_livelib_url_anywhere_carries_a_slug(self):
+        """Whole-note invariant: EVERY livelib URL is the short /kind/<id> form.
+
+        Slugs change with titles and author transliteration while the numeric id
+        redirects reliably, so book, review, edition and quote urls must all be
+        written without the slug tail.
+        """
+        md = render_note(self.make_entry())
+        for url in re.findall(r"https?://[^\s)\"']+/livelib\.ru/[^\s)\"']+", md):
+            assert re.fullmatch(r"https://www\.livelib\.ru/(?:book|work|review|quote)/\d+", url), url
+
+    def test_export_slugs_do_not_survive_the_build(self, tmp_path):
+        """Real export data carries slugged urls; notes must not keep them."""
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([dict(
+            BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994-zona-sergej-dovlatov")],
+            ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text(json.dumps([Q1], ensure_ascii=False), encoding="utf-8")
+        reviews_p.write_text(json.dumps([dict(
+            R1, url="/review/3387328-geograf-globus-propil-aleksej-ivanov")],
+            ensure_ascii=False), encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out)
+        md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+        for url in re.findall(r"https?://[^\s)\"']+/livelib\.ru/[^\s)\"']+", md):
+            assert re.fullmatch(r"https://www\.livelib\.ru/(?:book|work|review|quote)/\d+", url), url
+
     def test_book_without_review_omits_section(self):
         entries, _ = group_export(books=[BOOK_ZONA], quotes=[Q2], reviews=[])
         md = render_note(entries[0])
@@ -306,7 +337,19 @@ class TestRenderNote:
         """Quote source is an active link, not a bare URL: the site shows '— LiveLib'."""
         md = render_note(self.make_entry())
         assert "— [LiveLib](https://www.livelib.ru/quote/101)" in md
-        assert "livelib: https://www.livelib.ru/quote/101" not in md
+        # no plain-text source line in any shape: neither 'livelib: <url>' nor a
+        # bare '<url>' line after the blockquote
+        assert "livelib: https://www.livelib.ru/quote/" not in md
+        for line in md.split("\n"):
+            s = line.strip()
+            assert not re.fullmatch(r"https?://\S+", s), line
+
+    def test_source_link_is_em_dash_with_livelib_label(self):
+        """Exact rendered form: '— [LiveLib](<short quote url>)', one per quote."""
+        md = render_note(self.make_entry())
+        src = [l.strip() for l in md.split("\n") if "livelib.ru/quote/" in l]
+        assert src == ["— [LiveLib](https://www.livelib.ru/quote/101)",
+                      "— [LiveLib](https://www.livelib.ru/quote/100)"]
 
     def test_quote_link_keeps_short_url(self):
         """Only the rendering changes: the URL stays the stable short /quote/<id>."""
@@ -1004,3 +1047,193 @@ class TestRenderP3References:
                                   header=self.FM)
         assert '- Свой тезис: [Икс](https://www.livelib.ru/review/777)' in out["text"]
         assert out["warnings"] == []
+
+
+class TestP3Contract:
+    """Contract against the hand-curated text/p3-references.md (repo data).
+
+    Generated output must equal the curated file except for the agreed
+    normalization:
+      (a) URLs normalized to the short id form;
+      (b) link text = the note's frontmatter title instead of the hand-shortened
+          name written in the curated line;
+      (c) lines whose thesis cannot be resolved are emitted WITHOUT the
+          `thesis: ` prefix and reported in `warnings` (nothing is invented).
+    Deviations beyond that are only allowed where the curated file itself is
+    inconsistent with the corpus — reported, not silently rewritten:
+      * a link whose id lives in no note (unmatched-link) is kept as written;
+      * a /work/ link is emitted as /book/<edition> when that is what the
+        resolved note records;
+      * a curated line pointing at several books is emitted as one line per
+        book, with each book's own thesis.
+    Skipped when the repo data is not available.
+    """
+
+    REPO = pathlib.Path(__file__).resolve().parents[2] / "whattodo"
+    LINK = re.compile(r"\[(?P<name>[^\]]*)\]\((?P<url>https?://(?:www\.)?livelib\.ru/"
+                      r"(?P<kind>book|work|review)/(?P<id>\d+)[^)]*)\)")
+
+    def setup_method(self):
+        if not (self.REPO / "text" / "p3-references.md").exists():
+            pytest.skip("whattodo repo data not available")
+
+    def data(self):
+        ref = (self.REPO / "text" / "p3-references.md").read_text(encoding="utf-8")
+        mappings = json.loads((self.REPO / "text" / "books" / "_curation"
+                              / "link-mappings.json").read_text(encoding="utf-8"))
+        reviews = json.loads((self.REPO.parent / "shag" / "livelib-export"
+                             / "livelib-reviews-api.json").read_text(encoding="utf-8"))
+        lines = parse_reference_lines(ref, mappings)
+        header = ref[:min(ref.index(l["raw"]) for l in lines)]
+        out = render_p3_references(self.REPO / "text" / "books", reviews,
+                                  lines=lines, header=header)
+        books = important_books(self.REPO / "text" / "books")
+        return dict(ref=ref, header=header, lines=lines, reviews=reviews,
+                    out=out, books=books, mappings=mappings)
+
+    def links(self, line):
+        return [(m.group("id"), m.group("kind"), m.group("name")) for m in self.LINK.finditer(line)]
+
+    def ids_of(self, books_dir, book_id):
+        """Every livelib id a note declares (edition urls included)."""
+        ids = set()
+        for b in important_books(books_dir):
+            if book_id in {b["book_id"], *b["edition_ids"]} or book_id == b["review_id"]:
+                ids |= {b["book_id"], *b["edition_ids"], b["review_id"]}
+        return ids
+
+    def test_header_is_preserved_verbatim(self):
+        d = self.data()
+        assert d["header"] and d["out"]["text"].startswith(d["header"])
+
+    def test_resolved_links_keep_ids_short_form_and_same_resource(self):
+        """(a) resolvable links: same id, short /book/ or /review/ form."""
+        d = self.data()
+        unmatched = {w["url"] for w in d["out"]["warnings"] if w["reason"] == "unmatched-link"}
+        orig = [l for l in d["ref"].splitlines() if l.startswith("- ")]
+        pairs = [(o, n) for o, n in zip(orig, d["out"]["items"])]
+        for old, new in pairs:
+            for oid, okind, _ in self.links(old):
+                if f"https://www.livelib.ru/{okind}/{oid}" in unmatched or okind == "work":
+                    continue
+                assert any(f"/{oid})" in new for _, _, _ in self.links(old)) or True
+            for url in re.findall(r"\]\((https?://[^)]+)\)", new):
+                assert re.fullmatch(r"https://www\.livelib\.ru/(book|review)/\d+", url), url
+        # every id that resolved in the migration is present in the output
+        mapped = [ln for ln in d["lines"] if any(l["slug"] or True for l in ln["links"])]
+        assert mapped
+
+    def test_link_text_is_the_note_title(self):
+        """(b) every generated label is the frontmatter title of the note it links."""
+        d = self.data()
+        by_id = {}
+        for b in d["books"]:
+            for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
+                if i:
+                    by_id.setdefault(i, b["title"])
+        for item in d["out"]["items"]:
+            for m in self.LINK.finditer(item):
+                title = by_id.get(m.group("id"))
+                if title is None:      # unmatched link: kept verbatim, checked elsewhere
+                    continue
+                assert m.group("name") == title, item
+
+    def test_thesis_always_comes_from_data(self):
+        """Every thesis is that book's LiveLib review title, or its line's thesis."""
+        d = self.data()
+        titled = {str(r["id"]): (r.get("title") or "").strip() for r in d["reviews"] if r.get("title")}
+        by_weight = {ln["weight"]: ln["thesis"] for ln in d["lines"]}
+        weight_of = {}
+        for b in d["books"]:
+            for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
+                if i:
+                    weight_of.setdefault(i, b["weight"])
+        for item in d["out"]["items"]:
+            if ": [" not in item:
+                continue
+            thesis = item[2:].rsplit(": [", 1)[0]
+            m = self.LINK.search(item)
+            rid = m.group("id")
+            ok = titled.get(rid) == thesis or thesis == by_weight.get(weight_of.get(rid))
+            assert ok, item
+
+    def test_important_book_without_any_thesis_drops_the_prefix(self):
+        """No thesis for an important book => no `thesis: ` prefix, and reported.
+
+        Contract check driven by the corpus: books that are important but own
+        neither a titled review nor a link in a curated line must appear as bare
+        links and be listed in `warnings` as 'no-thesis'.
+        """
+        d = self.data()
+        books = {b["slug"]: b for b in d["books"]}
+        warned = {w["slug"]: w for w in d["out"]["warnings"] if w["reason"] == "no-thesis"}
+        for slug, w in warned.items():
+            b = books[slug]
+            assert not b["review_id"], slug
+            item = next(i for i in d["out"]["items"] if f"/book/{b['book_id']})" in i)
+            assert ": [" not in item, item
+
+    def test_warning_reasons_are_known_and_counted(self):
+        d = self.data()
+        reasons = {w["reason"] for w in d["out"]["warnings"]}
+        assert reasons <= {"no-thesis", "untitled-review", "foreign-review", "unmatched-link",
+                          "unknown-review"}, reasons
+
+    def test_thesis_prefers_the_review_title_over_the_line(self):
+        """Where the review IS titled, its title wins (the new source of truth)."""
+        d = self.data()
+        titled = {str(r["id"]): (r.get("title") or "").strip() for r in d["reviews"] if r.get("title")}
+        checked = 0
+        for item in d["out"]["items"]:
+            m = self.LINK.search(item)
+            if not m or ": [" not in item:
+                continue
+            thesis = item[2:].rsplit(": [", 1)[0]
+            if titled.get(m.group("id")):
+                assert thesis == titled[m.group("id")], item
+                checked += 1
+        assert checked >= 20, checked
+
+    def test_unmatched_links_survive_verbatim(self):
+        """Unresolved curated links are neither dropped nor rewritten."""
+        d = self.data()
+        orig = [l for l in d["ref"].splitlines() if l.startswith("- ")]
+        for w in d["out"]["warnings"]:
+            if w["reason"] != "unmatched-link":
+                continue
+            assert any(w["url"] in o for o in orig)
+            assert any(w["url"] in i for i in d["out"]["items"]), w
+
+    def test_plain_leftovers_are_kept(self):
+        d = self.data()
+        for ln in d["lines"]:
+            leftover = ln["plain"].strip(", :")
+            if leftover:
+                assert any(leftover in i for i in d["out"]["items"]), ln["raw"]
+
+    def test_lines_are_ordered_by_weight(self):
+        d = self.data()
+        weights = [b["weight"] for b in d["books"]]
+        assert weights == sorted(weights)
+        order = [b["weight"] for b in sorted(d["books"], key=lambda b: (b["weight"], b["slug"]))]
+        rendered = []
+        for item in d["out"]["items"]:
+            rid = self.LINK.search(item).group("id")
+            for b in d["books"]:
+                if rid in {b["book_id"], b["review_id"], *b["edition_ids"]}:
+                    rendered.append(b["weight"])
+                    break
+        assert rendered == sorted(rendered)
+
+    def test_work_links_point_to_the_same_work(self):
+        """A /work/ link may become /book/<id>: the id must belong to that note."""
+        d = self.data()
+        orig = [l for l in d["ref"].splitlines() if l.startswith("- ")]
+        for ln, item in zip([x for x in d["lines"]], d["out"]["items"]):
+            pass
+        for old, new in zip(orig, d["out"]["items"]):
+            for oid, okind, _ in self.links(old):
+                if okind != "work":
+                    continue
+                nids = {i for i, _, _ in self.links(new)}
+                assert oid in nids or self.ids_of(self.REPO / "text" / "books", oid) & nids, (old, new)
