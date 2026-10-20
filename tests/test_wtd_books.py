@@ -6,7 +6,15 @@ import pathlib
 
 import pytest
 
-from text_forge.wtd_books import make_slug, group_export, render_note, build_books, validate_text_links
+from text_forge.wtd_books import (
+    make_slug,
+    group_export,
+    render_note,
+    build_books,
+    validate_text_links,
+    parse_reference_lines,
+    render_p3_references,
+)
 
 
 Q1 = {
@@ -743,3 +751,256 @@ class TestMakeSlug:
     def test_leading_initials_title_not_cut_to_empty(self):
         assert make_slug("П. А. Столыпин. Воспоминания о моем отце", "Мария Бок") == \
             "bok-p-a-stolypin-vospominaniya-o-moem-ottse"
+
+
+# ------------------------------------------- p3-references projection helpers
+
+PM = {"https://www.livelib.ru/book/1002920757": "kharari-sapiens"}
+
+
+def ref_line(thesis="Про Счастье и Цифру", name="Модель", review_id=6390790):
+    return (f"- {thesis}: [{name}](https://www.livelib.ru/review/{review_id}"
+            f"-model-kolichestvennoj-otsenki-urovnya-schastya)")
+
+
+REVIEW_6390790 = {
+    "id": 6390790,
+    "title": "Про Счастье и Цифру",
+    "url": "/review/6390790-model-kolichestvennoj-otsenki-urovnya-schastya",
+    "text": "<p>Рецензия.</p>",
+    "art_edition": {"id": 1008288064, "title": "Модель количественной оценки уровня счастья",
+                    "authors": [{"full_name": "Владимир Андреев"}],
+                    "url": "/work/1008288064-model-kolichestvennoj-otsenki-urovnya-schastya"},
+}
+
+
+class TestParseReferenceLines:
+    """p3-references.md carries ONLY importance: thesis + ordered book links."""
+
+    def test_parses_thesis_and_links(self):
+        lines = parse_reference_lines(
+            "---\ncomments: true\n---\n\n# Книги\n\n" + ref_line(), mappings=PM)
+        assert len(lines) == 1
+        assert lines[0]["thesis"] == "Про Счастье и Цифру"
+        assert lines[0]["weight"] == 1
+        assert lines[0]["links"][0]["name"] == "Модель"
+        assert lines[0]["links"][0]["review_id"] == "6390790"
+
+    def test_weight_is_line_number_after_frontmatter_and_prose(self):
+        """Frontmatter/heading/prose do not shift weights: first bullet is 1."""
+        md = "---\ncomments: true\n---\n\n# Книги\n\nВступительный абзац:\n\n" + \
+             ref_line(review_id=1) + "\n" + ref_line(review_id=2)
+        lines = parse_reference_lines(md, mappings=PM)
+        assert [(l["weight"], l["links"][0]["review_id"]) for l in lines] == [(1, "1"), (2, "2")]
+
+    def test_multiple_links_on_one_line_share_weight(self):
+        """Several links in one curated bullet => ONE line, weight counted once."""
+        md = ("- Общий тезис: [Первая](https://www.livelib.ru/review/1), "
+              "[Вторая](https://www.livelib.ru/review/2)\n")
+        lines = parse_reference_lines(md, mappings=PM)
+        assert len(lines) == 1
+        assert lines[0]["weight"] == 1
+        assert [l["review_id"] for l in lines[0]["links"]] == ["1", "2"]
+
+    def test_link_without_thesis_prefix(self):
+        """A bullet with no ': ' prefix carries no thesis."""
+        lines = parse_reference_lines(
+            "- [Книга](https://www.livelib.ru/book/1002920757)\n", mappings=PM)
+        assert lines[0]["thesis"] == ""
+        assert lines[0]["links"][0]["book_id"] == "1002920757"
+
+    def test_book_and_work_urls_extract_id(self):
+        md = ("- Т: [К](https://www.livelib.ru/book/1002920757-qqq)\n"
+              "- Т: [К](https://www.livelib.ru/work/1015122040)\n")
+        lines = parse_reference_lines(md, mappings=PM)
+        assert lines[0]["links"][0]["book_id"] == "1002920757"
+        assert lines[1]["links"][0]["book_id"] == "1015122040"
+
+    def test_plain_text_part_is_kept_as_note(self):
+        """'(to be published)' leftovers are reported, never turned into links."""
+        md = "- Тезис: [Книга](https://www.livelib.ru/review/1), Моя книга (to be published)\n"
+        lines = parse_reference_lines(md, mappings=PM)
+        assert len(lines[0]["links"]) == 1
+        assert lines[0]["plain"] == "Моя книга (to be published)"
+
+    def test_mappings_prefer_full_url(self):
+        md = "- Т: [К](https://www.livelib.ru/book/1002920757-qqq)\n"
+        lines = parse_reference_lines(md, mappings=PM)
+        assert lines[0]["links"][0]["slug"] == "kharari-sapiens"
+
+    def test_frontmatter_is_stripped(self):
+        lines = parse_reference_lines("---\ncomments: true\n---\n\n" + ref_line(), mappings=PM)
+        assert ref_line() in lines[0]["raw"]
+
+    def test_no_bullet_lines(self):
+        assert parse_reference_lines("just text\n", mappings=PM) == []
+
+
+class TestRenderP3References:
+    FM = "---\ncomments: true\ncreated: 18.06.2023\n---\n\n# Книги как фундамент\n\nВступительный абзац:\n"
+
+    @staticmethod
+    def note(title, review_url, *, important=None, weight=None, book_id="1008288064"):
+        fm = ['---', f'title: "{title}"', 'tags:', '  - book',
+              f'livelib_book: "https://www.livelib.ru/book/{book_id}"']
+        if review_url:
+            fm.append(f'livelib_review: "{review_url}"')
+        if important:
+            fm.append("important: true")
+        if weight is not None:
+            fm.append(f"weight: {weight}")
+        return "\n".join(fm) + "\n---\n\n> Цитата ^quote_1\n\n— [LiveLib](https://www.livelib.ru/quote/1)\n"
+
+    @staticmethod
+    def write_books(tmp_path, **notes):
+        """Write note files named by slug: write_books(tmp_path, a=md, b=md)."""
+        d = tmp_path / "books"
+        d.mkdir(parents=True, exist_ok=True)
+        for slug, md in notes.items():
+            (d / f"{slug}.md").write_text(md, encoding="utf-8")
+        return d
+
+    def test_renders_thesis_and_short_url(self, tmp_path):
+        books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note(
+            "Модель количественной оценки уровня счастья",
+            "https://www.livelib.ru/review/6390790-model", important=True, weight=1))
+        out = render_p3_references(books, [REVIEW_6390790])
+        assert ('- Про Счастье и Цифру: [Модель количественной оценки уровня счастья]'
+                '(https://www.livelib.ru/review/6390790)') in out["text"]
+
+    def test_important_ordering_by_weight(self, tmp_path):
+        a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=2, book_id="1")
+        b = TestRenderP3References.note("Б", "https://www.livelib.ru/review/2", important=True, weight=1, book_id="2")
+        c = TestRenderP3References.note("В", "https://www.livelib.ru/review/3", book_id="3")
+        reviews = [
+            {"id": 1, "title": "Тезис А", "url": "/review/1", "art_edition": {"id": 1, "url": "/book/1"}},
+            {"id": 2, "title": "Тезис Б", "url": "/review/2", "art_edition": {"id": 2, "url": "/book/2"}},
+        ]
+        books = TestRenderP3References.write_books(tmp_path, a=a, b=b, c=c)
+        out = render_p3_references(books, reviews)
+        body = [l for l in out["text"].splitlines() if l.startswith("- ")]
+        assert body == ["- Тезис Б: [Б](https://www.livelib.ru/review/2)",
+                       "- Тезис А: [А](https://www.livelib.ru/review/1)"]
+
+    def test_book_without_important_is_ignored(self, tmp_path):
+        books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("А", "https://www.livelib.ru/review/1", book_id="1"))
+        out = render_p3_references(books, [{"id": 1, "title": "Т", "url": "/review/1",
+                                          "art_edition": {"id": 1, "url": "/book/1"}}])
+        assert not [l for l in out["text"].splitlines() if l.startswith("- ")]
+
+    def test_multi_book_line_repeats_thesis(self, tmp_path):
+        """Multi-book line: thesis comes from each book's own review title."""
+        a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=1, book_id="1")
+        b = TestRenderP3References.note("Б", "https://www.livelib.ru/review/2", important=True, weight=1, book_id="2")
+        reviews = [
+            {"id": 1, "title": "Общий тезис", "url": "/review/1", "art_edition": {"id": 1, "url": "/book/1"}},
+            {"id": 2, "title": "Свой тезис Б", "url": "/review/2", "art_edition": {"id": 2, "url": "/book/2"}},
+        ]
+        lines = parse_reference_lines(
+            "- Общий тезис: [А](https://www.livelib.ru/review/1), [Б](https://www.livelib.ru/review/2)\n")
+        out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a, b=b), reviews, lines=lines)
+        body = [l for l in out["text"].splitlines() if l.startswith("- ")]
+        assert body == ["- Общий тезис: [А](https://www.livelib.ru/review/1)",
+                       "- Свой тезис Б: [Б](https://www.livelib.ru/review/2)"]
+
+    def test_book_link_when_no_review(self, tmp_path):
+        """A book with no own review links to /book/<id>; thesis from the line."""
+        books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("Книга без рецензии", None,
+                                                   important=True, weight=1, book_id="1005497029"))
+        out = render_p3_references(books, [], line_thesis={"a": "Тезис из строки"})
+        assert "- Тезис из строки: [Книга без рецензии](https://www.livelib.ru/book/1005497029)" \
+            in out["text"]
+
+    def test_book_link_without_thesis_drops_prefix_and_warns(self, tmp_path):
+        """Never invent a thesis: no prefix, and the book is reported."""
+        books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("Книга", None,
+                                                   important=True, weight=1, book_id="1005497029"))
+        out = render_p3_references(books, [])
+        assert "- [Книга](https://www.livelib.ru/book/1005497029)" in out["text"]
+        assert "- Тезис: [Книга]" not in out["text"]
+        assert out["warnings"] and out["warnings"][0]["slug"] == "a"
+        assert out["warnings"][0]["reason"] == "no-thesis"
+
+    def test_review_present_but_untitled_uses_line_thesis(self, tmp_path):
+        """Review exists but has no title: fall back to the line thesis, still warn."""
+        a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=1, book_id="1")
+        out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a),
+                                 [{"id": 1, "title": None, "url": "/review/1",
+                                   "art_edition": {"id": 1, "url": "/book/1"}}],
+                                 line_thesis={"a": "Тезис строки"})
+        assert "- Тезис строки: [А](https://www.livelib.ru/review/1)" in out["text"]
+        assert out["warnings"][0]["reason"] == "untitled-review"
+
+    def test_frontmatter_and_prose_preserved_verbatim(self, tmp_path):
+        a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=1, book_id="1")
+        reviews = [{"id": 1, "title": "Т", "url": "/review/1", "art_edition": {"id": 1, "url": "/book/1"}}]
+        out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a), reviews, header=self.FM)
+        assert out["text"].startswith(self.FM)
+        assert out["text"].endswith("- Т: [А](https://www.livelib.ru/review/1)\n")
+
+    def test_plain_part_appended(self, tmp_path):
+        """'to be published' style leftovers stay in the line, unlinked."""
+        a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=1, book_id="1")
+        reviews = [{"id": 1, "title": "Т", "url": "/review/1", "art_edition": {"id": 1, "url": "/book/1"}}]
+        out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a), reviews,
+                                 lines=parse_reference_lines(
+                                     "- Т: [А](https://www.livelib.ru/review/1), Моя книга (to be published)\n"))
+        assert "- Т: [А](https://www.livelib.ru/review/1), Моя книга (to be published)" in out["text"]
+
+    def test_line_links_keep_their_order(self, tmp_path):
+        """Within one line the order comes from the curated line, not from weight sort."""
+        b = TestRenderP3References.note("Б", "https://www.livelib.ru/review/2", important=True, weight=1, book_id="2")
+        a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=1, book_id="1")
+        reviews = [
+            {"id": 1, "title": "Т", "url": "/review/1", "art_edition": {"id": 1, "url": "/book/1"}},
+            {"id": 2, "title": "Т", "url": "/review/2", "art_edition": {"id": 2, "url": "/book/2"}},
+        ]
+        lines = parse_reference_lines(
+            "- Т: [А](https://www.livelib.ru/review/1), [Б](https://www.livelib.ru/review/2)\n")
+        out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a, b=b), reviews, lines=lines)
+        body = [l for l in out["text"].splitlines() if l.startswith("- ")]
+        assert body == ["- Т: [А](https://www.livelib.ru/review/1)",
+                       "- Т: [Б](https://www.livelib.ru/review/2)"]
+
+    def test_unmatched_line_link_is_kept_as_is(self, tmp_path):
+        """A line link with no note: line survives untouched (nothing is invented)."""
+        lines = parse_reference_lines(
+            "- Т: [Призрак](https://www.livelib.ru/review/9999999)\n")
+        books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("А", "https://www.livelib.ru/review/1",
+                                                   important=True, weight=1, book_id="1"))
+        out = render_p3_references(books, [], lines=lines)
+        assert "- Т: [Призрак](https://www.livelib.ru/review/9999999)" in out["text"]
+        assert out["warnings"][0]["reason"] == "unmatched-link"
+
+    def test_empty_projection_has_no_bullet_lines(self, tmp_path):
+        books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("А", None, book_id="1"))
+        out = render_p3_references(books, [], header=self.FM)
+        assert out["text"] == self.FM
+        assert out["warnings"] == []
+
+    def test_review_of_another_book_is_not_used_for_thesis(self, tmp_path):
+        """Link /book/X while the note owns a review of book Y: don't borrow Y's thesis.
+
+        The line is emitted with the /book/ target and no invented thesis; the
+        case is reported so a human can fix the note.
+        """
+        md = ('---\ntitle: "Икс"\nlivelib_book: "https://www.livelib.ru/book/1005497029"\n'
+              'livelib_review: "https://www.livelib.ru/review/777"\nimportant: true\nweight: 1\n---\n\n')
+        out = render_p3_references(self.write_books(tmp_path, x=md),
+                                  [{"id": 777, "title": "Чужой тезис", "url": "/review/777",
+                                    "art_edition": {"id": 999, "url": "/book/999"}}],
+                                  header=self.FM)
+        assert '- [Икс](https://www.livelib.ru/book/1005497029)' in out["text"]
+        assert "Чужой тезис" not in out["text"]
+        assert {"no-thesis", "foreign-review"} == {w["reason"] for w in out["warnings"]}
+
+    def test_review_of_the_same_book_is_used(self, tmp_path):
+        """A review whose URL names the note's own book id is the thesis source."""
+        md = ('---\ntitle: "Икс"\nlivelib_book: "https://www.livelib.ru/book/1005497029"\n'
+              'livelib_review: "https://www.livelib.ru/review/777-iks"\nimportant: true\nweight: 1\n---\n\n')
+        out = render_p3_references(self.write_books(tmp_path, x=md),
+                                  [{"id": 777, "title": "Свой тезис", "url": "/review/777",
+                                    "art_edition": {"id": 1005497029, "url": "/book/1005497029"}}],
+                                  header=self.FM)
+        assert '- Свой тезис: [Икс](https://www.livelib.ru/review/777)' in out["text"]
+        assert out["warnings"] == []

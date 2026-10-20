@@ -439,3 +439,209 @@ def validate_text_links(text_dir, books_dir, external_path=None, link_mappings_p
             else:
                 unresolved.append({"url": url, "file": chapter.name})
     return {"total": total, "resolved": resolved, "external": ext_n, "unresolved": unresolved}
+
+
+# ------------------------------------------------------------------ p3-references
+#
+# text/p3-references.md is a PROJECTION, not a source:
+#   importance   -> book frontmatter (`important: true` + `weight: <line number>`)
+#   thesis       -> title of the book's own LiveLib review
+#   link text    -> the book note's frontmatter title
+#   link target  -> short canonical livelib URL (/review/<id> or /book/<id>)
+# The generator NEVER invents a thesis: when neither the review nor the curated
+# line offers one, the bullet is emitted without the `thesis: ` prefix and the
+# book is reported in `warnings`.
+
+REF_BULLET = re.compile(r"^- (?P<body>.*\S)\s*$")
+REF_LINK = re.compile(r"\[(?P<name>[^\]]*)\]\((https?://(?:www\.)?livelib\.ru/(?P<kind>book|work|review)/(?P<id>\d+)[^)]*)\)")
+
+
+def _link_key(url: str) -> tuple[str, str] | None:
+    """(kind, id) of a livelib URL, or None when it is not a livelib book link."""
+    m = re.match(r"https?://(?:www\.)?livelib\.ru/(book|work|review)/(\d+)", url)
+    return (m.group(1), m.group(2)) if m else None
+
+
+def parse_reference_lines(md: str, mappings: dict | None = None) -> list[dict]:
+    """Parse curated bibliography bullets into {thesis, weight, links, raw, plain}.
+
+    weight is the 1-based number of the bullet line — frontmatter, headings and
+    prose do not shift it. `mappings` maps legacy livelib URLs to note slugs
+    (text/books/_curation/link-mappings.json), matched by id and kind so the
+    slug suffix of the URL does not matter.
+    """
+    mappings = mappings or {}
+    mapped_by_key = {}
+    for url, slug in mappings.items():
+        key = _link_key(url)
+        if key:
+            mapped_by_key[key] = slug
+
+    lines = []
+    for line in md.splitlines():
+        m = REF_BULLET.match(line)
+        if not m:
+            continue
+        body = m.group("body")
+        links = []
+        for lm in REF_LINK.finditer(body):
+            kind, rid = lm.group("kind"), lm.group("id")
+            links.append({
+                "name": lm.group("name"),
+                "url": f"https://www.livelib.ru/{kind}/{rid}",
+                "kind": kind,
+                "book_id": "" if kind == "review" else rid,
+                "review_id": rid if kind == "review" else "",
+                "slug": mapped_by_key.get((kind, rid), ""),
+            })
+        if not links:
+            continue
+        # text left after dropping links: 'thesis: , leftovers' — separators
+        # between links belong to the links, not to the prose
+        residue = REF_LINK.sub("", body)
+        thesis = re.split(r":", residue, maxsplit=1)[0].strip(" ,:\u2028")
+        if not thesis or len(thesis.split()) < 2:
+            thesis = ""  # no 'thesis: ' prefix on this line
+        lines.append({
+            "thesis": thesis,
+            "weight": len(lines) + 1,
+            "links": links,
+            "raw": line,
+            "plain": re.sub(r"^.*?:\s*", "", residue, count=1 if ":" in residue else 0).strip(" ,"),
+        })
+    return lines
+
+
+def _fm_scalar(fm: str, key: str) -> str | None:
+    """Scalar value of a frontmatter key ('' for `key:` with no value)."""
+    m = re.search(rf"^{key}:[ \t]*(.*?)[ \t]*$", fm, re.M)
+    return m.group(1).strip('"') if m else None
+
+
+def important_books(books_dir) -> list[dict]:
+    """Note-books marked `important: true`, ordered by `weight` (then by slug)."""
+    out = []
+    for note in sorted(pathlib.Path(books_dir).glob("*.md")):
+        m = re.match(r"---\n(.*?)\n---", note.read_text(encoding="utf-8"), re.S)
+        if not m:
+            continue
+        fm = m.group(1)
+        if (_fm_scalar(fm, "important") or "").lower() not in ("true", "yes"):
+            continue
+        weight = _fm_scalar(fm, "weight")
+        book_url = _fm_scalar(fm, "livelib_book") or ""
+        review_url = _fm_scalar(fm, "livelib_review") or ""
+        out.append({
+            "slug": note.stem,
+            "title": _fm_scalar(fm, "title") or note.stem,
+            "weight": int(weight) if weight and weight.isdigit() else 10 ** 6,
+            "book_id": _book_id(book_url) if book_url else "",
+            "review_id": _review_id(review_url),
+            # a review belongs to this note only when its own URL names the book
+            "review_book_id": _book_id(review_url) if review_url else "",
+            "edition_ids": {m2.group(1) for m2 in re.finditer(
+                r'^\s*-\s*"?https?://(?:www\.)?livelib\.ru/(?:book|work)/(\d+)', fm, re.M)},
+        })
+    out.sort(key=lambda b: (b["weight"], b["slug"]))
+    return out
+
+
+def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | None = None,
+                        header: str = "", line_thesis: dict | None = None) -> dict:
+    """Project `important` books into p3-references bullet lines.
+
+    lines — curated bullets from parse_reference_lines(): they define grouping
+    (books sharing a weight stay consecutive) and provide the thesis for books
+    whose LiveLib review carries no title. line_thesis ({slug: thesis}) supplies
+    the same fallback for callers that pass no lines. Without either, every
+    important book becomes its own line, thesis taken from its review only.
+
+    Returns {"text": ..., "items": [...], "warnings": [...]}; a warning is
+    {"slug", "reason", ...} with reason 'no-thesis' (line emitted without a
+    thesis), 'untitled-review' (review exists but is untitled, so the curated
+    line's thesis was used), 'foreign-review' (the note's review belongs to a
+    different work) or 'unmatched-link' (a curated link resolves to no note: the
+    line is kept verbatim).
+    """
+    books = important_books(books_dir)
+    by_slug = {b["slug"]: b for b in books}
+    by_review = {b["review_id"]: b for b in books if b["review_id"]}
+    by_book: dict[str, dict] = {}
+    for b in books:
+        if b["book_id"]:
+            by_book.setdefault(b["book_id"], b)
+        for eid in b["edition_ids"]:
+            by_book.setdefault(eid, b)
+    review_by_id = {str(r["id"]): r for r in reviews}
+    line_thesis = line_thesis or {}
+    warnings: list[dict] = []
+    items: list[tuple[int, int, str]] = []
+
+    def resolve(link: dict) -> dict | None:
+        return by_slug.get(link["slug"]) or by_review.get(link["review_id"]) or by_book.get(link["book_id"])
+
+    def own_review(book: dict) -> dict | None:
+        """The note's review, and only when it is a review of that very book.
+
+        A note keeps the review of a merged edition; borrowing the thesis of a
+        review that belongs to a different work would invent a claim, so such a
+        review is ignored and the case is reported as 'foreign-review'.
+        """
+        if not book["review_id"]:
+            return None
+        review = review_by_id.get(book["review_id"])
+        if review is None:
+            return None
+        target = _book_id((review.get("art_edition") or {}).get("url") or "")
+        book_ids = {book["book_id"], *book["edition_ids"]}
+        if target and target not in book_ids:
+            warnings.append({"slug": book["slug"], "reason": "foreign-review", "weight": None,
+                            "title": book["title"], "review_id": book["review_id"]})
+            return None
+        return review
+
+    def bullet(book: dict, thesis: str, weight: int, order: int) -> None:
+        review = own_review(book)
+        if review is not None and (review.get("title") or "").strip():
+            text, reason = review["title"].strip(), None
+        elif thesis or line_thesis.get(book["slug"]):
+            text, reason = (thesis or line_thesis[book["slug"]]), "untitled-review"
+        else:
+            text, reason = "", "no-thesis"
+        if reason:
+            warnings.append({"slug": book["slug"], "reason": reason, "weight": weight,
+                            "title": book["title"], "review_id": book["review_id"] or None})
+        url = (f"https://www.livelib.ru/review/{book['review_id']}" if review
+               else f"https://www.livelib.ru/book/{book['book_id']}")
+        link = f"[{book['title']}]({url})"
+        items.append((weight, order, f"- {text}: {link}" if text else f"- {link}"))
+
+    if lines is None:
+        for order, b in enumerate(books):
+            bullet(b, "", b["weight"], order)
+    else:
+        for ln in lines:
+            weight = ln["weight"]
+            picked = []
+            for link in ln["links"]:
+                book = resolve(link)
+                if book is None:
+                    warnings.append({"slug": None, "reason": "unmatched-link", "weight": weight,
+                                   "title": link["name"], "url": link["url"]})
+                else:
+                    picked.append(book)
+            if not picked:
+                items.append((weight, len(items), ln["raw"]))
+                continue
+            for order, book in enumerate(picked):
+                bullet(book, ln["thesis"], weight, len(items) + order)
+            if ln["plain"].strip(", :"):
+                # 'to be published' style leftovers stay in the line, unlinked
+                w, o, text = items[-1]
+                items[-1] = (w, o, f"{text}, {ln['plain'].strip().lstrip(',').strip()}")
+    items.sort(key=lambda t: (t[0], t[1]))
+    warnings.sort(key=lambda w: (w.get("weight") or 0, w.get("slug") or "", w.get("url") or ""))
+    text = header.rstrip("\n") + "\n" if header else ""
+    if items:
+        text += "\n" + "\n".join(t for _, _, t in items) + "\n"
+    return {"text": text, "items": [t for _, _, t in items], "warnings": warnings}
