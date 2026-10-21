@@ -448,6 +448,15 @@ def validate_text_links(text_dir, books_dir, external_path=None, link_mappings_p
 #   thesis       -> title of the book's own LiveLib review
 #   link text    -> the book note's frontmatter title
 #   link target  -> short canonical livelib URL of that very note
+#
+# Curated review target: when a line links /review/<R> and that link resolves to
+# a note WITHOUT a usable review of its own (no `livelib_review`, or one the
+# export says belongs to another work), the bullet keeps /review/<R>. The link is
+# what the author wrote, the reader lands on the review the line's thesis comes
+# from, and the id stays resolvable via _curation/link-mappings.json. A note that
+# CAN cite its own review still wins: the curated url is then the stale one and
+# gets normalized to the note's ids (a /book/ link never becomes a /review/).
+#
 # The generator NEVER invents a thesis: when neither the review nor the curated
 # line offers one, the bullet is emitted without the `thesis: ` prefix and the
 # book is reported in `warnings`.
@@ -588,6 +597,7 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
             by_book.setdefault(eid, b)
     review_by_id = {str(r["id"]): r for r in reviews}
     notes_with_review = {b["review_id"] for b in books if b["review_id"]}
+    declared_reviews = {b["review_id"] for b in books if b["review_id"]}
     line_thesis = line_thesis or {}
     warnings: list[dict] = []
     items: list[tuple[int, int, str]] = []
@@ -636,7 +646,7 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
             return None
         return review
 
-    def emit(book: dict, thesis: str, weight: int, order: int) -> None:
+    def emit(book: dict, thesis: str, weight: int, order: int, link: dict | None = None) -> None:
         review = note_review(book)
         if review is not None and (review.get("title") or "").strip():
             text, reason = review["title"].strip(), None
@@ -646,9 +656,25 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
             text, reason = "", "no-thesis"
         if reason:
             warn(book["slug"], reason, weight, book["title"], book["review_id"] or None)
-        # short canonical URL of the resolved note itself
-        url = (f"https://www.livelib.ru/review/{book['review_id']}" if review
-               else f"https://www.livelib.ru/book/{book['book_id']}")
+        # short canonical URL: the note's own review when it has one, else the
+        # note's book id — unless the curated link already pointed at a review
+        # and this note has nothing of its own to cite, in which case the
+        # curated target stays (see 'curated review target' in the header)
+        if review:
+            url = f"https://www.livelib.ru/review/{book['review_id']}"
+        elif (link is not None and link["kind"] == "review" and link["review_id"]
+                and link["review_id"] in review_by_id
+                # a review is cited by the note that DECLARES it: another note must
+                # not send the reader to a sibling shelf entry and still claim the
+                # line's thesis as its own source
+                and link["review_id"] not in declared_reviews - {book["review_id"]}):
+            # keep the target the author wrote: the reader lands on the resource
+            # the line's thesis refers to. Only its ID is kept — the note may not
+            # cite that review, so the thesis still comes from the line itself
+            url = f"https://www.livelib.ru/review/{link['review_id']}"
+        else:
+            # nothing to cite: the note's own book id, never a stranger's review
+            url = f"https://www.livelib.ru/book/{book['book_id']}"
         link = f"[{book['title']}]({url})"
         items.append((weight, order, f"- {text}: {link}" if text else f"- {link}"))
 
@@ -679,7 +705,7 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
                                 f"- {ln['thesis']}: [{link['name']}]({link['url']})"
                                 if ln["thesis"] else f"- [{link['name']}]({link['url']})"))
                     continue
-                emit(book, ln["thesis"], weight, len(items))
+                emit(book, ln["thesis"], weight, len(items), link)
             if ln["plain"].strip(", :"):
                 # 'to be published' style leftovers stay in the line, unlinked
                 w, o, text = items[-1]

@@ -1030,6 +1030,101 @@ class TestRenderP3References:
         assert "- Т: [Призрак](https://www.livelib.ru/review/9999999)" in out["text"]
         assert out["warnings"][0]["reason"] == "unmatched-link"
 
+    def test_curated_review_link_survives_when_the_note_has_no_review_of_its_own(self, tmp_path):
+        """A /review/ link that reaches its note through link-mappings, landing on
+        a note with no review of its own, keeps that review url.
+
+        Corpus shape (line 13 «Письма Баламута», review 5738980): the export
+        records the review's BODY under the other shelf entry of the same work, so
+        the work note carries no livelib_review and has nothing to cite. Rewriting
+        the target to the note's /book/ id would put the reader on a shelf page of
+        a different edition than the citation the bibliography was built from, and
+        would make the bullet uncheckable: a cited review has a title in the export
+        (thesis == that title), a cited book has none. A note that CAN cite its own
+        review still wins — see test_note_with_own_review_wins_...
+        """
+        md = ('---\ntitle: "Работа"\nlivelib_book: "https://www.livelib.ru/book/777"\n'
+              'important: true\nweight: 12\n---\n\n')
+        books = self.write_books(tmp_path, rabota=md)
+        reviews = [{"id": 4242, "title": "Тезис обзора", "url": "/review/4242-izdanie",
+                    "art_edition": {"id": 999, "url": "/book/999-izdanie"}}]
+        out = render_p3_references(
+            books, reviews,
+            lines=parse_reference_lines(
+                "- Тезис обзора: [Работа](https://www.livelib.ru/review/4242-izdanie)\n",
+                mappings={"https://www.livelib.ru/review/4242-izdanie": "rabota"}))
+        assert out["items"] == ["- Тезис обзора: [Работа](https://www.livelib.ru/review/4242)"], out["items"]
+
+    def test_note_with_own_review_wins_and_the_line_target_is_normalized(self, tmp_path):
+        """Counterpart: a note that CAN cite its review still overrides the line,
+        so keeping a curated target is not a general refusal to normalize.
+        """
+        a = TestRenderP3References.note("Книга", "https://www.livelib.ru/review/1",
+                                       important=True, weight=1, book_id="1")
+        books = TestRenderP3References.write_books(tmp_path, a=a)
+        reviews = [{"id": 1, "title": "Свой тезис", "url": "/review/1",
+                    "art_edition": {"id": 1, "url": "/book/1"}}]
+        out = render_p3_references(books, reviews, line_thesis={"a": "Общий тезис"},
+                                  lines=parse_reference_lines(
+                                      "- Общий тезис: [Книга](https://www.livelib.ru/book/1)\n"))
+        assert out["items"] == ["- Свой тезис: [Книга](https://www.livelib.ru/review/1)"], out["items"]
+
+    def test_note_reviewed_under_another_book_cites_its_book_not_that_review(self, tmp_path):
+        """A note whose review the export attributes to a DIFFERENT book cannot
+        cite it: the bullet cites the note's own /book/ id, not the /review/<R>
+        that lives in the other note. This is the 'foreign-review' case, and it
+        stays reported so a human can fix the frontmatter.
+        """
+        md = ('---\ntitle: "Икс"\nlivelib_book: "https://www.livelib.ru/book/1005497029"\n'
+              'livelib_review: "https://www.livelib.ru/review/777"\nimportant: true\nweight: 1\n---\n\n')
+        books = self.write_books(tmp_path, x=md)
+        reviews = [{"id": 777, "title": "Чужой тезис", "url": "/review/777",
+                    "art_edition": {"id": 999, "url": "/book/999"}}]
+        out = render_p3_references(books, reviews,
+                                  lines=parse_reference_lines(
+                                      "- Тезис строки: [Икс](https://www.livelib.ru/book/1005497029)\n"))
+        assert out["items"] == ["- Тезис строки: [Икс](https://www.livelib.ru/book/1005497029)"], out["items"]
+        assert "foreign-review" in {w["reason"] for w in out["warnings"]}, out["warnings"]
+
+    def test_line_target_is_normalized_when_it_names_the_note_itself(self, tmp_path):
+        """A line link naming the note's own book id stays a /book/ url: the
+        fallback keeps REVIEW targets only, it never invents a review target.
+        """
+        a = TestRenderP3References.note("Книга", None, important=True, weight=1, book_id="1005497029")
+        books = TestRenderP3References.write_books(tmp_path, a=a)
+        out = render_p3_references(books, [], line_thesis={"a": "Общий тезис"},
+                                  lines=parse_reference_lines(
+                                      "- Общий тезис: [Книга](https://www.livelib.ru/book/1005497029)\n"))
+        assert out["items"] == ["- Общий тезис: [Книга](https://www.livelib.ru/book/1005497029)"], out["items"]
+
+    def test_a_curated_line_of_two_books_emits_two_bullets_and_keeps_two_targets(self, tmp_path):
+        """One curated line, two notes — the corpus line 'Художественно про
+        центричность — Бог или Я' (weight 15: «Лавр» + «Оправдание Острова»),
+        reproduced in a mini corpus.
+
+        Each book gets its own bullet, both carrying the line's thesis; the book
+        with its own review cites that review, the one without cites its /book/
+        id. Both ids map to the shared weight, so the thesis is verifiable for
+        either bullet. Nothing is invented, nothing is dropped by the split.
+        """
+        a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1",
+                                       important=True, weight=15, book_id="1")
+        c = TestRenderP3References.note("В", None, important=True, weight=15, book_id="1005497029")
+        books = TestRenderP3References.write_books(tmp_path, a=a, c=c)
+        reviews = [{"id": 1, "title": "Тезис строки", "url": "/review/1",
+                    "art_edition": {"id": 1, "url": "/book/1"}}]
+        lines = parse_reference_lines(
+            "- Тезис строки: [А](https://www.livelib.ru/review/1), "
+            "[В](https://www.livelib.ru/book/1005497029)\n")
+        out = render_p3_references(books, reviews, lines=lines)
+        assert out["items"] == ["- Тезис строки: [А](https://www.livelib.ru/review/1)",
+                               "- Тезис строки: [В](https://www.livelib.ru/book/1005497029)"], out["items"]
+        notes = important_books(books)
+        assert [b["weight"] for b in notes] == [15, 15], notes
+        # both citation targets of that one line reach the same weight
+        weight_of = {b["review_id"] or b["book_id"]: b["weight"] for b in notes}
+        assert weight_of == {"1": 15, "1005497029": 15}, weight_of
+
     def test_empty_projection_has_no_bullet_lines(self, tmp_path):
         books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("А", None, book_id="1"))
         out = render_p3_references(books, [], header=self.FM)
@@ -1206,36 +1301,121 @@ class TestP3Contract:
             assert by_note_weight.get(weight_of[rid]) == thesis, item
         assert checked >= 20, checked
 
-    def test_thesis_always_comes_from_data(self):
-        """Every thesis is that book's LiveLib review title, or its line's thesis.
+    def test_thesis_never_comes_from_a_stranger_note(self):
+        """A thesis may only come from the book's own review or from a curated
+        line that NAMES that book.
 
-        The curated line is found by the NOTE's frontmatter weight (important/
-        weight in the note), not by enumerating the bullets of the generated
-        file: after a multi-book line was split into one bullet per book the
-        bullets no longer number 1..N and a position-based lookup silently reads
-        the neighbour line's thesis.
+        Contract, per bullet:
+          (a) if the id the bullet cites is a titled review, the thesis printed is
+              that title (export data; also checked against reviews.json elsewhere);
+          (b) otherwise the thesis must be the thesis of a curated line that links
+              one of the ids THIS note declares (its book/review/edition ids from
+              frontmatter) — i.e. the line the bibliography wrote about this book;
+          (c) or there is no thesis at all.
+        Anything else means the generator borrowed a thesis from a neighbour: the
+        usual failure is a weight collision, where the thesis of the line whose
+        weight happens to equal this note's weight gets printed on a book the line
+        never mentions.
 
-        Never invented: a bullet may carry NO thesis only when its own review is
-        titled (then the title itself is the thesis, which is the bullet) — i.e.
-        the check is 'review title == thesis', so a titleless review may not drop
-        the prefix, it must fall back to the line it belongs to.
+        Provenance is deliberately narrow: only the note's own frontmatter ids plus
+        the curated file. link-mappings.json is NOT used (it is the generator's
+        premise, using it would read the generator back), and no assumption is made
+        about one bullet per line or about contiguous weights.
         """
         d = self.data()
         titled = {str(r["id"]): (r.get("title") or "").strip() for r in d["reviews"] if r.get("title")}
-        by_weight = {ln["weight"]: ln["thesis"] for ln in d["lines"]}
-        weight_of = {}
-        for b in d["books"]:
-            for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
-                if i:
-                    weight_of.setdefault(i, b["weight"])
+        declared = self.declared_weights(d["books"])          # id -> note weight
+        licensed: dict[str, set[str]] = {}                    # id -> theses of lines linking it
+        for ln in d["lines"]:
+            if not ln["thesis"]:
+                continue
+            for l in ln["links"]:
+                for i in {l["book_id"], l["review_id"]}:
+                    if i:
+                        licensed.setdefault(i, set()).add(ln["thesis"])
+        checked = 0
         for item in d["out"]["items"]:
             if ": [" not in item:
                 continue
             thesis = item[2:].rsplit(": [", 1)[0]
-            m = self.LINK.search(item)
-            rid = m.group("id")
-            ok = titled.get(rid) == thesis or thesis == by_weight.get(weight_of.get(rid))
+            rid = self.LINK.search(item).group("id")
+            # a cited review is not declared by any note frontmatter when the
+            # export records its body under another shelf entry of the same work;
+            # such a bullet is exactly the (b) case, so traceability (a bullet that
+            # carries a thesis must be traceable) is checked on the thesis source
+            ok = titled.get(rid) == thesis or thesis in licensed.get(rid, set())
             assert ok, item
+            if not titled.get(rid):
+                assert declared.get(rid) is not None or thesis, item
+            checked += 1
+        assert checked >= 20, checked
+
+    def declared_weights(self, books):
+        """id -> weight, from the ids the notes DECLARE in their frontmatter only.
+
+        Deliberately NOT enriched with link-mappings: the curation file names the
+        note a text link stands for, and if the test used it the test would be
+        reading the generator's own premise back. Weight provenance in the test is
+        therefore only what a note states about itself.
+        """
+        weight_of = {}
+        for b in books:
+            for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
+                if i and b["weight"] is not None:
+                    weight_of.setdefault(i, b["weight"])
+        return weight_of
+
+    def test_every_important_note_declares_its_weight(self):
+        """Precondition of the weight-keyed fallback: every important note carries a
+        weight, so every line the migration resolved has a weight to be found by.
+        An unnumbered important note would leave its bullet's thesis untraceable,
+        and the fallback would silently pass — so this must be checked, not assumed.
+        """
+        d = self.data()
+        unnumbered = [b["slug"] for b in d["books"] if b["weight"] is None]
+        assert not unnumbered, unnumbered
+
+    def test_the_curated_line_is_reproduced_in_order_and_from_its_own_data(self):
+        """The contract, stated without any id -> weight map at all.
+
+        Walk the curated file and the generated file together: both are ordered by
+        weight, and one curated line owns as many bullets as it has links (a
+        multi-book line is split). For every pair:
+          * the target is short-form and its label is the resolved note's title;
+          * the thesis in front of the link is EITHER the title of the review the
+            bullet cites (data: the export) OR the curated line's own thesis
+            (data: the file);
+          * when neither source offers a thesis, the bullet carries none — the
+            generator may not fill the gap with anything of its own.
+        Because the pairing uses only the curated file's own structure, this is
+        the non-circular form of the check: no fact is taken from the generator.
+        """
+        d = self.data()
+        titled = {str(r["id"]): (r.get("title") or "").strip() for r in d["reviews"] if r.get("title")}
+        by_slug = {b["slug"]: b for b in d["books"]}
+        items = list(d["out"]["items"])
+        pos = 0
+        checked = 0
+        for ln in d["lines"]:
+            n = len(ln["links"])
+            mine = items[pos:pos + n]
+            pos += n
+            assert len(mine) == n, (ln["weight"], ln["raw"], mine)
+            for link, item in zip(ln["links"], mine):
+                m = self.LINK.search(item)
+                assert m is not None, (ln["raw"], item)
+                assert re.fullmatch(r"https://www\.livelib\.ru/(book|review)/\d+", m.group("url")), item
+                thesis = item[2:].rsplit(": [", 1)[0] if ": [" in item else ""
+                title = titled.get(m.group("id")) or ""
+                if title:
+                    assert thesis == title, (ln["raw"], item)
+                else:
+                    assert thesis in ("", ln["thesis"]), (ln["raw"], item)
+                if link["slug"] in by_slug:
+                    assert m.group("name") == by_slug[link["slug"]]["title"], (ln["raw"], item)
+                checked += 1
+        assert pos == len(items), (pos, len(items))
+        assert checked >= 20, checked
 
     def test_important_book_without_any_thesis_drops_the_prefix(self):
         """No thesis for an important book => no `thesis: ` prefix, and reported.
