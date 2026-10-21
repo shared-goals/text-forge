@@ -1063,6 +1063,18 @@ class TestRenderP3References:
         assert '- Свой тезис: [Икс](https://www.livelib.ru/review/777)' in out["text"]
         assert out["warnings"] == []
 
+    def test_weight_of_an_unnumbered_note_is_none(self, tmp_path):
+        """`important: true` without `weight:` reads back as None, never as 1.
+
+        The p3 fallback is keyed by weight, so a note that was never placed in
+        the bibliography must be visibly unplaceable — reading it as 1 would
+        silently borrow the thesis of the first bullet.
+        """
+        md = ('---\ntitle: "Икс"\nlivelib_book: "https://www.livelib.ru/book/1005497029"\n'
+              'important: true\n---\n\n')
+        books = important_books(self.write_books(tmp_path, x=md))
+        assert [(b["slug"], b["weight"]) for b in books] == [("x", None)]
+
 
 class TestP3Contract:
     """Contract against the hand-curated text/p3-references.md (repo data).
@@ -1153,8 +1165,61 @@ class TestP3Contract:
                     continue
                 assert m.group("name") == title, item
 
+    def test_weight_map_is_sufficient_and_line_thesis_is_matched_by_note_weight(self):
+        """A bullet that cites its own review may drop the `thesis: ` prefix ONLY
+        if its note carries a weight — the key the curated line is found by.
+
+        Weight is the only link between a generated bullet and the curated line
+        that owns its thesis, so this is the non-circular form of the fallback:
+        bullets are looked up by the NOTE's frontmatter weight, never by their
+        own position in the generated file (position desynchronizes from weight
+        as soon as a multi-book line is split into one bullet per book).
+
+        Sufficiency: every cited id (a bullet that carries no thesis must still
+        be traceable) resolves to a weighted note. If a cited review belongs to
+        no note, the fallback can prove nothing about that bullet and it must
+        carry its line's thesis instead of silently dropping it.
+        """
+        d = self.data()
+        for b in d["books"]:
+            assert b["weight"] is not None, (b["slug"], "important without weight")
+        by_note_weight = {book["weight"]: ln["thesis"]
+                          for ln in d["lines"] if ln["thesis"]
+                          for book in d["books"] if book["weight"] == ln["weight"]}
+        weight_of = {}
+        for b in d["books"]:
+            for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
+                if i:
+                    weight_of.setdefault(i, b["weight"])
+        checked = 0
+        for item in d["out"]["items"]:
+            m = self.LINK.search(item)
+            if m is None:
+                continue
+            if ": [" in item:
+                checked += 1
+                continue
+            thesis = ""
+            rid = m.group("id")
+            assert weight_of.get(rid) is not None, \
+                f"cited id {rid} belongs to no weighted note: {item}"
+            assert by_note_weight.get(weight_of[rid]) == thesis, item
+        assert checked >= 20, checked
+
     def test_thesis_always_comes_from_data(self):
-        """Every thesis is that book's LiveLib review title, or its line's thesis."""
+        """Every thesis is that book's LiveLib review title, or its line's thesis.
+
+        The curated line is found by the NOTE's frontmatter weight (important/
+        weight in the note), not by enumerating the bullets of the generated
+        file: after a multi-book line was split into one bullet per book the
+        bullets no longer number 1..N and a position-based lookup silently reads
+        the neighbour line's thesis.
+
+        Never invented: a bullet may carry NO thesis only when its own review is
+        titled (then the title itself is the thesis, which is the bullet) — i.e.
+        the check is 'review title == thesis', so a titleless review may not drop
+        the prefix, it must fall back to the line it belongs to.
+        """
         d = self.data()
         titled = {str(r["id"]): (r.get("title") or "").strip() for r in d["reviews"] if r.get("title")}
         by_weight = {ln["weight"]: ln["thesis"] for ln in d["lines"]}
