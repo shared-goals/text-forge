@@ -460,6 +460,31 @@ def validate_text_links(text_dir, books_dir, external_path=None, link_mappings_p
 # The generator NEVER invents a thesis: when neither the review nor the curated
 # line offers one, the bullet is emitted without the `thesis: ` prefix and the
 # book is reported in `warnings`.
+#
+# The page's own words (frontmatter, title, intro) belong to THIS template, not
+# to a legacy file: a caller that hands in a `header=` carved out of the old
+# file can truncate it (and one did — the closing `---`, the heading and the
+# intro paragraph were lost). Emitting the whole page from versioned constants
+# makes the output correct by construction.
+
+P3_FRONTMATTER = (
+    "---\n"
+    "comments: true\n"
+    "created: 18.06.2023\n"
+    "published: 22.10.2023\n"
+    "description: Наш Текст — это сборка смыслов, взятых из книг "
+    "и успешно применяемых на практике.\n"
+    "---\n"
+)
+P3_TITLE = "Книги как фундамент"
+P3_INTRO = ("В тексте были использованы упоминания и выдержки из книг, которые "
+            "особенно запомнились или были прочитаны во время написания:")
+
+
+def p3_header() -> str:
+    """The whole page head: closed frontmatter, H1 and intro, trailing blank line."""
+    return f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n"
+
 
 REF_BULLET = re.compile(r"^- (?P<body>.*\S)\s*$")
 REF_LINK = re.compile(r"\[(?P<name>[^\]]*)\]\((?P<url>https?://(?:www\.)?livelib\.ru/"
@@ -571,8 +596,13 @@ def important_books(books_dir) -> list[dict]:
 
 
 def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | None = None,
-                        header: str = "", line_thesis: dict | None = None) -> dict:
-    """Project `important` books into p3-references bullet lines.
+                        line_thesis: dict | None = None) -> dict:
+    """Project `important` books into the p3-references page.
+
+    The returned `text` is the WHOLE page: closed frontmatter, `# {P3_TITLE}`, the
+    intro line and the bullets — all from this module's template constants, so a
+    no-argument call already produces a valid file. `items` holds the bullets
+    only (no header).
 
     lines — curated bullets from parse_reference_lines(): they define grouping
     (books sharing a weight stay consecutive) and provide the thesis for books
@@ -712,7 +742,7 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
                 items[-1] = (w, o, f"{text}, {ln['plain'].strip().lstrip(',').strip()}")
     items.sort(key=lambda t: (t[0] is None, t[0] or 0, t[1]))
     warnings.sort(key=lambda w: (w.get("weight") or 0, w.get("slug") or "", w.get("url") or ""))
-    text = header.rstrip("\n") + "\n" if header else ""
+    text = p3_header()
     if items:
         text += "\n" + "\n".join(t for _, _, t in items) + "\n"
     return {"text": text, "items": [t for _, _, t in items], "warnings": warnings}
