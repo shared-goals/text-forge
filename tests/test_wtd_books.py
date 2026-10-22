@@ -8,16 +8,18 @@ import re
 import pytest
 
 from text_forge.wtd_books import (
-    make_slug,
-    group_export,
-    render_note,
+    P3_FRONTMATTER,
+    P3_INTRO,
+    P3_TITLE,
     build_books,
-    validate_text_links,
-    parse_reference_lines,
-    render_p3_references,
+    group_export,
     important_books,
+    make_slug,
+    parse_reference_lines,
+    render_note,
+    render_p3_references,
+    validate_text_links,
 )
-
 
 Q1 = {
     "id": 1,
@@ -880,7 +882,10 @@ class TestParseReferenceLines:
 
 
 class TestRenderP3References:
-    FM = "---\ncomments: true\ncreated: 18.06.2023\n---\n\n# Книги как фундамент\n\nВступительный абзац:\n"
+    # the page's own words live in the generator template now (P3_FRONTMATTER /
+    # P3_TITLE / P3_INTRO); fixtures assert against the template, not a header
+    # carved out of a legacy file
+    FM = f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n"
 
     @staticmethod
     def note(title, review_url, *, important=None, weight=None, book_id="1008288064"):
@@ -989,10 +994,10 @@ class TestRenderP3References:
         assert "- Тезис строки: [А](https://www.livelib.ru/review/1)" in out["text"]
         assert out["warnings"][0]["reason"] == "untitled-review"
 
-    def test_frontmatter_and_prose_preserved_verbatim(self, tmp_path):
+    def test_template_header_is_emitted_verbatim(self, tmp_path):
         a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=1, book_id="1")
         reviews = [{"id": 1, "title": "Т", "url": "/review/1", "art_edition": {"id": 1, "url": "/book/1"}}]
-        out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a), reviews, header=self.FM)
+        out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a), reviews)
         assert out["text"].startswith(self.FM)
         assert out["text"].endswith("- Т: [А](https://www.livelib.ru/review/1)\n")
 
@@ -1127,7 +1132,7 @@ class TestRenderP3References:
 
     def test_empty_projection_has_no_bullet_lines(self, tmp_path):
         books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("А", None, book_id="1"))
-        out = render_p3_references(books, [], header=self.FM)
+        out = render_p3_references(books, [])
         assert out["text"] == self.FM
         assert out["warnings"] == []
 
@@ -1141,8 +1146,7 @@ class TestRenderP3References:
               'livelib_review: "https://www.livelib.ru/review/777"\nimportant: true\nweight: 1\n---\n\n')
         out = render_p3_references(self.write_books(tmp_path, x=md),
                                   [{"id": 777, "title": "Чужой тезис", "url": "/review/777",
-                                    "art_edition": {"id": 999, "url": "/book/999"}}],
-                                  header=self.FM)
+                                    "art_edition": {"id": 999, "url": "/book/999"}}])
         assert '- [Икс](https://www.livelib.ru/book/1005497029)' in out["text"]
         assert "Чужой тезис" not in out["text"]
         assert {"no-thesis", "foreign-review"} == {w["reason"] for w in out["warnings"]}
@@ -1153,8 +1157,7 @@ class TestRenderP3References:
               'livelib_review: "https://www.livelib.ru/review/777-iks"\nimportant: true\nweight: 1\n---\n\n')
         out = render_p3_references(self.write_books(tmp_path, x=md),
                                   [{"id": 777, "title": "Свой тезис", "url": "/review/777",
-                                    "art_edition": {"id": 1005497029, "url": "/book/1005497029"}}],
-                                  header=self.FM)
+                                    "art_edition": {"id": 1005497029, "url": "/book/1005497029"}}])
         assert '- Свой тезис: [Икс](https://www.livelib.ru/review/777)' in out["text"]
         assert out["warnings"] == []
 
@@ -1169,6 +1172,100 @@ class TestRenderP3References:
               'important: true\n---\n\n')
         books = important_books(self.write_books(tmp_path, x=md))
         assert [(b["slug"], b["weight"]) for b in books] == [("x", None)]
+
+
+class TestP3Template:
+    """The page's own words belong to the GENERATOR, not to a legacy file.
+
+    p3-references.md is a projection; its title and intro used to be handed in
+    as `header=` carved out of the curated file — which is exactly how a
+    controller call lost the closing `---`, the `# Книги как фундамент` heading
+    and the intro paragraph. The template is now the single source, versioned
+    here, and a call with no arguments emits the whole page.
+    """
+
+    def test_template_constants(self):
+        assert P3_TITLE == "Книги как фундамент"
+        assert P3_INTRO == (
+            "В тексте были использованы упоминания и выдержки из книг, которые "
+            "особенно запомнились или были прочитаны во время написания:")
+        assert P3_FRONTMATTER.startswith("---\n")
+        assert P3_FRONTMATTER.rstrip("\n").endswith("---")
+        assert "comments: true" in P3_FRONTMATTER
+        assert "created: 18.06.2023" in P3_FRONTMATTER
+        assert "published: 22.10.2023" in P3_FRONTMATTER
+        assert ("description: Наш Текст — это сборка смыслов, взятых из книг "
+                "и успешно применяемых на практике.") in P3_FRONTMATTER
+
+    def test_no_argument_output_starts_with_closed_frontmatter(self, tmp_path):
+        """RED: the default path must emit the whole page, frontmatter CLOSED."""
+        a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1",
+                                       important=True, weight=1, book_id="1")
+        reviews = [{"id": 1, "title": "Т", "url": "/review/1",
+                   "art_edition": {"id": 1, "url": "/book/1"}}]
+        text = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a),
+                                   reviews)["text"]
+        # the canonical text, spelled out — not copied from the constants under test
+        assert text.startswith(
+            "---\n"
+            "comments: true\n"
+            "created: 18.06.2023\n"
+            "published: 22.10.2023\n"
+            "description: Наш Текст — это сборка смыслов, взятых из книг "
+            "и успешно применяемых на практике.\n"
+            "---\n\n"
+            "# Книги как фундамент\n\n"
+            "В тексте были использованы упоминания и выдержки из книг, которые "
+            "особенно запомнились или были прочитаны во время написания:\n\n"
+        )
+        assert text.startswith(P3_FRONTMATTER)
+        # the opening `---` has a closing partner before any prose
+        assert text.count("---") == 2, text
+        h1 = text.index("# Книги как фундамент")
+        assert h1 < text.index("В тексте были использованы")
+        assert h1 < text.index("\n- ")
+        assert "\n# Книги как фундамент\n\n" in text
+        assert f"\n{P3_INTRO}\n\n" in text
+        assert text.endswith("- Т: [А](https://www.livelib.ru/review/1)\n")
+
+    def test_frontmatter_field_order_is_comments_created_published_description(self, tmp_path):
+        a = TestRenderP3References.note("А", None, important=True, weight=1, book_id="1")
+        text = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a), [])["text"]
+        block = text.split("\n")[1:]  # after the opening ---
+        keys = [l.split(":")[0] for l in block if re.match(r"^[a-z_]+:", l)]
+        assert keys == ["comments", "created", "published", "description"]
+
+    def test_structure_order_frontmatter_h1_intro_bullets(self, tmp_path):
+        """Full page shape: closed frontmatter -> H1 -> intro -> bullets."""
+        a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1",
+                                       important=True, weight=2, book_id="1")
+        b = TestRenderP3References.note("Б", "https://www.livelib.ru/review/2",
+                                       important=True, weight=1, book_id="2")
+        reviews = [
+            {"id": 1, "title": "Тезис А", "url": "/review/1", "art_edition": {"id": 1, "url": "/book/1"}},
+            {"id": 2, "title": "Тезис Б", "url": "/review/2", "art_edition": {"id": 2, "url": "/book/2"}},
+        ]
+        text = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a, b=b),
+                                   reviews)["text"]
+        expected = (f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n\n"
+                   "- Тезис Б: [Б](https://www.livelib.ru/review/2)\n"
+                   "- Тезис А: [А](https://www.livelib.ru/review/1)\n")
+        assert text == expected
+
+    def test_empty_projection_still_emits_the_whole_page(self, tmp_path):
+        """No important books: the page is still a page, not an empty fragment."""
+        books = TestRenderP3References.write_books(
+            tmp_path, a=TestRenderP3References.note("А", None, book_id="1"))
+        out = render_p3_references(books, [])
+        assert out["items"] == []
+        assert out["text"] == f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n"
+
+    def test_header_argument_is_gone(self):
+        """YAGNI: no caller needs a hand-carved header anymore."""
+        import inspect
+        sig = inspect.signature(render_p3_references)
+        assert "header" not in sig.parameters
+        assert set(sig.parameters) == {"books_dir", "reviews", "lines", "line_thesis"}
 
 
 class TestP3Contract:
@@ -1206,9 +1303,11 @@ class TestP3Contract:
         reviews = json.loads((self.REPO.parent / "shag" / "livelib-export"
                              / "livelib-reviews-api.json").read_text(encoding="utf-8"))
         lines = parse_reference_lines(ref, mappings)
+        # the curated file's own header: everything before the first bullet. Used
+        # only to CHECK the generated page against it — never fed back into the
+        # generator, which owns its title and intro (P3_TITLE / P3_INTRO).
         header = ref[:min(ref.index(l["raw"]) for l in lines)]
-        out = render_p3_references(self.REPO / "text" / "books", reviews,
-                                  lines=lines, header=header)
+        out = render_p3_references(self.REPO / "text" / "books", reviews, lines=lines)
         books = important_books(self.REPO / "text" / "books")
         return dict(ref=ref, header=header, lines=lines, reviews=reviews,
                     out=out, books=books, mappings=mappings)
@@ -1224,9 +1323,95 @@ class TestP3Contract:
                 ids |= {b["book_id"], *b["edition_ids"], b["review_id"]}
         return ids
 
-    def test_header_is_preserved_verbatim(self):
+    def test_generated_text_has_closed_frontmatter_then_h1_intro_bullets(self):
+        """The contract the controller uses to regenerate the real file.
+
+        Driven by the real corpus (book frontmatter + export + curated lines), but
+        asserted only on the SHAPE of the generated page: a CLOSED frontmatter
+        block, then the H1, then the intro, then bullets ordered by the notes'
+        weight. The regression this pins: a controller call handed in a truncated
+        `header=` and the corpus file lost its closing `---`, its heading and its
+        intro. `items` must stay bullets-only — the header is not part of them.
+
+        Links that resolve through _curation/link-mappings.json to a note with no
+        review of its own (the 'Письма Баламута' shape) may not be keyed by
+        weight: only the ids a note DECLARES are trustworthy, so those bullets are
+        reported as unmatched-by-declaration and checked by position instead.
+        """
         d = self.data()
-        assert d["header"] and d["out"]["text"].startswith(d["header"])
+        text = d["out"]["text"]
+        lines = text.splitlines()
+        # 1. frontmatter is opened and CLOSED (the file on disk is the damaged
+        #    side; the generated output must not be)
+        assert lines[0] == "---", text[:200]
+        close = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
+        assert close is not None, "frontmatter is not closed:\n" + text[:300]
+        assert text.count("---") == 2, text[:300]
+        # 2. H1 and intro follow, before any bullet
+        rest = "\n".join(lines[close + 1:])
+        assert rest.startswith(f"\n# {P3_TITLE}\n\n{P3_INTRO}\n"), rest[:200]
+        first_bullet = min((i for i, l in enumerate(lines) if l.startswith("- ")), default=None)
+        assert first_bullet is not None
+        assert first_bullet > close, (close, first_bullet)
+        assert lines.index(f"# {P3_TITLE}") < lines.index(P3_INTRO) < first_bullet
+        # 3. bullets, in weight order, and nothing but bullets
+        bullets = [l for l in lines[first_bullet:]]
+        assert all(l.startswith("- ") for l in bullets), bullets
+        assert bullets == d["out"]["items"], "header leaked into items"
+        weight_of = {}
+        for b in d["books"]:
+            for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
+                if i:
+                    weight_of.setdefault(i, b["weight"])
+        declared, undeclared = [], []
+        for l in bullets:
+            m = self.LINK.search(l)
+            assert m is not None, l
+            (declared if weight_of.get(m.group("id")) is not None else undeclared).append(
+                weight_of.get(m.group("id")))
+        assert None not in declared
+        assert declared == sorted(declared), declared
+        # what the corpus cannot key by declared ids is small and reported
+        assert len(undeclared) <= 2, undeclared
+        assert len(declared) >= 20, len(declared)
+        # a bullet the note declares nothing about is placed by its curated line's
+        # weight, which the mapping file names — so it must still sit between the
+        # weights of its neighbours (order is right even where ids are not)
+        prev = 0
+        for l in bullets:
+            rid = self.LINK.search(l).group("id")
+            w = weight_of.get(rid)
+            if w is None:
+                slug = d["mappings"].get(f"https://www.livelib.ru/review/{rid}") \
+                    or d["mappings"].get(f"https://www.livelib.ru/book/{rid}")
+                w = next((b["weight"] for b in d["books"] if b["slug"] == slug), None)
+                assert w is not None and prev <= w, (prev, w, l)
+            assert prev <= w, (prev, w, l)
+            prev = w
+
+    def test_template_header_matches_the_curated_header(self):
+        """The template is the source of the page's own words.
+
+        Frontmatter fields, the H1 and the intro the generator emits must equal
+        what the curated file carries. The applied corpus file is damaged here by
+        design — a truncated `header=` argument cost it its closing `---`, its
+        heading and its intro — so the comparison is field by field, and the test
+        also pins that the damage is on the FILE's side (the generated output is
+        the complete one), which is what the controller must regenerate.
+        """
+        d = self.data()
+        header, text = d["header"], d["out"]["text"]
+        assert header
+        cur = {k: v for k, v in re.findall(r"^([a-z_]+): (.*)$", header, re.MULTILINE)}
+        gen = {k: v for k, v in re.findall(r"^([a-z_]+): (.*)$", text, re.MULTILINE)}
+        assert cur and cur == gen, (cur, gen)
+        assert f"# {P3_TITLE}" in text and P3_INTRO in text
+        assert f"# {P3_TITLE}\n\n{P3_INTRO}" in text
+        # the file is the truncated side: the generator emits MORE than it holds
+        assert text.startswith(header.rstrip("\n"))
+        assert not header.rstrip("\n").endswith("---"), "corpus header looks repaired already"
+        # the header is not part of the projected items
+        assert not any(l.startswith(("---", "# ")) for l in d["out"]["items"])
 
     def test_resolved_links_keep_ids_short_form_and_same_resource(self):
         """(a) resolvable links: same id, short /book/ or /review/ form."""
@@ -1497,3 +1682,109 @@ class TestP3Contract:
                     continue
                 nids = {i for i, _, _ in self.links(new)}
                 assert oid in nids or self.ids_of(self.REPO / "text" / "books", oid) & nids, (old, new)
+
+class TestP3CorpusRoundTrip:
+    """Round-trip proof on a tmp mini corpus built FROM the real corpus.
+
+    The corpus is read (never written) to derive a self-contained mini corpus —
+    the notes the bibliography's links resolve to, plus the export reviews they
+    cite — and that tmp corpus must regenerate the whole page: a CLOSED
+    frontmatter block, then the H1, then the intro, then bullets in the notes'
+    weight order. The bibliography handed to `lines` is rebuilt from the notes'
+    own declared ids, so the page comes from corpus data alone and no legacy
+    header is carried anywhere — the regression this pins. Skipped when the repo
+    data is not available.
+    """
+
+    REPO = pathlib.Path(__file__).resolve().parents[2] / "whattodo"
+    LINK = re.compile(r"\[(?P<name>[^\]]*)\]\((?P<url>https?://(?:www\.)?livelib\.ru/"
+                      r"(?P<kind>book|work|review)/(?P<id>\d+)[^)]*)\)")
+
+    def setup_method(self):
+        if not (self.REPO / "text" / "p3-references.md").exists():
+            pytest.skip("whattodo repo data not available")
+
+    def mini_corpus(self, books_out):
+        """Copy the resolved notes into tmp; return (bibliography, reviews, slugs)."""
+        ref = (self.REPO / "text" / "p3-references.md").read_text(encoding="utf-8")
+        books_dir = self.REPO / "text" / "books"
+        reviews = json.loads((self.REPO.parent / "shag" / "livelib-export"
+                             / "livelib-reviews-api.json").read_text(encoding="utf-8"))
+        titled = {str(r["id"]): (r.get("title") or "").strip() for r in reviews}
+        review_ids = set(titled)
+        notes = {b["slug"]: b for b in important_books(books_dir)}
+        # id -> slug, from the ids the notes DECLARE about themselves only
+        id_to_slug = {}
+        for slug, b in notes.items():
+            for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
+                if i:
+                    id_to_slug.setdefault(i, slug)
+        bullets, cited, copied, emitted = [], set(), set(), set()
+        for line in ref.splitlines():
+            if not line.startswith("- "):
+                continue
+            thesis = line[2:].rsplit(": [", 1)[0] if ": [" in line else ""
+            keep = []
+            for m in self.LINK.finditer(line):
+                rid = m.group("id")
+                slug = id_to_slug.get(rid)
+                if slug is None:
+                    continue                    # the link names no note: nothing to copy
+                if slug not in copied:
+                    copied.add(slug)
+                    (books_out / f"{slug}.md").write_text(
+                        (books_dir / f"{slug}.md").read_text(encoding="utf-8"),
+                        encoding="utf-8")
+                book = notes[slug]
+                if not book["review_id"] or book["review_id"] not in review_ids:
+                    continue      # nothing to cite: the note would need an outside thesis
+                if titled.get(book["review_id"]):
+                    cited.add(book["review_id"])
+                elif thesis:
+                    continue      # a line thesis would come from outside the corpus
+                emitted.add(slug)
+                keep.append(f"- {thesis}: " if thesis else "- ")
+                keep[-1] += (f"[{book['title']}]"
+                            f"(https://www.livelib.ru/review/{book['review_id']})")
+            if keep:
+                bullets.append("".join(keep))
+        # only the notes that can carry a bullet from their own data survive: the
+        # mini corpus stays complete, so every copied note shows up in the page
+        for slug in copied - emitted:
+            (books_out / f"{slug}.md").unlink()
+        subset = [r for r in reviews if str(r["id"]) in cited]
+        return "\n".join(bullets) + "\n", subset, sorted(emitted)
+
+    def test_mini_corpus_regenerates_the_whole_page(self, tmp_path):
+        books = tmp_path / "books"
+        books.mkdir()
+        bibliography, reviews, notes_emitted = self.mini_corpus(books)
+        assert len(notes_emitted) >= 20, len(notes_emitted)
+        out = render_p3_references(books, reviews, lines=parse_reference_lines(bibliography))
+        text, lines = out["text"], out["text"].splitlines()
+        # 1. frontmatter opened AND closed
+        assert lines[0] == "---", text[:200]
+        assert lines.count("---") == 2, text[:300]
+        close = lines.index("---", 1)
+        # 2. H1 and intro follow, before the first bullet
+        assert "\n".join(lines[close + 1:]).startswith(f"\n# {P3_TITLE}\n\n{P3_INTRO}\n"), text[:400]
+        first = min(i for i, l in enumerate(lines) if l.startswith("- "))
+        assert close < lines.index(f"# {P3_TITLE}") < lines.index(P3_INTRO) < first
+        # 3. bullets only, one per note, in the notes' weight order
+        bullets = lines[first:]
+        assert all(l.startswith("- ") for l in bullets), bullets
+        assert bullets == out["items"], "the header leaked into items"
+        important = important_books(books)
+        assert len(bullets) == len(important), (len(bullets), len(important))
+        assert {b["slug"] for b in important} == set(notes_emitted)
+        weights = {b["slug"]: b["weight"] for b in important}
+        assert len(weights) == len(important)     # every copied note is important
+        by_id = {}
+        for b in important_books(books):
+            for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
+                if i:
+                    by_id.setdefault(i, b["weight"])
+        rendered = [by_id[self.LINK.search(l).group("id")] for l in bullets]
+        assert rendered == sorted(rendered), rendered
+        assert out["warnings"] == [], out["warnings"]
+        assert text.endswith("\n")
