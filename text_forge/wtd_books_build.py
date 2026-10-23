@@ -7,9 +7,14 @@ Single entry point for the `make books` target (whattodo/Makefile):
 Steps:
 1. Export fresh data (shelves incl. statuses, quotes, reviews) into
    <root>/livelib-export/ — anonymous API + SSR, no credentials needed.
-2. build_books() with the curation files from <root>/text/books/_curation/.
+2. build_books() with the ONE curation file
+   <root>/text/books/_curation/curation.jsonc.
 3. Replace <root>/text/books/*.md with the generated set (_curation/ untouched).
 4. Validate: frontmatter contract + text links; print the status distribution.
+
+Titles/authors of reference books come from the LiveLib search API during step 2
+and are cached in <root>/livelib-export/editions-cache.json, so a rebuild with the
+same inputs reproduces the corpus byte for byte without the network.
 """
 import json
 import re
@@ -49,20 +54,23 @@ def main(root_str: str, user_id: int = 345497) -> int:
     print("export:", counts)
 
     tmp = Path(tempfile.mkdtemp(prefix="wtd-books-"))
+    # one curation file, normal form: one entry per livelib edition id
+    curation = cur / "curation.jsonc"
+    if not curation.exists():
+        print(f"FAIL: curation file not found: {curation}")
+        return 1
     report = build_books(
         export_dir / "livelib-books.json",
         export_dir / "livelib-quotes-api.json",
         export_dir / "livelib-reviews-api.json",
         tmp,
-        collections_path=cur / "collections.json",
-        author_overrides_path=cur / "author-overrides.json",
-        work_merges_path=cur / "work-merges.json",
-        link_mappings_path=cur / "link-mappings.json",
-        book_overrides_path=cur / "book-overrides.json",
-        reference_books_path=cur / "reference-books.json",
-        important_path=cur / "important.json",
+        curation_path=curation,
+        editions_cache_path=export_dir / "editions-cache.json",
     )
     print("build:", report)
+    link_map = report["link_map"]
+    for bid in report.get("unresolved_reference_books") or []:
+        print("  WARNING: reference book not resolvable via livelib search:", bid)
 
     for old in books_dir.glob("*.md"):
         old.unlink()
@@ -76,9 +84,12 @@ def main(root_str: str, user_id: int = 345497) -> int:
         statuses[s] = statuses.get(s, 0) + 1
     print("statuses:", dict(sorted(statuses.items(), key=lambda x: -x[1])))
 
+    # link validation consumes the mapping built from the notes actually written,
+    # plus the curated links — so a slug renamed by collision handling still
+    # resolves and no stale key can paper over a real gap
     res = validate_text_links(root / "text", books_dir,
-                              external_path=cur / "external-links.json",
-                              link_mappings_path=cur / "link-mappings.json")
+                             external_path=curation,
+                             link_mappings_path=link_map)
     print(f"links: {res['total']} total, {res['resolved']} resolved, "
           f"{res['external']} external, {len(res['unresolved'])} unresolved")
     if res["unresolved"]:

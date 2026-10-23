@@ -122,6 +122,52 @@ class LivelibClient:
             })
         return results
 
+    def resolve_edition(self, edition_id: str, extra_queries=()) -> dict:
+        """{title, author} of one edition id, or {} when livelib has no such edition.
+
+        The search API returns no more than ~20 editions per query and ignores
+        `limit` beyond that, so an id cannot be looked up directly. Every query
+        tried is the caller's to supply (the edition slug, the title, ...); the
+        match itself is exact — of all the hits, only the one carrying this id is
+        taken, so a returned title is that edition's own, never a neighbour's.
+
+        Returns {} rather than raising: an unresolved id is a curation problem the
+        caller reports and works around (slug-derived title), not a transport one.
+
+        Transport failures are swallowed on purpose and reported as 'unresolved':
+        the caller reaches this only for an id the export does not carry, so there
+        is nothing else to lose — and a build must not die because livelib is
+        unreachable or has no such edition. `resolve_edition_cached` records the
+        miss, so a retry does not repeat the network round.
+        """
+        for q in extra_queries:
+            if not str(q).strip():
+                continue
+            try:
+                found = self._search_hit(edition_id, q)
+            except Exception:  # noqa: BLE001, S112 - see above: miss, not a crash
+                continue
+            if found:
+                return found
+        return {}
+
+    def _search_hit(self, edition_id: str, query: str) -> dict:
+        from urllib.parse import quote
+        for item in (json.loads(self.fetch(
+                f"{API_BASE}/search?query={quote(query)}&limit=20"))
+                .get("payload", {}).get("data") or []):
+            if item.get("type") != "art_editions":
+                continue
+            inst = item.get("instance") or {}
+            if str(inst.get("id", "")) != str(edition_id):
+                continue
+            return {
+                "title": inst.get("title", ""),
+                "author": ", ".join(a["full_name"] for a in inst.get("authors") or []
+                                   if a.get("full_name")),
+            }
+        return {}
+
     # -------------------------------------------------------------- SSR
 
     def shelf(self, user_id: int, shelf: str) -> list[dict]:

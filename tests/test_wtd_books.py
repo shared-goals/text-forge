@@ -14,6 +14,7 @@ from text_forge.wtd_books import (
     build_books,
     group_export,
     important_books,
+    load_curation,
     make_slug,
     parse_reference_lines,
     render_note,
@@ -1316,8 +1317,10 @@ class TestP3Contract:
 
     def data(self):
         ref = (self.REPO / "text" / "p3-references.md").read_text(encoding="utf-8")
-        mappings = json.loads((self.REPO / "text" / "books" / "_curation"
-                              / "link-mappings.json").read_text(encoding="utf-8"))
+        # the consolidated curation file: `links` is the section that used to be
+        # its own file (link-mappings.json)
+        mappings = load_curation(self.REPO / "text" / "books" / "_curation"
+                                / "curation.jsonc").get("links") or {}
         reviews = json.loads((self.REPO.parent / "shag" / "livelib-export"
                              / "livelib-reviews-api.json").read_text(encoding="utf-8"))
         lines = parse_reference_lines(ref, mappings)
