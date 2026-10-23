@@ -212,6 +212,9 @@ def render_note(entry: dict) -> str:
         fm.append(f'my_mark: {book["my_mark"]}')
     # status is always written; books outside any shelf list get 'none'
     fm.append(f'status: {book.get("status") or "none"}')
+    if book.get("important"):
+        fm.append("important: true")
+        fm.append(f'weight: {book["weight"]}')
     fm.append(f'livelib_book: "https://www.livelib.ru/book/{_book_id(slug_url)}"')
     extra = entry["book"].get("_extra_urls") or []
     if extra:
@@ -246,7 +249,7 @@ def render_note(entry: dict) -> str:
 
 def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path=None,
                 author_overrides_path=None, work_merges_path=None, link_mappings_path=None,
-                book_overrides_path=None, reference_books_path=None) -> dict:
+                book_overrides_path=None, reference_books_path=None, important_path=None) -> dict:
     """Build books/<slug>.md notes from LiveLib export JSON files.
 
     Editions listed in collections_path are omnibuses: their quotes violate the
@@ -282,6 +285,13 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
     ref_books = load(reference_books_path) if reference_books_path else []
     known_ids = {_book_id(b["book_url"]) for b in books}
     books = books + [b for b in ref_books if _book_id(b["book_url"]) not in known_ids]
+    # importance curation: {book_id: weight} — curation data, survives rebuilds
+    important = load(important_path) if important_path else {}
+    for b in books:
+        w = important.get(_book_id(b["book_url"]))
+        if w is not None:
+            b["important"] = True
+            b["weight"] = w
     for q in quotes:
         qid = _book_id(q["art_edition"]["url"])
         if qid in ov_by_id:
@@ -333,6 +343,10 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, collections_path
         bid = _book_id(book["book_url"])
         if bid in book_ov:
             book.update(book_ov[bid])
+        w = important.get(bid)
+        if w is not None:
+            book["important"] = True
+            book["weight"] = w
         entries.append({
             "book": book,
             "slug": make_slug(ae["title"], author or "unknown"),

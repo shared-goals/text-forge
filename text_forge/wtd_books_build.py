@@ -60,6 +60,7 @@ def main(root_str: str, user_id: int = 345497) -> int:
         link_mappings_path=cur / "link-mappings.json",
         book_overrides_path=cur / "book-overrides.json",
         reference_books_path=cur / "reference-books.json",
+        important_path=cur / "important.json",
     )
     print("build:", report)
 

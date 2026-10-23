@@ -221,6 +221,24 @@ class TestRenderNote:
         assert 'title: "Путешествие из Петербурга в Москву"' in md
         assert 'status: none' in md
 
+    def test_important_weight_from_curation(self, tmp_path):
+        """_curation/important.json ({book_id: weight}) marks notes at build time —
+        importance is curation data, it survives rebuilds without migration."""
+        e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
+        books_p = tmp_path / "books.json"
+        quotes_p = tmp_path / "quotes.json"
+        reviews_p = tmp_path / "reviews.json"
+        books_p.write_text(json.dumps([e], ensure_ascii=False), encoding="utf-8")
+        quotes_p.write_text("[]", encoding="utf-8")
+        reviews_p.write_text("[]", encoding="utf-8")
+        imp = tmp_path / "important.json"
+        imp.write_text(json.dumps({"1000699994": 7}), encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out, important_path=imp)
+        md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+        assert 'important: true' in md
+        assert 'weight: 7' in md
+
     def test_not_on_shelf_marker_becomes_none(self, tmp_path):
         """The export's synthetic 'not-on-shelf' marker renders as status: none."""
         e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994", status="not-on-shelf")
