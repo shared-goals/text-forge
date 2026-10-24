@@ -135,6 +135,38 @@ class TestGroupExport:
         assert ("1001474484",) in groups and ("1002000001",) in groups
         assert not any("1002000001" in g and "1000699994" in g for g in groups)
 
+    def test_curated_per_book_merges_join_unrelated_ids(self):
+        """A curated merges array joins two ids livelib itself does not relate.
+
+        Corpus instance: quotes of «Родная речь» made from edition 1010123266 —
+        an edition livelib lists under no work — attached to the note of shelf
+        edition 1001474484 because curation says 1001474484 merges 1010123266.
+        The main id is the entry carrying the array; the listed id's records land
+        in the main entry's note, and note_editions still lists both ids (the
+        validator resolves links through them).
+        """
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1001474484",
+                  title="Родная речь. Уроки изящной словесности",
+                  author="Вайль Петр", my_mark=None)
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1010123266",
+                  title="Родная речь", author="Петр Вайль", my_mark=None)
+        q = dict(Q1, quote={"quote_id": 700, "url": "/quote/700-rodno"},
+                 art_edition={"url": "/book/1010123266-rodnaya-rech",
+                             "title": "Родная речь",
+                             "authors": [{"full_name": "Петр Вайль"}]})
+        # without the curation merge: two separate notes, the quote with e2
+        entries, own, ne = group_export(books=[e1, e2], quotes=[q], reviews=[])
+        assert len(entries) == 2
+        assert {q["id"] for q in next(e for e in entries
+                                     if e["book"]["book_url"].endswith("1010123266"))["quotes"]} == {q["id"]}
+        # with the curation merge: one note keyed by the main id, the quote there
+        entries, own, ne = group_export(books=[e1, e2], quotes=[q], reviews=[],
+                                       curated_merges={"1001474484": ["1010123266"]})
+        assert len(entries) == 1 and own == []
+        assert entries[0]["book"]["book_url"] == "https://www.livelib.ru/book/1001474484"
+        assert [q["id"] for q in entries[0]["quotes"]] == [q["id"]]
+        assert ne[entries[0]["slug"]] == {"1001474484", "1010123266"}
+
 
 class TestRenderNote:
     def make_entry(self):

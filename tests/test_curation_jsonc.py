@@ -16,6 +16,14 @@ BOOK_ZONA = {
     "book_url": "https://www.livelib.ru/book/1000699994-zona-sergej-dovlatov",
     "title": "Зона", "author": "Сергей Довлатов", "my_mark": 4,
 }
+Q1 = {
+    "id": 1,
+    "text": "<p>Текст первой цитаты</p>",
+    "created_at": "2024-03-01T10:00:00",
+    "quote": {"quote_id": 100, "url": "/quote/100-zona-sergej-dovlatov"},
+    "art_edition": {"url": "/book/1000699994-zona-sergej-dovlatov", "title": "Зона",
+                    "authors": [{"full_name": "Сергей Довлатов"}]},
+}
 
 
 class TestLoadCuration:
@@ -306,6 +314,72 @@ class TestBuildWithCuration:
         # the folded edition url stays so its links still resolve
         assert "1000699994" in md
         assert "status: read" in md
+
+    def test_per_book_merges_array_folds_edition_into_the_note(self, tmp_path):
+        """books[main].merges = [other id]: the normal form of a work merge.
+
+        No top-level `merges` section: the canonicity belongs to the canonical
+        entry. The other id's quotes and review land in the MAIN id's note, the
+        note keeps its slug, and `livelib_editions` still lists the merged id so
+        links filed under it resolve.
+        """
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1003248852",
+                  title="Ленин. Пантократор солнечных пылинок", author="Лев Данилкин")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1010727563",
+                  title="Ленин", author="Данилкин Лев", my_mark=None)
+        q = dict(Q1, id=70, quote={"quote_id": 700, "url": "/quote/700-lenin"},
+                 art_edition={"url": "/book/1010727563-lenin",
+                             "title": "Ленин",
+                             "authors": [{"full_name": "Лев Данилкин"}]})
+        r = {"id": 901, "url": "/review/901-lenin", "text": "<p>Биография.</p>",
+             "created_at": "2023-05-01T00:00:00",
+             "art_edition": {"url": "/book/1010727563-lenin", "title": "Ленин",
+                            "authors": [{"full_name": "Лев Данилкин"}]}}
+        books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e1, e2],
+                                                        quotes=[q], reviews=[r])
+        # without the merge: two notes, the review with the doomed one
+        plain = tmp_path / "plain"
+        build_books(books_p, quotes_p, reviews_p, plain)
+        assert len(list(plain.glob("*.md"))) == 2
+        # with the per-book merges array: one note, main id's slug and title
+        cur = tmp_path / "curation.jsonc"
+        cur.write_text('{\n  // Ленин. Пантократор солнечных пылинок\n'
+                      '  "books": {"1003248852": {"weight": 16, '
+                      '"merges": [1010727563]}}\n}\n', encoding="utf-8")
+        out = tmp_path / "out"
+        report = build_books(books_p, quotes_p, reviews_p, out, curation_path=cur)
+        assert report["books"] == 1
+        note = out / "danilkin-lenin-pantokrator-solnechnykh-pylinok.md"
+        assert note.exists()
+        md = note.read_text(encoding="utf-8")
+        assert "livelib_editions:" in md and "1010727563" in md
+        assert "https://www.livelib.ru/quote/700" in md
+        # the review came from the merged edition but the note owns it now
+        assert 'livelib_review: "https://www.livelib.ru/review/901"' in md
+        # the merged id maps to the main note in the link map the validator reads
+        assert report["link_map"]["https://www.livelib.ru/book/1010727563"] == \
+            "danilkin-lenin-pantokrator-solnechnykh-pylinok"
+
+    def test_legacy_merges_section_still_folds(self, tmp_path):
+        """Back-compat: a top-level `merges` section works unchanged (until the
+        file flips to per-book arrays, both forms must build identically)."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1003248852",
+                  title="Ленин. Пантократор солнечных пылинок", author="Лев Данилкин")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1010727563",
+                  title="Ленин", author="Данилкин Лев", my_mark=None)
+        q = dict(Q1, id=70, quote={"quote_id": 700, "url": "/quote/700-lenin"},
+                 art_edition={"url": "/book/1010727563-lenin", "title": "Ленин",
+                             "authors": [{"full_name": "Лев Данилкин"}]})
+        books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e1, e2],
+                                                        quotes=[q], reviews=[])
+        cur = tmp_path / "curation.jsonc"
+        cur.write_text('{\n  "books": {"1003248852": {"weight": 16}},\n'
+                      '  "merges": {"1010727563": "1003248852"}\n}\n', encoding="utf-8")
+        out = tmp_path / "out"
+        report = build_books(books_p, quotes_p, reviews_p, out, curation_path=cur)
+        assert report["books"] == 1
+        md = (out / "danilkin-lenin-pantokrator-solnechnykh-pylinok.md").read_text(encoding="utf-8")
+        assert "1010727563" in md and "https://www.livelib.ru/quote/700" in md
 
     def test_external_section_classifies_links(self, tmp_path):
         books_p, quotes_p, reviews_p = self.write_inputs(tmp_path)

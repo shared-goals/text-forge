@@ -165,7 +165,8 @@ def _work_key(title: str, author: str) -> str:
 
 
 def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
-                 work_id_by_edition: dict[str, str] | None = None
+                 work_id_by_edition: dict[str, str] | None = None,
+                 curated_merges: dict[str, list[str]] | None = None
                  ) -> tuple[list[dict], list[dict], dict[str, set]]:
     """Group LiveLib export records into per-book entries.
 
@@ -173,6 +174,12 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
     LivelibClient.work_id). When an entry has one, grouping keys by that work id
     instead of by normalized title: livelib's own relation is exact, so editions
     of one work merge even when their titles differ.
+
+    curated_merges — {main edition id: [other edition id, ...]} read from the
+    books entries themselves (`"merges": [...]` on a book): a human statement
+    that the other edition's records belong to the MAIN id's note. It enters the
+    same union-find as livelib's relations, so one mechanism groups both; use it
+    where livelib lists no shared work and so reaches nothing by itself.
 
     Returns (entries, own_quotes, note_editions): entries — one per shelf book
     with quotes/review merged (including other editions of the same work);
@@ -186,7 +193,11 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
         reviews_by_book.setdefault(_book_id(r["art_edition"]["url"]), r)
 
     # The work relation: which livelib ids stand for ONE work, so their shelf
-    # entries become one note. Sources, all of them livelib's own statements:
+    # entries become one note. Sources, the first of them ours, the rest
+    # livelib's own statements:
+    #   0. curated_merges — a per-book `merges` array: a human decision that
+    #      another edition's records belong to this note, entered as edges
+    #      main <-> id into the same union-find below (no second grouping pass).
     #   1. work_id_by_edition — the crawl cache {edition id: work id}, read off
     #      each edition page's «Содержание» (LivelibClient.work_id). A relation
     #      may name SEVERAL works (an anthology lists them all): `work_id` names
@@ -211,6 +222,14 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
     # Entries with no relation at all fall back to title+author normalization.
     # Nothing here is inferred from titles or authors.
     shelf_ids = {_book_id(b["book_url"]) for b in books}
+    # a curated merge may name a non-canonical entry first (the file is a map,
+    # its direction a reading convention): a listed id that already merges INTO
+    # another main is a member, not a main — the arrays are one relation per
+    # work however they are written
+    curated_raw = {str(k): [str(x) for x in (v or [])]
+                   for k, v in (curated_merges or {}).items()}
+    members = {o for v in curated_raw.values() for o in v}
+    curated_merges = {k: v for k, v in curated_raw.items() if k not in members}
     cache_in = {str(k): str(v) for k, v in (work_id_by_edition or {}).items() if v}
     parent: dict[str, str] = {}
     edge_ids: set[str] = set()             # ids that take part in a join
@@ -248,6 +267,16 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
             for other, vother in cache_in.items():
                 if other != k and w in (x.strip() for x in vother.split(",")):
                     edge(k, other)
+    # curated edges: the main id (the entry that carries the array) is joined to
+    # every id it lists — the same `edge` mechanism, so a curated merge groups
+    # exactly like a livelib relation. An id reaching its main through a curated
+    # edge (a shelf edition joined to the main via a work the cache names) is a
+    # TRANSIT: the main's array already states the relation, and a transit key
+    # would inherit a cache anchor that outranks the main — so only edges the
+    # union does not yet imply are added
+    for main, others in curated_merges.items():
+        for other in others:
+            edge(main, other)
     for rec in list(quotes) + list(reviews):
         ae = rec.get("art_edition") or {}
         url = ae.get("url") or ""
@@ -304,31 +333,42 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
     for bid in shelf_ids:
         if bid in works:
             anchor_of[find(bid)] = bid
+    # a curated merge's MAIN id outranks everything: the human said THIS note
+    # is the one the component's records belong to (a member may be the union
+    # root — union direction is an implementation accident)
+    for main in curated_merges:
+        if main in shelf_ids:
+            anchor_of[find(main)] = main
 
     # the work each shelf id stands for, when a relation says so
     work_of = {bid: anchor_of[root] for bid in shelf_ids
                if (root := find(bid)) != bid}
     # every id the relations name — guides quote placement, never grouping
     record_work = edge_ids | set(cache_in.values())
+    mains = set(curated_merges) | works
 
     entries = []
     for book in books:
         bid = _book_id(book["book_url"])
         # a shelf id livelib itself reuses for the work stands for that work,
         # so it keys by its own id, not only by what other editions point to;
-        # an edition joined into a component whose anchor IS a work id keys by
-        # that anchor even when it happens to be the union's root
-        wid = work_of.get(bid) or (bid if bid in works else None)
-        if not wid and anchor_of.get(find(bid)) in works:
+        # an edition joined into a component whose anchor IS a work id (or a
+        # curated main) keys by that anchor even when it happens to be the
+        # union's root
+        wid = work_of.get(bid) or (bid if bid in mains else None)
+        if not wid and anchor_of.get(find(bid)) in mains:
             wid = anchor_of[find(bid)]
         entries.append({
             "book": book,
             "slug": make_slug(book["title"], book["author"]),
             "quotes": [],
             "review": reviews_by_book.get(bid),
-            "_edition_ids": {bid},
+            # a curated member may hold no shelf record: it still belongs to
+            # the main note's edition set, so its links resolve
+            "_edition_ids": {bid, *curated_merges.get(bid, [])},
             "_work_id": str(wid) if wid else None,
             "_anchor": anchor_of.get(find(bid)) if find(bid) != bid else None,
+            "_main": bid in curated_merges,
         })
 
     # Merge shelf entries that are different editions of the same work into ONE
@@ -343,25 +383,53 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
         merged.setdefault(key, []).append(e)
     final = []
     for group in merged.values():
-        primary = next((e for e in group if e["review"]), None) \
-            or max(group, key=lambda e: len(e["quotes"])) if len(group) > 1 else group[0]
+        # the note's identity: a curated merge's MAIN id wins (the human said
+        # this note is the one), then a review holder, then the most quoted
+        is_main = [bool(e.pop("_main", None)) for e in group]
+        primary = next((e for e, m in zip(group, is_main) if m), None) \
+            or next((e for e in group if e["review"]), None) \
+            or (max(group, key=lambda e: len(e["quotes"]))
+                if len(group) > 1 else group[0])
         for other in group:
             if other is not primary:
                 primary["_edition_ids"] |= other["_edition_ids"]
+                primary["quotes"].extend(other["quotes"])
+                primary["review"] = primary["review"] or other["review"]
                 primary["book"].setdefault("_extra_urls", []).append(other["book"]["book_url"])
         final.append(primary)
+    # a curated member with no shelf record has no entry of its own: its url
+    # still belongs to the main note's edition set, so its links resolve and
+    # livelib_editions names it
+    by_id = {_book_id(b["book_url"]): b for b in books}
+    for e in final:
+        bid = _book_id(e["book"]["book_url"])
+        for m in curated_merges.get(bid, []):
+            mb = by_id.get(m)
+            url = mb["book_url"] if mb else f"https://www.livelib.ru/book/{m}"
+            if m not in e["_edition_ids"]:
+                e["_edition_ids"].add(m)
+            urls = e["book"].setdefault("_extra_urls", [])
+            if url not in urls:
+                urls.append(url)
     by_work = {_work_key(e["book"]["title"], e["book"]["author"]): e for e in final}
 
     # quote placement, most reliable first: the edition the quote was made from
-    # is already in a note's edition set; else the work the export filed that
-    # quote under (/work/<W>) matches the work id of a note — a note's own work,
-    # or any work an export record placed inside it, since those records are part
-    # of that note's work family; else title+author normalization, the fallback
-    # for entries whose work was never resolved
+    # is already in a note's edition set; else the id the record names (a /work/
+    # url or art_edition.id) belongs to that note's relation component — the ids
+    # the component's own edges brought in, NOT a global pool (a global pool
+    # would hand another note's ids to whichever entry is processed first);
+    # else title+author normalization, the fallback for entries whose work was
+    # never resolved
+    comps: dict[str, set] = {}
+    for x in list(edge_ids) + list(cache_in) + list(record_work):
+        if x:
+            comps.setdefault(find(x), set()).add(x)
     by_work_id: dict[str, dict] = {}
     for e in final:
-        for wid in {e.get("_work_id"), e.get("_anchor"), *work_of.values(),
-                    *record_work, *edge_ids}:
+        bid = _book_id(e["book"]["book_url"])
+        ids = {e.get("_work_id"), e.get("_anchor"), bid}
+        ids |= comps.get(find(bid), set())
+        for wid in ids:
             if wid:
                 by_work_id.setdefault(wid, e)
 
@@ -706,6 +774,24 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
                for bid, v in entries_cur.items()}
     book_ov = {bid: v for bid, v in book_ov.items() if v}
     important = {bid: v["weight"] for bid, v in entries_cur.items() if v.get("weight") is not None}
+    # per-book merges: `"merges": [other edition id]` on a books entry says the
+    # other edition's quotes/review belong to THIS note. The legacy top-level
+    # `merges` section ({removed: canonical}) feeds the same mapping — canonical
+    # as main, removed as member — so both forms build identically.
+    curated_merges: dict[str, list[str]] = {}
+    for bid, ent in entries_cur.items():
+        if ent.get("merges"):
+            curated_merges.setdefault(str(bid), []).extend(
+                str(x) for x in ent["merges"])
+    for removed, canonical in (cur.get("merges") or {}).items():
+        # legacy keys/values may be slugs OR edition ids; resolve slugs through
+        # the shelf books so both forms reach the id-space union-find
+        slug_to_id = {make_slug(b["title"], b["author"]): _book_id(b["book_url"])
+                      for b in books}
+        rid = slug_to_id.get(str(removed), str(removed))
+        cid = slug_to_id.get(str(canonical), str(canonical))
+        if rid != cid:
+            curated_merges.setdefault(cid, []).append(rid)
     # reference books: works referenced from texts but absent from shelves and
     # quotes (former not-on-shelf stubs) — kept as status-none notes.
     ref_books = []
@@ -809,7 +895,8 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
     placed_quotes = [q for q in quotes if _book_id(q["art_edition"]["url"]) not in omni_ids]
     in_collections = [q for q in quotes if _book_id(q["art_edition"]["url"]) in omni_ids]
     entries, own_quotes, note_editions = group_export(books, placed_quotes, reviews,
-                                                     work_id_by_edition)
+                                                     work_id_by_edition,
+                                                     curated_merges)
     # omnibuses have no author metadata: collections, not authored books.
     # Match by exact full title or declared edition id — NOT by work key,
     # so individual works sharing the main title keep their authors.
@@ -879,19 +966,15 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
     # url reaches an edition through the ids its records name, and that mapping
     # must exist while the edition sets are being collected)
 
-    # manual work merges: attach extra edition urls / status into an existing
-    # note, and fold a duplicate note into its canonical. Normal form is
-    # {removed slug: canonical slug}; `merge-extra` / `merge-status` are keyed by
-    # the same name the entry had, which may be a slug OR an edition id — an
-    # id-named canonical survives the collision renaming that a slug cannot.
+    # manual work merges (legacy shape): attach extra edition urls / status into
+    # an existing note, and fold a duplicate note into its canonical. A FOLD is
+    # no longer here — the per-book `merges` array (or the legacy section) feeds
+    # group_export above, so the fold already happened while grouping. What is
+    # kept: `merge-extra` / `merge-status`, keyed by a slug OR an edition id —
+    # an id-named canonical survives the collision renaming that a slug cannot.
     merges = []
-    keys = set(cur.get("merges") or {}) | set(cur.get("merge-extra") or {}) \
-        | set(cur.get("merge-status") or {})
-    for key in sorted(keys):
+    for key in sorted(set(cur.get("merge-extra") or {}) | set(cur.get("merge-status") or {})):
         m = {"remove": key}
-        into = (cur.get("merges") or {}).get(key)
-        if into:
-            m["into"] = into
         if cur.get("merge-extra", {}).get(key):
             m["extra"] = cur["merge-extra"][key]
         if cur.get("merge-status", {}).get(key):
@@ -920,7 +1003,8 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
         return None
 
     for m in merges:
-        # with no canonical named, the entry describes the note it is keyed by
+        # what survives is the note named by `into` when one is named, else the
+        # note the entry is keyed by (`remove` without a canonical describes it)
         target = find_entry(m.get("into") or m["remove"])
         if not target:
             continue
@@ -930,15 +1014,8 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
             urls = target["book"].setdefault("_extra_urls", [])
             if m["extra"] not in urls:
                 urls.append(m["extra"])
-        if m.get("into"):
-            gone = find_entry(m["remove"])
-            if gone is not None and gone is not target:
-                target["book"].setdefault("_extra_urls", []).append(gone["book"]["book_url"])
-                target["quotes"].extend(gone["quotes"])
-                target["review"] = target["review"] or gone["review"]
-                entries.remove(gone)
-        # status belongs to the surviving note, so it is applied after the fold;
-        # the old order let a doomed entry overwrite the canonical's status
+        # status belongs to the surviving note, so it is applied to the target
+        # only; the old fold order let a doomed entry overwrite the canonical
         if m.get("status"):
             target["book"]["status"] = m["status"]
 
