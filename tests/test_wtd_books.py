@@ -54,7 +54,7 @@ BOOK_ZONA = {
 
 class TestGroupExport:
     def group(self, quotes=(Q1, Q2), reviews=(R1,)):
-        entries, own = group_export(books=[BOOK_ZONA], quotes=list(quotes), reviews=list(reviews))
+        entries, own, _ = group_export(books=[BOOK_ZONA], quotes=list(quotes), reviews=list(reviews))
         return entries, own
 
     def test_quotes_grouped_by_book(self):
@@ -73,6 +73,67 @@ class TestGroupExport:
     def test_book_without_review_gets_none(self):
         entries, _ = self.group(quotes=(Q2,), reviews=())
         assert entries[0]["review"] is None
+
+    def test_export_work_relation_merges_shelf_entries(self):
+        """group_export alone merges two shelf entries livelib relates.
+
+        One quote names TWO ids: the work the text belongs to (art_edition.id) and
+        the edition it was taken from (the url) — and that edition id is ALSO a
+        shelf record. Then both shelf records stand for one work and group into
+        one note even though their titles normalize differently (name order).
+        Corpus instance: quotes of «Родная речь» made from edition 1010123266,
+        filed under the shelf edition 1001474484.
+        """
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1001474484",
+                  title="Родная речь. Уроки изящной словесности",
+                  author="Вайль Петр", my_mark=None)
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000204927",
+                  title="Родная речь. Советское барокко. 60-е. В 2 томах. Том 1",
+                  author="Вайль Петр, Александр Генис", my_mark=None)
+        q = dict(Q1, quote={"quote_id": 700, "url": "/quote/700-rodno"},
+                 art_edition={"id": 1001474484,
+                             "url": "/book/1010123266-rodnaya-rech",
+                             "title": "Родная речь",
+                             "authors": [{"full_name": "Петр Вайль"}]})
+        entries, own, note_editions = group_export(books=[e1, e2], quotes=[q],
+                                                  reviews=[],
+                                                  work_id_by_edition={"1000204927": "1001474484"})
+        assert len(entries) == 1 and own == []
+        assert note_editions[entries[0]["slug"]] == {"1001474484", "1000204927"}
+
+    def test_work_relation_is_not_transitive_through_a_third_record(self):
+        """Two hops through TWO different works are not one relation.
+
+        a → W (a is an edition of work W) and b → X (b is an edition of work X)
+        relate a to W and b to X, but say nothing about W and X: a corpus case is
+        a collection shelf edition pointing at the work it opens with, plus an
+        anthology edition pointing at a second work — merging all four records
+        would invent a relation livelib never stated.
+        """
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994",
+                  title="Родная речь", author="Петр Вайль")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1001474484",
+                  title="Родная речь. Уроки изящной словесности", author="Вайль Петр")
+        e3 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1002000001",
+                  title="Зона. Понятная вещь", author="Сергей Довлатов")
+        q = dict(Q1, quote={"quote_id": 700, "url": "/quote/700-rodno"},
+                 art_edition={"id": 1000699994,
+                             "url": "/work/1000699994-rodno",
+                             "title": "Родная речь",
+                             "authors": [{"full_name": "Петр Вайль"}]})
+        r = {"id": 900, "url": "/review/900-ponyatnaya-vesch",
+             "text": "<p>Ок.</p>", "created_at": "2023-02-01T00:00:00",
+             "art_edition": {"id": 1002000001,
+                            "url": "/work/1002000001-ponyatnaya",
+                            "title": "Понятная вещь",
+                            "authors": [{"full_name": "Сергей Довлатов"}]}}
+        entries, _own, note_editions = group_export(books=[e1, e2, e3], quotes=[q],
+                                                   reviews=[r])
+        groups = sorted(tuple(sorted(v)) for v in note_editions.values())
+        # the one stated edge (e2 with the review's work id, which IS e2's own
+        # id) merges nothing further; e3 stands apart despite naming its work
+        assert ("1001474484",) in groups and ("1002000001",) in groups
+        assert not any("1002000001" in g and "1000699994" in g for g in groups)
 
 
 class TestRenderNote:
@@ -142,7 +203,7 @@ class TestRenderNote:
 
     def test_own_note_has_status_none(self):
         """A work that is not on any shelf gets status: none (status is always written)."""
-        _, own = group_export(books=[BOOK_ZONA], quotes=[dict(Q1, art_edition={
+        _, own, _ = group_export(books=[BOOK_ZONA], quotes=[dict(Q1, art_edition={
             "url": "/book/911-unknown-book", "title": "Незнакомая книга",
             "authors": [{"full_name": "Незнакомый Автор"}]})], reviews=[])
         own_entry = {"book": {"book_url": "https://www.livelib.ru/book/911-unknown-book",
@@ -342,13 +403,13 @@ class TestRenderNote:
             assert re.fullmatch(r"https://www\.livelib\.ru/(?:book|work|review|quote)/\d+", url), url
 
     def test_book_without_review_omits_section(self):
-        entries, _ = group_export(books=[BOOK_ZONA], quotes=[Q2], reviews=[])
+        entries, _, _ = group_export(books=[BOOK_ZONA], quotes=[Q2], reviews=[])
         md = render_note(entries[0])
         assert "## Рецензия" not in md
 
     def test_quote_without_livelib_meta_omits_url(self):
         """8 real quotes lack quote.url (added outside the site) — still exported."""
-        entry, _ = group_export(books=[BOOK_ZONA], quotes=[dict(Q2, quote=None)], reviews=[])
+        entry, _, _ = group_export(books=[BOOK_ZONA], quotes=[dict(Q2, quote=None)], reviews=[])
         md = render_note(entry[0])
         assert "Вторая цитата, более ранняя" in md
         assert "^quote_1" in md
@@ -380,7 +441,7 @@ class TestRenderNote:
 
     def test_quote_without_url_still_renders_nothing(self):
         """Quotes lacking quote.url keep having no source line at all."""
-        entry, _ = group_export(books=[BOOK_ZONA], quotes=[dict(Q2, quote=None)], reviews=[])
+        entry, _, _ = group_export(books=[BOOK_ZONA], quotes=[dict(Q2, quote=None)], reviews=[])
         md = render_note(entry[0])
         assert "^quote_1" in md
         assert "LiveLib" not in md
@@ -449,8 +510,73 @@ class TestValidateTextLinks:
         report = validate_text_links(text_dir, books_dir)
         assert report["resolved"] == 1
 
+    def test_resolves_against_editions_of_a_merged_note(self, tmp_path):
+        """A link to ANY edition of a note resolves — not just its primary id.
+
+        A note declares livelib_book plus livelib_editions; the ids differ by
+        edition, and a text may cite either. Corpus instance: a bibliography line
+        citing a shelf edition (id 1010727563) while the note's own book is
+        1003248852 — one work, two ids, and neither is the review id.
+        """
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1003248852",
+                 title="Ленин. Пантократор солнечных пылинок", author="Лев Данилкин",
+                 status="read")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1010727563",
+                 title="Ленин", author="Данилкин Лев", my_mark=None, status="read")
+        # the review livelib files under the WORK id (a /work/ url) of e2
+        q = dict(Q1, id=7, text="<p>Про Ленина</p>", created_at="2024-05-01T10:00:00",
+                 quote={"quote_id": 700, "url": "/quote/700-lenin"},
+                 art_edition={"id": 1010727563, "url": "/work/1010727563-lenin",
+                              "title": "Ленин", "authors": [{"full_name": "Данилкин Лев"}]})
+        src = tmp_path / "in"
+        for name, data in (("books.json", [e1, e2]), ("quotes.json", [q])):
+            src.mkdir(exist_ok=True)
+            (src / name).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        (src / "reviews.json").write_text("[]", encoding="utf-8")
+        books_p, quotes_p, reviews_p = (src / "books.json", src / "quotes.json",
+                                       src / "reviews.json")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out,
+                   work_id_by_edition={"1003248852": "1010727563",
+                                      "1010727563": "1010727563"})
+        md = (out / "danilkin-lenin-pantokrator-solnechnykh-pylinok.md").read_text(encoding="utf-8")
+        assert "livelib_editions:" in md and "1010727563" in md
+        text_dir = self.write_text(tmp_path,
+            "[томографическое](https://www.livelib.ru/book/1010727563)")
+        assert validate_text_links(text_dir, out)["resolved"] == 1
+
+    def test_resolves_by_the_notes_own_review_id(self, tmp_path):
+        """An id a note carries only as livelib_review is still its own id."""
+        books_dir = self.make_books_dir(tmp_path)
+        text_dir = self.write_text(tmp_path,
+            "[рецензия](https://www.livelib.ru/review/900)")
+        assert validate_text_links(text_dir, books_dir)["resolved"] == 1
+
 
 class TestBuildBooks:
+    @staticmethod
+    def works_cache(tmp_path, mapping):
+        """A crawl cache in the shape LivelibClient.work_id writes it.
+
+        A build pointed at such a file resolves nothing from the network and
+        merges exactly what the cache states — the record of one crawl driving
+        the next build.
+        """
+        cache = tmp_path / "works-cache.json"
+        cache.write_text(json.dumps({str(k): {"work_id": v}
+                                    for k, v in mapping.items()},
+                                   ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        return cache
+
+    def write_inputs(self, tmp_path, books=(), quotes=(), reviews=()):
+        """Materialize export-shaped inputs; returns the three paths."""
+        for name, data in (("books.json", books), ("quotes.json", quotes),
+                          ("reviews.json", reviews)):
+            (tmp_path / name).write_text(json.dumps(list(data), ensure_ascii=False),
+                                        encoding="utf-8")
+        return (tmp_path / "books.json", tmp_path / "quotes.json",
+                tmp_path / "reviews.json")
+
     def test_writes_one_note_per_unique_book(self, tmp_path):
         books_p = tmp_path / "books.json"
         quotes_p = tmp_path / "quotes.json"
@@ -756,6 +882,162 @@ class TestBuildBooks:
         md = files[0].read_text(encoding="utf-8")
         assert md.count("^quote_") == 6
         assert report["books"] == 1
+
+
+    def test_work_relation_from_export_records_merges_without_curation(self, tmp_path):
+        """The relation livelib states for free, inside the export itself.
+
+        A quote/review names TWO ids: art_edition.id is the WORK the text belongs
+        to, art_edition.url is the EDITION it was actually quoted from. So a
+        collection edition gets the work's key for free and merges with the
+        shelf editions of that work instead of becoming a duplicate note — the
+        case the curated `merges` section existed for. Corpus instance: quotes of
+        the collection «Письма Баламута. Баламут предлагает тост (сборник)», and
+        reviews filed under a /work/ url whose id is also a shelf record.
+        """
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994",
+                  title="Родная речь", author="Петр Вайль")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1001474484",
+                  title="Родная речь. Уроки изящной словесности",
+                  author="Вайль Петр", my_mark=None)
+        # a review whose url names the WORK id while that id is also a shelf
+        # edition: livelib reuses one id for the work and for an edition of it,
+        # so the shelf record for 1001474484 stands for work 1001474484 and
+        # merges with the entry whose title normalization differs
+        r = {"id": 900, "url": "/review/900-rodnaya-rech",
+             "text": "<p>Отличная книга.</p>", "created_at": "2023-02-01T00:00:00",
+             "art_edition": {"id": 1001474484,
+                            "url": "/work/1001474484-rodnaya-rech",
+                            "title": "Родная речь",
+                            "authors": [{"full_name": "Петр Вайль"}]}}
+        books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e1, e2],
+                                                        reviews=[r])
+        out = tmp_path / "books"
+        report = build_books(books_p, quotes_p, reviews_p, out)
+        names = sorted(f.name for f in out.glob("*.md"))
+        assert len(names) == 1, names
+        md = (out / names[0]).read_text(encoding="utf-8")
+        assert "1001474484" in md and "1000699994" in md
+        assert report["books"] == 1
+
+    def test_a_collection_edition_groups_with_the_work_it_quotes(self, tmp_path):
+        """A quote of a COLLECTION, filed under the work, lands in the note of
+        the work's shelf edition — and the collection edition joins that note."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994",
+                  title="Родная речь", author="Петр Вайль")
+        e2 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1001474484",
+                  title="Родная речь. Уроки изящной словесности",
+                  author="Вайль Петр", my_mark=None)
+        # livelib files this quote of the collection under the work id, and names
+        # the collection edition in the url
+        q = dict(Q1, id=7, text="<p>Про Чернышевского</p>",
+                 created_at="2024-05-01T10:00:00",
+                 quote={"quote_id": 700, "url": "/quote/700-rodnaya-rech"},
+                 art_edition={"id": 1001978765,
+                              "url": "/work/1001978765-rodnaya-rech",
+                              "title": "Родная речь",
+                              "authors": [{"full_name": "Петр Вайль"}]})
+        books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e1, e2],
+                                                        quotes=[q])
+        out = tmp_path / "books"
+        report = build_books(books_p, quotes_p, reviews_p, out)
+        # the quote is not orphaned: it is placed, not left as its own note
+        assert report["quotes_placed"] + report["quotes_in_collections"] == 1
+        assert report["own_notes"] == 0
+
+    def test_crawl_resolved_work_ids_merge_notes(self, tmp_path):
+        """work_id_by_edition merges by livelib's own relation, even when the two
+        titles normalize differently (name order, subtitles) — the case the
+        curated `merges` section used to cover."""
+        e1 = {"book_url": "https://www.livelib.ru/book/1003248852",
+             "title": "Ленин. Пантократор солнечных пылинок", "author": "Лев Данилкин",
+             "status": "read", "my_mark": 5}
+        e2 = {"book_url": "https://www.livelib.ru/book/1010727563",
+             "title": "Ленин", "author": "Данилкин Лев", "status": "read",
+             "my_mark": None}
+        books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e1, e2])
+        # without work ids: two notes (title normalization differs)
+        plain = tmp_path / "plain"
+        build_books(books_p, quotes_p, reviews_p, plain)
+        assert len(list(plain.glob("*.md"))) == 2
+        # with work ids: one note
+        out = tmp_path / "books"
+        report = build_books(books_p, quotes_p, reviews_p, out,
+                            work_id_by_edition={"1003248852": "W1",
+                                               "1010727563": "W1"})
+        assert report["books"] == 1
+        md = (out / "danilkin-lenin-pantokrator-solnechnykh-pylinok.md").read_text(encoding="utf-8")
+        assert "1010727563" in md
+
+    def test_work_id_by_edition_is_reported_for_the_record(self, tmp_path):
+        """The build reports the work ids it used, so a caller can cache them."""
+        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
+        books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e1])
+        out = tmp_path / "books"
+        report = build_books(books_p, quotes_p, reviews_p, out,
+                            work_id_by_edition={"1000699994": "W42"})
+        assert report["work_ids"]["1000699994"] == "W42"
+
+
+class TestResolveWorks:
+    """resolve_works_cached: the crawl-time edition -> work cache."""
+
+    def test_resolves_and_caches_every_id(self, tmp_path):
+        from text_forge.wtd_books import resolve_works_cached
+        cache = tmp_path / "works-cache.json"
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            eid = url.rstrip("/").split("/")[-2]  # .../art-editions/<id>/contents
+            # the plain JSON the trisolaris contents endpoint answers
+            return json.dumps({"status": 200, "error": None, "payload": {"data": [
+                {"id": 5, "title": "Некое произведение",
+                 "url": f"/work/9{eid}-x"}]}})
+
+        got = resolve_works_cached(["1001", "1002"], cache_path=cache, fetch=fetch)
+        assert got == {"1001": "91001", "1002": "91002"}
+        assert len(calls) == 2
+        # a second call over a warm cache needs no transport at all
+        quiet = lambda u: (_ for _ in ()).throw(AssertionError("network"))
+        assert resolve_works_cached(["1001", "1002"], cache_path=cache,
+                                   fetch=quiet) == {"1001": "91001", "1002": "91002"}
+
+    def test_a_missing_work_is_cached_as_none(self, tmp_path):
+        from text_forge.wtd_books import resolve_works_cached
+        cache = tmp_path / "works-cache.json"
+        # the trisolaris /art-editions/{id}/contents envelope with no works
+        empty = json.dumps({"status": 200, "error": None,
+                            "payload": {"data": []}}, separators=(",", ":"))
+        got = resolve_works_cached(["1001"], cache_path=cache, fetch=lambda u: empty)
+        assert got == {"1001": None}
+        assert json.loads(cache.read_text(encoding="utf-8"))["1001"]["work_id"] is None
+
+    def test_an_unreachable_page_is_answered_none_but_stays_out_of_the_cache(self, tmp_path):
+        """A temporary 403 must not be pinned as 'this edition has no work'."""
+        from text_forge.wtd_books import resolve_works_cached
+        cache = tmp_path / "works-cache.json"
+
+        def boom(url):
+            raise RuntimeError("403 Forbidden")
+
+        assert resolve_works_cached(["1001"], cache_path=cache, fetch=boom) == {"1001": None}
+        assert not cache.exists() or json.loads(cache.read_text(encoding="utf-8")) == {}
+
+    def test_title_is_passed_to_the_resolver_for_omnibuses(self, tmp_path):
+        """The edition title is the disambiguator livelib needs for collections."""
+        from text_forge.wtd_books import resolve_works_cached
+        seen = []
+
+        class Fake:
+            def work_id(self, eid, *, title="", cache_path=None):
+                seen.append((eid, title))
+                return "W" + eid
+
+        got = resolve_works_cached([{"id": "1001", "title": "Мы. Бич Божий"}],
+                                   client=Fake())
+        assert got == {"1001": "W1001"}
+        assert seen == [("1001", "Мы. Бич Божий")]
 
 
 class TestMakeSlug:

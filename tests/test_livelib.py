@@ -153,3 +153,143 @@ def test_search_returns_editions_only():
     assert results[0]["edition_id"] == "100"
     assert results[0]["author"] == "Сергей Довлатов"
     assert results[0]["livelib_url"].startswith("https://beta.livelib.ru/book/")
+
+
+# ---------------------------------------------------- edition -> work (Содержание)
+
+def _flight_payload(json_text: str) -> str:
+    """A trisolaris envelope as one escaped Next.js flight chunk (shelves)."""
+    return ("<html><body><script>"
+            f"self.__next_f.push([1,{json.dumps(json_text)}])"
+            "</script></body></html>")
+
+
+def contents_response(items):
+    """The trisolaris /art-editions/{id}/contents envelope (live-verified
+    2026-10-24): plain JSON, one entry per WORK the edition contains, each
+    with its /work/<id> url. No HTML, no escaping layer."""
+    return json.dumps({"status": 200, "error": None,
+                       "payload": {"data": items}}, separators=(",", ":"))
+
+
+def work_item(wid, title):
+    return {"id": 200000 + int(wid) % 100000, "title": title,
+            "url": f"/work/{wid}-{title.lower()}", "type": "повесть"}
+
+
+def test_work_id_reads_the_trisolaris_contents_payload():
+    """The contents travel as plain JSON from /art-editions/{id}/contents;
+    Cyrillic arrives decoded — no escape layer exists anymore."""
+    body = contents_response([
+        work_item("1000956774", "Сказание о Кише"),
+        work_item("1000880978", "Белый Клык")])
+    got = LivelibClient(fetch=lambda u: body).work_id(
+        "1001477191", title="Белый клык. Сказание о Кише")
+    assert got == "1000880978"
+
+
+def test_work_id_fetches_the_trisolaris_contents_endpoint():
+    body = contents_response([work_item("1000880978", "Белый Клык")])
+    seen = []
+
+    def fetch(url):
+        seen.append(url)
+        return body
+
+    assert LivelibClient(fetch=fetch).work_id("1001477191") == "1000880978"
+    assert seen == ["https://beta.api.livelib.ru/trisolaris/api/art-editions/1001477191/contents"]
+
+
+def test_work_id_single_work_edition_returns_that_work():
+    html = contents_response([work_item("1002397147", "Ленин. Пантократор солнечных пылинок")])
+    assert LivelibClient(fetch=lambda u: html).work_id("1003248852") == "1002397147"
+
+
+def test_work_id_prefers_the_entry_matching_the_edition_title():
+    """An omnibus lists several works; the work the edition is named after wins."""
+    html = contents_response([work_item("1000956774", "Сказание о Кише"),
+                        work_item("1000880978", "Белый клык")])
+    c = LivelibClient(fetch=lambda u: html)
+    assert c.work_id("1001477191", title="Белый клык. Сказание о Кише") == "1000880978"
+
+
+def test_work_id_is_none_for_an_edition_without_a_work_list(tmp_path):
+    c = LivelibClient(fetch=lambda u: contents_response([]))
+    assert c.work_id("1000000001", cache_path=tmp_path / "works-cache.json") is None
+
+
+def test_work_id_caches_under_the_cache_path(tmp_path):
+    cache = tmp_path / "works-cache.json"
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return contents_response([work_item("1002397147", "Ленин")])
+
+    c = LivelibClient(fetch=fetch)
+    assert c.work_id("1003248852", cache_path=cache) == "1002397147"
+    assert json.loads(cache.read_text(encoding="utf-8"))["1003248852"]["work_id"] == "1002397147"
+    # a second call is served from the cache: no transport, same answer
+    quiet = LivelibClient(fetch=lambda u: (_ for _ in ()).throw(AssertionError("network")))
+    assert quiet.work_id("1003248852", cache_path=cache) == "1002397147"
+
+
+def test_work_id_caches_a_miss_so_a_rebuild_stays_offline(tmp_path):
+    cache = tmp_path / "works-cache.json"
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return contents_response([])
+
+    c = LivelibClient(fetch=fetch)
+    assert c.work_id("1000000001", cache_path=cache) is None
+    assert json.loads(cache.read_text(encoding="utf-8"))["1000000001"]["work_id"] is None
+    assert len(calls) == 1
+    quiet = LivelibClient(fetch=lambda u: (_ for _ in ()).throw(AssertionError("network")))
+    assert quiet.work_id("1000000001", cache_path=cache) is None
+    assert len(calls) == 1
+
+
+def test_pick_work_id_rules():
+    from text_forge.livelib import pick_work_id
+    titles = [("Сказание о Кише", "W2"), ("Белый Клык", "W1")]
+    # 1. exact match on the normalized title
+    assert pick_work_id(titles, "Белый клык") == "W1"
+    # 2. the collection is named after the work it OPENS with, not the longer
+    #    title buried inside it
+    assert pick_work_id(titles, "Белый клык. Сказание о Кише") == "W1"
+    #    longer title buried inside it; with no «Морской волк" in the fixture,
+    #    both remaining works run from 0 and the longer match wins
+    assert pick_work_id(titles, "Морской волк. Белый Клык") == "W2"
+    # 3. nothing shares a leading word: livelib's own first-entry choice
+    assert pick_work_id(titles, "Неизвестный сборник") == "W2"
+    assert pick_work_id(titles) == "W2"
+    assert pick_work_id([]) is None
+
+
+def test_pick_work_id_longest_run_wins_when_two_works_share_the_front():
+    """With every candidate running from position 0, the longest one is the work
+    the collection is named after (a single-word neighbour must not steal it)."""
+    from text_forge.livelib import pick_work_id
+    three = [("Морской волк", "W3"), ("Сказание о Кише", "W2"), ("Белый Клык", "W1")]
+    assert pick_work_id(three, "Морской волк. Белый Клык") == "W3"
+
+
+def test_pick_work_id_ignores_volume_noise():
+    from text_forge.livelib import pick_work_id
+    titles = [("Родная речь", "W1"), ("Советское барокко", "W2")]
+    assert pick_work_id(titles, "Родная речь. Советское барокко. 60-е. "
+                               "В 2 томах. Том 1") == "W1"
+
+
+def test_work_id_reports_none_when_the_page_is_unreachable(tmp_path):
+    """A transport failure is a miss, not a crash — and is not cached, so the
+    next build may reach livelib again."""
+    cache = tmp_path / "works-cache.json"
+
+    def boom(url):
+        raise RuntimeError("403 Forbidden")
+
+    assert LivelibClient(fetch=boom).work_id("1001477191", cache_path=cache) is None
+    assert not cache.exists() or json.loads(cache.read_text(encoding="utf-8")) == {}

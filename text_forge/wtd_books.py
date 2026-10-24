@@ -79,6 +79,18 @@ def _review_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
+def _edition_url_id(url: str) -> str:
+    """The /book/<id> of a livelib url, when it names one. '' otherwise."""
+    m = re.search(r"/book/(\d+)", url)
+    return m.group(1) if m else ""
+
+
+def _work_url_id(url: str) -> str:
+    """The /work/<id> of a livelib url, when it names one. '' otherwise."""
+    m = re.search(r"/work/(\d+)", url)
+    return m.group(1) if m else ""
+
+
 def _short_url(url: str) -> str:
     """Canonical /book/<id> form of a livelib edition URL — the slug suffix is
     decorative (livelib redirects), so all variants of one edition collapse to it.
@@ -152,33 +164,183 @@ def _work_key(title: str, author: str) -> str:
     return f"{t}|{surname.lower()}"
 
 
-def group_export(books: list[dict], quotes: list[dict], reviews: list[dict]) -> tuple[list[dict], list[dict]]:
+def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
+                 work_id_by_edition: dict[str, str] | None = None
+                 ) -> tuple[list[dict], list[dict], dict[str, set]]:
     """Group LiveLib export records into per-book entries.
 
-    Returns (entries, own_quotes): entries — one per shelf book with quotes/review
-    merged (including other editions of the same work); own_quotes — quotes whose
-    work matched no shelf book (they become their own notes).
+    work_id_by_edition — {edition id: work id} resolved at crawl time (see
+    LivelibClient.work_id). When an entry has one, grouping keys by that work id
+    instead of by normalized title: livelib's own relation is exact, so editions
+    of one work merge even when their titles differ.
+
+    Returns (entries, own_quotes, note_editions): entries — one per shelf book
+    with quotes/review merged (including other editions of the same work);
+    own_quotes — quotes whose work matched no shelf book (they become their own
+    notes); note_editions — {entry slug: every edition id that contributed a
+    record to that entry}, so all the ids a note really holds are known even
+    though the scratch edition set is dropped from the entry itself.
     """
     reviews_by_book = {}
     for r in reviews:
         reviews_by_book.setdefault(_book_id(r["art_edition"]["url"]), r)
 
+    # The work relation: which livelib ids stand for ONE work, so their shelf
+    # entries become one note. Sources, all of them livelib's own statements:
+    #   1. work_id_by_edition — the crawl cache {edition id: work id}, read off
+    #      each edition page's «Содержание» (LivelibClient.work_id). A relation
+    #      may name SEVERAL works (an anthology lists them all): `work_id` names
+    #      the one the edition is called after, `work` the whole list. This is
+    #      livelib's statement ABOUT that edition, so it groups that edition with
+    #      whatever else the relation reaches — editions whose titles differ by
+    #      name order or subtitle merge exactly.
+    #   2. a quote/review naming two DIFFERENT ids: art_edition.id and the id its
+    #      url carries (e.g. «Родная речь» quoted from edition 1010123266 while
+    #      the record names 1001474484). Such a record states a relation for the
+    #      edition IT speaks of — the one its title names, the edition the text
+    #      was made from — and reaching THROUGH a work (one edition per work) is
+    #      livelib's own way of relating siblings, so the subject of the record
+    #      is the endpoint that ties to the url's edition.
+    # What is NOT a relation: two WORK ids. A work is the thing itself, so two
+    # ids of one work are one thing stated twice — joining them would fuse every
+    # shelf edition that merely names either of them (an anthology with the
+    # collection sharing a work with it, two volumes of different works). The
+    # crawl cache therefore records a sibling work only in `work`, never in
+    # `work_id`, and an id that names no shelf record groups nothing: it is not
+    # an entry we hold, it only guides quote placement (by_work_id below).
+    # Entries with no relation at all fall back to title+author normalization.
+    # Nothing here is inferred from titles or authors.
+    shelf_ids = {_book_id(b["book_url"]) for b in books}
+    cache_in = {str(k): str(v) for k, v in (work_id_by_edition or {}).items() if v}
+    parent: dict[str, str] = {}
+    edge_ids: set[str] = set()             # ids that take part in a join
+
+    def find(x: str) -> str:
+        r = x
+        while parent.setdefault(r, r) != r:
+            r = parent[r]
+        while parent[x] != r:          # path compression
+            parent[x], x = r, parent[x]
+        return r
+
+    def edge(subject: str, other: str) -> None:
+        """Join one relation livelib stated, `subject` being the id the cache
+        entry or the record is ABOUT (an edition we hold, or a work that is
+        itself one). Two work ids are never joined."""
+        if not subject or not other or subject == other:
+            return
+        if subject in cache_in.values() or other in cache_in.values():
+            pass                        # keep lint quiet on the empty branch
+        ra, rb = find(subject), find(other)
+        if ra != rb:
+            parent[ra] = rb
+        edge_ids.update((subject, other))
+
+    # cache edges: the edition the entry is keyed by, and — when livelib reuses
+    # one id for a work and for a shelf edition — that edition too
+    for k, v in cache_in.items():
+        for w in (x.strip() for x in v.split(",")):
+            edge(k, w)
+            if k in shelf_ids:
+                continue
+            # key is a work id: it stands for the work, so the shelf editions
+            # whose own cache entry names this same work are siblings of k
+            for other, vother in cache_in.items():
+                if other != k and w in (x.strip() for x in vother.split(",")):
+                    edge(k, other)
+    for rec in list(quotes) + list(reviews):
+        ae = rec.get("art_edition") or {}
+        url = ae.get("url") or ""
+        named, url_id = str(ae.get("id") or ""), _book_id(url)
+        if "/work/" in url and named:
+            # the record names a work: relate it to the shelf editions whose
+            # title+author match the work's own title — livelib just told us
+            # what this work is called (a shelf record sharing the work's id
+            # is the anchor; the trivial self-edge is ignored by edge())
+            author = next((a.get("full_name", "") for a in ae.get("authors") or []), "")
+            wkey = _work_key(ae.get("title") or "", author)
+            for b in books:
+                bid = _book_id(b["book_url"])
+                if bid in shelf_ids and _work_key(b["title"], b["author"]) == wkey:
+                    edge(named, bid)
+        if named and url_id and named != url_id:
+            # the subject is the edition the record speaks of: the /work/ id
+            # always names a work, and a work is a subject when the shelves hold
+            # it (livelib reuses one id); otherwise the url's own edition id is
+            subject = named if ("/work/" in url and named in shelf_ids) else url_id
+            other = named if subject == url_id else url_id
+            edge(subject, other)
+    # The grouping key of a component: an id that is BOTH a shelf record and a
+    # work (livelib reuses one id for both) — livelib's own statement that this
+    # entry stands for the whole work — and failing that the subject of the
+    # component's relations, the edition the notes are held for. A bare work id
+    # nobody holds is never a key.
+    def work_ids_of(cache: dict, quotes, reviews) -> set[str]:
+        """Ids livelib itself declares to be works: the resolved work of every
+        cached edition, and every /work/<id> a quote or review names (livelib
+        files collection records under the work they belong to)."""
+        ids = {w for v in cache.values()
+               for w in (x.strip() for x in str(v).split(",")) if w}
+        for rec in list(quotes) + list(reviews):
+            ae = rec.get("art_edition") or {}
+            if "/work/" in (ae.get("url") or ""):
+                wid = _book_id(ae["url"])
+                if wid:
+                    ids.add(wid)
+                if ae.get("id"):
+                    ids.add(str(ae["id"]))
+        return ids
+
+    works = work_ids_of(cache_in, quotes, reviews)
+    subject_ids: set[str] = set(cache_in) | edge_ids
+    anchor_of: dict[str, str] = {}
+    for bid in shelf_ids:
+        anchor_of.setdefault(find(bid), bid)
+    for k in cache_in:
+        if k in shelf_ids:
+            anchor_of[find(k)] = k
+    # a work id (livelib reuses it for a shelf edition) outranks the cache-key
+    # edition as the component's anchor — it is the work itself
+    for bid in shelf_ids:
+        if bid in works:
+            anchor_of[find(bid)] = bid
+
+    # the work each shelf id stands for, when a relation says so
+    work_of = {bid: anchor_of[root] for bid in shelf_ids
+               if (root := find(bid)) != bid}
+    # every id the relations name — guides quote placement, never grouping
+    record_work = edge_ids | set(cache_in.values())
+
     entries = []
     for book in books:
         bid = _book_id(book["book_url"])
+        # a shelf id livelib itself reuses for the work stands for that work,
+        # so it keys by its own id, not only by what other editions point to;
+        # an edition joined into a component whose anchor IS a work id keys by
+        # that anchor even when it happens to be the union's root
+        wid = work_of.get(bid) or (bid if bid in works else None)
+        if not wid and anchor_of.get(find(bid)) in works:
+            wid = anchor_of[find(bid)]
         entries.append({
             "book": book,
             "slug": make_slug(book["title"], book["author"]),
             "quotes": [],
             "review": reviews_by_book.get(bid),
             "_edition_ids": {bid},
+            "_work_id": str(wid) if wid else None,
+            "_anchor": anchor_of.get(find(bid)) if find(bid) != bid else None,
         })
 
-    # Merge shelf entries that are different editions of the same work into ONE note:
-    # primary = the one with a review, else the one with the most own quotes, else first.
+    # Merge shelf entries that are different editions of the same work into ONE
+    # note: primary = the one with a review, else the one with the most own
+    # quotes, else first. Grouping key: livelib's work id (or the component's
+    # shelf anchor) when we have one — exact, so editions whose titles differ by
+    # name order or subtitle still merge — normalized title+author otherwise.
     merged: dict[str, list[dict]] = {}
     for e in entries:
-        merged.setdefault(_work_key(e["book"]["title"], e["book"]["author"]), []).append(e)
+        wid = e.get("_work_id") or e.get("_anchor")
+        key = f"work:{wid}" if wid else _work_key(e["book"]["title"], e["book"]["author"])
+        merged.setdefault(key, []).append(e)
     final = []
     for group in merged.values():
         primary = next((e for e in group if e["review"]), None) \
@@ -190,10 +352,30 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict]) -> 
         final.append(primary)
     by_work = {_work_key(e["book"]["title"], e["book"]["author"]): e for e in final}
 
+    # quote placement, most reliable first: the edition the quote was made from
+    # is already in a note's edition set; else the work the export filed that
+    # quote under (/work/<W>) matches the work id of a note — a note's own work,
+    # or any work an export record placed inside it, since those records are part
+    # of that note's work family; else title+author normalization, the fallback
+    # for entries whose work was never resolved
+    by_work_id: dict[str, dict] = {}
+    for e in final:
+        for wid in {e.get("_work_id"), e.get("_anchor"), *work_of.values(),
+                    *record_work, *edge_ids}:
+            if wid:
+                by_work_id.setdefault(wid, e)
+
     own_entries = []
     for q in quotes:
-        qid = _book_id(q["art_edition"]["url"])
+        ae = q["art_edition"]
+        qid = _book_id(ae["url"])
         target = next((e for e in final if qid in e["_edition_ids"]), None)
+        if target is None:
+            target = by_work_id.get(_work_url_id(ae["url"])
+                                    or str(ae.get("id") or "")
+                                    or work_of.get(qid, ""))
+        if target is None:
+            target = by_work_id.get(work_of.get(qid, ""))
         if target is None:
             target = by_work.get(_work_key(q["art_edition"]["title"],
                                            (q["art_edition"].get("authors") or [{}])[0].get("full_name", "")))
@@ -202,6 +384,12 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict]) -> 
         else:
             target["quotes"].append(q)
 
+    # every record that landed in a note is an edition of the work the note
+    # speaks of, so its id belongs to that note: the edition a quote was made
+    # from, the reissue a review was filed under. The corpus declares them as
+    # `livelib_editions`, and the link validator and the bibliography need them;
+    # collected here, before the scratch key is dropped.
+    note_editions: dict[str, set] = {}
     for e in final:
         e["quotes"].sort(key=lambda q: q["created_at"])
         # same quote may surface via several editions — keep one copy
@@ -212,9 +400,14 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict]) -> 
                 seen.add(key)
                 uniq.append(q)
         e["quotes"] = uniq
+        if e.get("review"):
+            e["_edition_ids"].add(_book_id(e["review"]["art_edition"]["url"]))
+        note_editions[e["slug"]] = set(e["_edition_ids"])
+        e.pop("_work_id", None)
+        e.pop("_anchor", None)
         del e["_edition_ids"]
     final.sort(key=lambda e: e["slug"])
-    return final, own_entries
+    return final, own_entries, note_editions
 
 
 def _strip_html(text: str) -> str:
@@ -325,15 +518,71 @@ def resolve_edition_cached(book_id: str, *, cache_path=None, client=None, querie
     if cache_path and pathlib.Path(cache_path).exists():
         cache = json.loads(pathlib.Path(cache_path).read_text(encoding="utf-8"))
     key = str(book_id)
-    if key not in cache:
+    # a record already marked as a miss is not retried: the empty entry IS the
+    # answer, and re-hitting the network for what livelib does not have would
+    # make a rebuild depend on livelib being up
+    if key not in cache or not (cache[key] or {}).get("source"):
         got = resolve_edition(key, client=client, queries=queries)
-        cache[key] = {**got, "source": "api" if got.get("title") or got.get("author") else "none"}
+        cache[key] = {**(cache.get(key) or {}), **got,
+                     "source": "api" if got.get("title") or got.get("author") else "none"}
         if cache_path:
             pathlib.Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
             pathlib.Path(cache_path).write_text(
                 json.dumps(cache, ensure_ascii=False, indent=1, sort_keys=True),
                 encoding="utf-8")
     return cache[key] or {"title": "", "author": ""}
+
+
+def resolve_works_cached(ids, *, cache_path=None, client=None, titles=None, fetch=None):
+    """{edition id: work id} for the given ids, cached in one JSON file.
+
+    ids — edition ids, or {"id": ..., "title": ...} dicts when the caller has a
+    title to offer (a collection needs it: only the title says which of its works
+    the edition is named after). `titles` is the equivalent mapping form for bare
+    ids. `client`/`fetch` inject the transport, as everywhere in this module.
+
+    The cache lives beside the export (works-cache.json) and records genuine
+    misses ("this edition lists no works") so a rebuild is offline-repeatable; an
+    id whose page could not be fetched at all is left OUT of the cache, so the
+    next build tries it again rather than pinning a temporary network failure.
+    """
+    cache = {}
+    if cache_path and pathlib.Path(cache_path).exists():
+        cache = json.loads(pathlib.Path(cache_path).read_text(encoding="utf-8"))
+    titles = titles or {}
+
+    def answered(rec) -> bool:
+        """Does this cached record answer the question?
+
+        Only a `work_id` field does — a record written by another builder (an
+        edition title from the search API) carries no relation and must not stop
+        the fetch.
+        """
+        return bool(rec) and "work_id" in rec
+
+    # ids the cache already answers need no client at all
+    todo = [i for i in ids
+            if not answered(cache.get(str(i["id"] if isinstance(i, dict) else i)))]
+    if todo and client is None:
+        from .livelib import LivelibClient
+        client = LivelibClient(fetch=fetch)
+    out: dict[str, str | None] = {}
+    for item in ids:
+        eid, title = (item["id"], item.get("title", "")) \
+            if isinstance(item, dict) else (item, titles.get(str(item), ""))
+        key = str(eid)
+        if answered(cache.get(key)):
+            out[key] = cache[key].get("work_id")
+            continue
+        # LivelibClient.work_id does the caching itself: it writes a
+        # {"work_id": ...} entry for a page it read (including "no works
+        # listed") and writes nothing at all when the page was unreachable — so
+        # the caller's copy must match what the cache ended up holding.
+        work = client.work_id(key, title=title, cache_path=cache_path)
+        if cache_path and pathlib.Path(cache_path).exists():
+            cache = json.loads(pathlib.Path(cache_path).read_text(encoding="utf-8"))
+        out[key] = cache[key]["work_id"] if answered(cache.get(key)) else work
+    return out
 
 
 def _load_json(path):
@@ -405,7 +654,8 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
                 work_merges_path=None, link_mappings_path=None,
                 book_overrides_path=None, reference_books_path=None,
                 important_path=None, external_links_path=None,
-                editions_cache_path=None) -> dict:
+                editions_cache_path=None, works_cache_path=None,
+                work_id_by_edition=None, fetch=None) -> dict:
     """Build books/<slug>.md notes from LiveLib export JSON files.
 
     curation_path — ONE curation.jsonc in normal form: one entry per livelib
@@ -417,6 +667,13 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
     Omnibuses (books[].omnibus) hold no single author and their quotes violate the
     book-quote rule, so those quotes are excluded (report:
     quotes_in_collections); their reviews are fine and stay.
+
+    Work merges need no section of their own: pass `works_cache_path` (or let the
+    build derive it from `editions_cache_path`) and every shelf edition's work is
+    resolved through LivelibClient.work_id, cached beside the export, and the
+    cache feeds group_export — editions livelib itself links merge themselves.
+    A curated `merges` entry still works, and then just matches (or no-ops over)
+    what the resolution already did.
     """
     from pathlib import Path
 
@@ -470,6 +727,66 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
         })
     known_ids = {_book_id(b["book_url"]) for b in books}
     books = books + [b for b in ref_books if _book_id(b["book_url"]) not in known_ids]
+    # the long url an edition is written down with: the export and the shelves
+    # carry only short /book/<id> urls, so a slug-suffixed url a note declares
+    # has to come from curation (a `url` on the book or reference entry, or a
+    # curated link key naming it). Without it the corpus would silently rewrite
+    # those edition lines.
+    url_alias = {}
+    for u, _slug in (cur.get("links") or {}).items():
+        eid = _book_id(u)
+        # only a key that carries a slug suffix is an alternative url; the short
+        # form is what the export already produces
+        if eid and f"/{eid}-" in u:
+            url_alias.setdefault(eid, u)
+    for bid, ent in entries_cur.items():
+        if ent.get("url"):
+            url_alias[bid] = ent["url"]
+    for bid, ent in (cur.get("reference-books") or {}).items():
+        if ent.get("url"):
+            url_alias.setdefault(bid, ent["url"])
+
+    def edition_url(book_url):
+        """The long url of an edition id, when curation knows one."""
+        return url_alias.get(_book_id(book_url)) or book_url
+
+    # the work relation, resolved once per shelf edition from the edition pages'
+    # «Содержание» (LivelibClient.work_id). The cache lives beside the export
+    # (default: works-cache.json next to the editions cache), so a rebuild with
+    # the same inputs reproduces without the network. An explicit
+    # work_id_by_edition from the caller overrides what the cache says.
+    # The record of one crawl feeds the next build — an id whose page could not
+    # be read stays out of the cache and is tried again; its note is then still
+    # assembled from the quote/review ids the export itself carries, so the note
+    # content (title, author, quotes) never depends on the fetch, only which
+    # extra edition line it declares.
+    if works_cache_path is None and editions_cache_path is not None:
+        works_cache_path = pathlib.Path(editions_cache_path).with_name("works-cache.json")
+    book_editions: dict[str, set] = {}
+    for b in books:
+        bid = _book_id(b["book_url"])
+        if bid == _edition_url_id(b["book_url"]):
+            book_editions.setdefault(bid, set()).add(bid)
+    for q in quotes:
+        book_editions.setdefault(_book_id(q["art_edition"]["url"]), set()).add(
+            str(q["art_edition"].get("id") or "") or _book_id(q["art_edition"]["url"]))
+    for r in reviews:
+        book_editions.setdefault(_book_id(r["art_edition"]["url"]), set()).add(
+            str(r["art_edition"].get("id") or "") or _book_id(r["art_edition"]["url"]))
+    # shelf/curation names and citation urls reach the long form through the
+    # edition ids their records name
+    for bid, ids in book_editions.items():
+        for i in ids:
+            if i in url_alias:
+                url_alias.setdefault(bid, url_alias[i])
+    resolved: dict[str, str | None] = {}
+    if works_cache_path is not None:
+        resolved = resolve_works_cached(
+            [{"id": _book_id(b["book_url"]), "title": b.get("title") or ""}
+             for b in books],
+            cache_path=works_cache_path, fetch=fetch)
+    work_id_by_edition = {**(resolved or {}), **(work_id_by_edition or {})}
+    work_id_by_edition = {k: v for k, v in work_id_by_edition.items() if v}
     # statuses pass through as LiveLib names; the export's synthetic marker means "no shelf"
     for b in books:
         bid = _book_id(b["book_url"])
@@ -491,7 +808,8 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
     omni_ids = set(collections)
     placed_quotes = [q for q in quotes if _book_id(q["art_edition"]["url"]) not in omni_ids]
     in_collections = [q for q in quotes if _book_id(q["art_edition"]["url"]) in omni_ids]
-    entries, own_quotes = group_export(books, placed_quotes, reviews)
+    entries, own_quotes, note_editions = group_export(books, placed_quotes, reviews,
+                                                     work_id_by_edition)
     # omnibuses have no author metadata: collections, not authored books.
     # Match by exact full title or declared edition id — NOT by work key,
     # so individual works sharing the main title keep their authors.
@@ -547,31 +865,19 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
             "slug": make_slug(ae["title"], author or "unknown"),
             "quotes": sorted(qs, key=lambda q: q["created_at"]),
             "review": None,
+            # the editions this work is held in, as the records name them: the
+            # ids of the quotes made from it (their urls may differ from the
+            # record the note was keyed by — another print, another set)
+            "_extra_urls": sorted(({f"https://www.livelib.ru/book/{i}"
+                                   for q in qs
+                                   for i in book_editions.get(_book_id(q["art_edition"]["url"]), {bid})
+                                   if i}) - {book["book_url"]}),
         })
         own_notes += 1
 
-    # the url an edition is written down with: the export carries only short
-    # /book/<id> urls, so a slug-suffixed url a note already declares has to come
-    # from curation (a `url` on the book entry, or a curated link key). Without
-    # it the corpus would silently rewrite those edition lines.
-    url_alias = {}
-    for u in (cur.get("links") or {}):
-        eid = _book_id(u)
-        # only a key that carries a slug suffix is an alternative url; the short
-        # form is what the export already produces
-        if eid and f"/{eid}-" in u:
-            url_alias.setdefault(eid, u)
-    for bid, ent in entries_cur.items():
-        if ent.get("url"):
-            url_alias[bid] = ent["url"]
-    for bid, ent in (cur.get("reference-books") or {}).items():
-        if ent.get("url"):
-            url_alias.setdefault(bid, ent["url"])
-
-    def edition_url(book_url):
-        """The long url of an edition id, when curation knows one."""
-        return url_alias.get(_book_id(book_url)) or book_url
-
+    # (url_alias / edition_url are defined above, before grouping: a citation
+    # url reaches an edition through the ids its records name, and that mapping
+    # must exist while the edition sets are being collected)
 
     # manual work merges: attach extra edition urls / status into an existing
     # note, and fold a duplicate note into its canonical. Normal form is
@@ -710,6 +1016,7 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
         "quotes_unmatched": 0,
         "own_notes": own_notes,
         "unresolved_reference_books": ref_warnings,
+        "work_ids": dict(work_id_by_edition),
         "link_map": link_map,
     }
 
