@@ -132,17 +132,31 @@ def main(root_str: str, user_id: int = 345497) -> int:
         print(f"FAIL: curation file not found: {curation}")
         return 1
 
-    # crawl progress: one line per livelib page read (edition cards and their
-    # contents), so the slow part shows what it is working on right now
+    # crawl progress: one line per livelib page actually fetched (a cached id
+    # costs no network and prints nothing), named by the book title a human knows
+    titles = {}
+    for b in json.loads((export_dir / "livelib-books.json").read_text(encoding="utf-8")):
+        titles[_book_url_id(b["book_url"])] = b["title"]
+    for q in json.loads((export_dir / "livelib-quotes-api.json").read_text(encoding="utf-8")):
+        ae = q.get("art_edition") or {}
+        titles.setdefault(str(ae.get("id") or "") or _book_url_id(ae.get("url") or ""),
+                          ae.get("title") or "")
+    # editions resolved in a previous build keep their titles in the cache: a
+    # re-crawl of one of them still prints its name, not a bare id
+    ed_cache = export_dir / "editions-cache.json"
+    if ed_cache.exists():
+        for eid, rec in json.loads(ed_cache.read_text(encoding="utf-8")).items():
+            if rec and rec.get("title"):
+                titles.setdefault(eid, rec["title"])
     seen_pages = [0]
 
     def progress_fetch(url: str) -> str:
         if "/art-editions/" in url:
             seen_pages[0] += 1
             m = re.search(r"/art-editions/(\d+)", url)
-            what = "contents" if url.endswith("/contents") else "card"
-            print(f"  crawl {seen_pages[0]:3d}: edition {m.group(1)} ({what})"
-                  if m else f"  crawl {seen_pages[0]:3d}: {url[-50:]}")
+            what = "Содержание" if url.endswith("/contents") else "карточка"
+            title = titles.get(m.group(1) if m else "", "") or (url[-40:] if not m else "")
+            print(f"  crawl {seen_pages[0]:3d}: {what}: {title}")
         return LivelibClient().fetch(url)
 
     report = build_books(
@@ -204,10 +218,12 @@ def main(root_str: str, user_id: int = 345497) -> int:
     if res["unresolved"]:
         for u in res["unresolved"]:
             print("  UNRESOLVED:", u["url"], f"(cited in {u.get('file', '?')})")
-    ok = not res["unresolved"] and statuses.get("none", 0) == 0
-    if not ok:
-        print("FAIL: fix the items above (on livelib or in curation) and re-run")
-    return 0 if ok else 1
+    # fail-loud ONLY on unresolved links (a lost reference is data loss);
+    # NONE/OWN notes are legitimate exceptions printed above for manual review
+    if res["unresolved"]:
+        print("FAIL: unresolved link above — fix on livelib (shelf/review) or in text, then re-run")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -26,7 +26,8 @@ Channels verified against livelib.ru (anonymous; last sweep 2026-10-24):
   answer 404 and /users/me/collections answers 405 without cookies
   (verified 2026-10-24).
 
-Known limits: the want shelf ignores ?page server-side (first 20 only);
+Known limits: the want shelf (url; its status is wish) ignores ?page
+server-side (first 20 only);
 write endpoints (POST/PATCH/DELETE /users/me/collections, per
 advokatb/livelib.koplugin) need session cookies and are out of scope here.
 
@@ -299,7 +300,10 @@ class LivelibClient:
     # -------------------------------------------------------------- SSR
 
     def shelf(self, user_id: int, shelf: str) -> list[dict]:
-        """One shelf; walks ?page=N until a page adds no new editions."""
+        """One shelf; walks ?page=N until a page adds no new editions.
+
+        Prints one progress line per page — the SSR walk is the slow part of
+        an export, and a human watching `make books` should see it moving."""
         status = SHELF_STATUS[shelf]
         base = f"{SITE_BASE}/users/{user_id}/books/{shelf}"
         seen: dict[str, dict] = {}
@@ -310,6 +314,7 @@ class LivelibClient:
             for r in fresh:
                 r["status"] = status
                 seen[r["edition_id"]] = r
+            print(f"  shelf {shelf}: page {page} → {len(seen)} books")
             if not fresh:
                 return list(seen.values())
             page += 1
