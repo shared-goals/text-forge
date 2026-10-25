@@ -964,6 +964,9 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
         "quotes_placed": placed,
         "quotes_unmatched": 0,
         "own_notes": own_notes,
+        "own_note_urls": [e["book"]["book_url"] for e in entries
+                          if e["book"]["book_url"] not in
+                          {b["book_url"] for b in books}],
         "unresolved_reference_books": ref_warnings,
         "work_ids": dict(work_id_by_edition),
         "link_map": link_map,

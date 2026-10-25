@@ -35,6 +35,7 @@ Transport is injected so tests run without network.
 import json
 import pathlib
 import re
+import urllib.error
 import urllib.request
 
 API_BASE = "https://beta.api.livelib.ru/trisolaris/api"
@@ -119,9 +120,23 @@ def pick_work_id(titles: list[tuple[str, str]], title: str = "") -> str | None:
 
 
 def default_fetch(url: str, timeout: int = 30) -> str:
-    req = urllib.request.Request(url, headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "replace")
+    """GET with a small retry on transient livelib errors (5xx / 429):
+    the SSR shelves and edition pages answer 500 a few times a day — a build
+    should survive that instead of dying mid-export. Fatal (4xx except 429)
+    raises at once."""
+    import time as _time
+    last: Exception = RuntimeError("unreached")
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504):
+                raise
+            last = e
+            _time.sleep(2 * (attempt + 1))
+    raise last
 
 
 def parse_flight_collections(html: str) -> list[dict]:
