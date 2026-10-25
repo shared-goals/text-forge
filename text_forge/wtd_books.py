@@ -11,6 +11,8 @@ import json
 import pathlib
 import re
 
+from .livelib import LivelibClient
+
 TRANSLIT = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
     "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
@@ -89,14 +91,6 @@ def _work_url_id(url: str) -> str:
     """The /work/<id> of a livelib url, when it names one. '' otherwise."""
     m = re.search(r"/work/(\d+)", url)
     return m.group(1) if m else ""
-
-
-def _short_url(url: str) -> str:
-    """Canonical /book/<id> form of a livelib edition URL — the slug suffix is
-    decorative (livelib redirects), so all variants of one edition collapse to it.
-    Non-edition URLs are returned unchanged."""
-    m = re.search(r"/(?:book|work)/(\d+)", url)
-    return f"https://www.livelib.ru/book/{m.group(1)}" if m else url
 
 
 def load_curation(path) -> dict:
@@ -321,7 +315,6 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
         return ids
 
     works = work_ids_of(cache_in, quotes, reviews)
-    subject_ids: set[str] = set(cache_in) | edge_ids
     anchor_of: dict[str, str] = {}
     for bid in shelf_ids:
         anchor_of.setdefault(find(bid), bid)
@@ -341,8 +334,29 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
             anchor_of[find(main)] = main
 
     # the work each shelf id stands for, when a relation says so
-    work_of = {bid: anchor_of[root] for bid in shelf_ids
-               if (root := find(bid)) != bid}
+    #
+    # the ORDER of these rules IS the policy for naming a work:
+    #   1. the id livelib itself reuses for the work (a shelf id in `works`)
+    #      is the work — exact, and it names the note;
+    #   2. else the MAIN of a curated `merges` array names it — the human said
+    #      which of the component's records the note is;
+    #   3. else a component holding several shelf editions is one work, and the
+    #      component's named anchor (the edition the relation is keyed by) stands
+    #      for it — this is what merges editions whose titles differ only by
+    #      name order or subtitle;
+    # a component holding ONE shelf id names nothing: that edition is its own
+    # note, and the other end of the relation is only a link target
+    components: dict[str, list[str]] = {}
+    for bid in shelf_ids:
+        components.setdefault(find(bid), []).append(bid)
+    work_of = {}
+    for bid in shelf_ids:
+        root = find(bid)
+        a = anchor_of.get(root)
+        if root == bid or a is None:
+            continue
+        if a in works or a in curated_merges or len(components[root]) > 1:
+            work_of[bid] = a
     # every id the relations name — guides quote placement, never grouping
     record_work = edge_ids | set(cache_in.values())
     mains = set(curated_merges) | works
@@ -362,7 +376,11 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
             "book": book,
             "slug": make_slug(book["title"], book["author"]),
             "quotes": [],
-            "review": reviews_by_book.get(bid),
+            # a curated member's review belongs to the main note even when the
+            # member holds no shelf record of its own
+            "review": reviews_by_book.get(bid)
+                      or next((reviews_by_book[m] for m in curated_merges.get(bid, [])
+                               if reviews_by_book.get(m)), None),
             # a curated member may hold no shelf record: it still belongs to
             # the main note's edition set, so its links resolve
             "_edition_ids": {bid, *curated_merges.get(bid, [])},
@@ -371,11 +389,12 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
             "_main": bid in curated_merges,
         })
 
-    # Merge shelf entries that are different editions of the same work into ONE
-    # note: primary = the one with a review, else the one with the most own
-    # quotes, else first. Grouping key: livelib's work id (or the component's
-    # shelf anchor) when we have one — exact, so editions whose titles differ by
-    # name order or subtitle still merge — normalized title+author otherwise.
+    # Merge shelf entries that are different editions of one work, or that a
+    # curated `merges` array joins: primary = the note's own shelf record (what
+    # the entry is keyed by), else the one with a review, else the most quoted.
+    # Grouping key: livelib's work id (or the component's shelf anchor) when we
+    # have one — exact, so editions whose titles differ by name order or
+    # subtitle still merge — normalized title+author otherwise.
     merged: dict[str, list[dict]] = {}
     for e in entries:
         wid = e.get("_work_id") or e.get("_anchor")
@@ -383,13 +402,18 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
         merged.setdefault(key, []).append(e)
     final = []
     for group in merged.values():
-        # the note's identity: a curated merge's MAIN id wins (the human said
-        # this note is the one), then a review holder, then the most quoted
-        is_main = [bool(e.pop("_main", None)) for e in group]
-        primary = next((e for e, m in zip(group, is_main) if m), None) \
+        # the note's identity is the entry that STANDS for the work: the one
+        # whose own relation keyed the group, or the main of a curated merge;
+        # failing that, the review holder, then the most quoted
+        keys = {str(e.get("_work_id") or e.get("_anchor")) for e in group}
+        primary = next((e for e in group
+                       if e["_main"] or str(_book_id(e["book"]["book_url"])) in keys),
+                       None) \
             or next((e for e in group if e["review"]), None) \
             or (max(group, key=lambda e: len(e["quotes"]))
                 if len(group) > 1 else group[0])
+        for e in group:
+            e.pop("_main", None)
         for other in group:
             if other is not primary:
                 primary["_edition_ids"] |= other["_edition_ids"]
@@ -559,46 +583,35 @@ def render_note(entry: dict) -> str:
     return "\n".join(body).rstrip() + "\n"
 
 
-def resolve_edition(book_id: str, *, client=None, queries=()) -> dict:
-    """{title, author} of a livelib edition id via the search API.
-
-    Returns {"title": "", "author": ""} when livelib's search does not carry the
-    edition (the search index returns at most ~20 editions per query, and the
-    book pages are not fetchable anonymously), so a caller cannot count on it and
-    must keep a fallback.
-    """
-    if client is None:
-        from .livelib import LivelibClient
-        client = LivelibClient()
-    out = client.resolve_edition(book_id, extra_queries=queries) or {}
-    return {"title": out.get("title", ""), "author": out.get("author", "")}
-
-
-def resolve_edition_cached(book_id: str, *, cache_path=None, client=None, queries=()) -> dict:
-    """resolve_edition with a JSON cache so a build stays offline-repeatable.
+def resolve_edition_cached(book_id: str, *, cache_path=None, client=None) -> dict:
+    """{title, author} of an edition id via the edition card, with a JSON cache.
 
     Keyed by edition id. An id livelib could not resolve is cached too (as an
     empty entry), so a rebuild does not re-hit the network for what livelib does
     not have. The cache is the build's record of where each fetched title came
-    from; `source` says whether it was the API or a cache hit.
+    from; `source` says whether it was the API or a recorded miss.
     """
+    if client is None:
+        from .livelib import LivelibClient
+        client = LivelibClient()
     cache = {}
     if cache_path and pathlib.Path(cache_path).exists():
         cache = json.loads(pathlib.Path(cache_path).read_text(encoding="utf-8"))
     key = str(book_id)
-    # a record already marked as a miss is not retried: the empty entry IS the
-    # answer, and re-hitting the network for what livelib does not have would
-    # make a rebuild depend on livelib being up
+    # a record already marked as an answer is not retried: the empty entry IS
+    # the answer, and re-hitting the network for what livelib does not have
+    # would make a rebuild depend on livelib being up
     if key not in cache or not (cache[key] or {}).get("source"):
-        got = resolve_edition(key, client=client, queries=queries)
-        cache[key] = {**(cache.get(key) or {}), **got,
+        got = client.edition_meta(key) or {}
+        cache[key] = {**got,
                      "source": "api" if got.get("title") or got.get("author") else "none"}
         if cache_path:
             pathlib.Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
             pathlib.Path(cache_path).write_text(
                 json.dumps(cache, ensure_ascii=False, indent=1, sort_keys=True),
                 encoding="utf-8")
-    return cache[key] or {"title": "", "author": ""}
+    return {"title": "", "author": "", **cache[key]}
+
 
 
 def resolve_works_cached(ids, *, cache_path=None, client=None, titles=None, fetch=None):
@@ -657,84 +670,37 @@ def _load_json(path):
     return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
 
 
-def curation_from_legacy(collections_path=None, author_overrides_path=None,
-                         work_merges_path=None, link_mappings_path=None,
-                         book_overrides_path=None, reference_books_path=None,
-                         important_path=None, external_links_path=None) -> dict:
-    """Fold the old one-file-per-concern curation into the consolidated shape.
+def _text_book_ids(text_dir) -> list[str]:
+    """Every /book/ and /work/ id the TEXT links, in first-seen order.
 
-    Lives only to keep the legacy parameters working while callers move to
-    curation_path; the consolidated file is the target form.
+    Only edition/work ids are collected: a quote or review id is placed by the
+    export, so it never needs metadata resolution.
     """
-    cur: dict = {"books": {}, "merges": {}, "links": {}, "external": [],
-                "reference-books": {}}
-    for u, a in (_load_json(author_overrides_path) if author_overrides_path else {}).items():
-        cur["books"].setdefault(_book_id(u), {})["author"] = a
-    for bid, ov in (_load_json(book_overrides_path) if book_overrides_path else {}).items():
-        cur["books"].setdefault(bid, {}).update(ov)
-    for u, title in (_load_json(collections_path) if collections_path else {}).items():
-        # the old file carried the title with a '(омнибус)' marker; the new form
-        # keeps the title verbatim (or bare true) — the marker was decoration
-        cur["books"].setdefault(_book_id(u), {})["omnibus"] = \
-            re.sub(r"\s*\(омнибус\)\s*$", "", title) or True
-    for bid, w in (_load_json(important_path) if important_path else {}).items():
-        cur["books"].setdefault(bid, {})["weight"] = w
-    for m in (_load_json(work_merges_path) if work_merges_path else []):
-        if not isinstance(m, dict):
-            continue
-        remove, into = m.get("remove", ""), m.get("into", "")
-        # an entry may carry only 'into' (attach an extra url / set status on an
-        # existing note) or only 'remove' (a fold with no explicit canonical);
-        # neither is a reason to drop the WHOLE file, so each part is kept under
-        # whichever key is available
-        key = remove or into
-        if not key:
-            continue
-        if remove and into:
-            cur["merges"][remove] = into
-        if m.get("extra"):
-            cur.setdefault("merge-extra", {})[key] = m["extra"]
-        if m.get("status"):
-            cur.setdefault("merge-status", {})[key] = m["status"]
-    for u, slug in (_load_json(link_mappings_path) if link_mappings_path else {}).items():
-        # the consolidated form keys a link by the canonical short url: the slug
-        # suffix of a livelib url is decorative (livelib redirects), so all the
-        # old per-variant keys collapse into one
-        cur["links"][_short_url(u)] = slug
-    if external_links_path and pathlib.Path(external_links_path).exists():
-        cur["external"] = list(_load_json(external_links_path))
-    for b in (_load_json(reference_books_path) if reference_books_path else []):
-        ent = {"title": b.get("title"), "author": b.get("author"),
-               "status": b.get("status"), "my_mark": b.get("my_mark")}
-        # the long url is NOT derivable from the id (the export yields short ids
-        # only, and an off-shelf edition has no export record to read it from), so
-        # the alias is carried rather than dropped
-        long_url = b.get("book_url") or ""
-        eid = _book_id(long_url)
-        if eid and f"/{eid}-" in long_url:
-            ent["url"] = long_url
-        cur["reference-books"][eid or long_url] = ent
-    return cur
+    out: list[str] = []
+    seen = set()
+    for chapter in sorted(pathlib.Path(text_dir).glob("*.md")):
+        for m in re.finditer(r"livelib\.ru/(?:book|work)/(\d+)",
+                            chapter.read_text(encoding="utf-8")):
+            if m.group(1) not in seen:
+                seen.add(m.group(1))
+                out.append(m.group(1))
+    return out
 
 
 def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path=None,
-                collections_path=None, author_overrides_path=None,
-                work_merges_path=None, link_mappings_path=None,
-                book_overrides_path=None, reference_books_path=None,
-                important_path=None, external_links_path=None,
-                editions_cache_path=None, works_cache_path=None,
+                text_dir=None, editions_cache_path=None, works_cache_path=None,
                 work_id_by_edition=None, fetch=None) -> dict:
     """Build books/<slug>.md notes from LiveLib export JSON files.
 
     curation_path — ONE curation.jsonc in normal form: one entry per livelib
-    edition id under `books`, plus `merges`, `links`, `external`,
-    `reference-books`. Anything livelib can tell us is not stored: a reference
-    book's title/author comes from the search API (cached in
-    <root>/livelib-export/editions-cache.json so builds stay offline-repeatable).
+    edition id under `books`, each carrying weight?/status?/my_mark?/author?/
+    merges?. Anything livelib can tell us is not stored.
 
-    Omnibuses (books[].omnibus) hold no single author and their quotes violate the
-    book-quote rule, so those quotes are excluded (report:
-    quotes_in_collections); their reviews are fine and stay.
+    Reference books need no section of their own: pass `text_dir` and the build
+    scans the texts for livelib edition ids no note would declare, resolving
+    each one's title/author through LivelibClient.edition_meta (cached beside
+    the export in editions-cache.json, so a rebuild stays offline-repeatable).
+    Such a note declares the short canonical url its id always redirects to.
 
     Work merges need no section of their own: pass `works_cache_path` (or let the
     build derive it from `editions_cache_path`) and every shelf edition's work is
@@ -750,93 +716,68 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
     quotes = load(quotes_path)
     reviews = load(reviews_path)
 
-    if curation_path is not None:
-        # a caller may hand in an already-built curation mapping (e.g. from
-        # curation_from_legacy) instead of a file path
-        cur = curation_path if isinstance(curation_path, dict) else load_curation(curation_path)
-    elif any(p is not None for p in (collections_path, author_overrides_path,
-                                    work_merges_path, link_mappings_path,
-                                    book_overrides_path, reference_books_path,
-                                    important_path, external_links_path)):
-        # legacy path, kept for callers not yet moved to curation_path
-        cur = curation_from_legacy(collections_path, author_overrides_path,
-                                  work_merges_path, link_mappings_path,
-                                  book_overrides_path, reference_books_path,
-                                  important_path, external_links_path)
-    else:
-        cur = {}
-    # write the whole file with sorted keys: a caller may hand in a dict literal
-    # (e.g. the build's own link_map), which has no keys to sort out of a file
+    # a caller may hand in an already-built curation mapping instead of a path
+    cur = (curation_path if isinstance(curation_path, dict)
+           else load_curation(curation_path) if curation_path is not None else {})
     entries_cur = dict(cur.get("books") or {})
-    collections = {bid: v["omnibus"] for bid, v in entries_cur.items() if v.get("omnibus")}
     ov_by_id = {bid: v.get("author") for bid, v in entries_cur.items() if v.get("author")}
     book_ov = {bid: {k: v[k] for k in ("status", "my_mark") if v.get(k) is not None}
                for bid, v in entries_cur.items()}
     book_ov = {bid: v for bid, v in book_ov.items() if v}
     important = {bid: v["weight"] for bid, v in entries_cur.items() if v.get("weight") is not None}
     # per-book merges: `"merges": [other edition id]` on a books entry says the
-    # other edition's quotes/review belong to THIS note. The legacy top-level
-    # `merges` section ({removed: canonical}) feeds the same mapping — canonical
-    # as main, removed as member — so both forms build identically.
+    # other edition's quotes/review belong to THIS note
     curated_merges: dict[str, list[str]] = {}
     for bid, ent in entries_cur.items():
         if ent.get("merges"):
             curated_merges.setdefault(str(bid), []).extend(
                 str(x) for x in ent["merges"])
-    for removed, canonical in (cur.get("merges") or {}).items():
-        # legacy keys/values may be slugs OR edition ids; resolve slugs through
-        # the shelf books so both forms reach the id-space union-find
-        slug_to_id = {make_slug(b["title"], b["author"]): _book_id(b["book_url"])
-                      for b in books}
-        rid = slug_to_id.get(str(removed), str(removed))
-        cid = slug_to_id.get(str(canonical), str(canonical))
-        if rid != cid:
-            curated_merges.setdefault(cid, []).append(rid)
-    # reference books: works referenced from texts but absent from shelves and
-    # quotes (former not-on-shelf stubs) — kept as status-none notes.
-    ref_books = []
-    ref_warnings = []
-    for bid, ent in (cur.get("reference-books") or {}).items():
-        got = ent if (ent.get("title") or ent.get("author")) \
-            else resolve_edition_cached(bid, cache_path=editions_cache_path,
-                                       queries=[bid])
-        if not (got.get("title") or got.get("author")):
-            ref_warnings.append(bid)
-        # a `url` is kept verbatim: some editions are only reachable in their
-        # slug-suffixed form, and the export cannot supply that (off-shelf ids)
-        url = ent.get("url") or f"https://www.livelib.ru/book/{bid}"
-        ref_books.append({
-            "book_url": url,
-            "title": got.get("title") or "",
-            "author": got.get("author") or "",
-            "status": ent.get("status"), "my_mark": ent.get("my_mark"),
-        })
-    known_ids = {_book_id(b["book_url"]) for b in books}
-    books = books + [b for b in ref_books if _book_id(b["book_url"]) not in known_ids]
-    # the long url an edition is written down with: the export and the shelves
-    # carry only short /book/<id> urls, so a slug-suffixed url a note declares
-    # has to come from curation (a `url` on the book or reference entry, or a
-    # curated link key naming it). Without it the corpus would silently rewrite
-    # those edition lines.
-    url_alias = {}
-    for u, _slug in (cur.get("links") or {}).items():
-        eid = _book_id(u)
-        # only a key that carries a slug suffix is an alternative url; the short
-        # form is what the export already produces
-        if eid and f"/{eid}-" in u:
-            url_alias.setdefault(eid, u)
-    for bid, ent in entries_cur.items():
-        if ent.get("url"):
-            url_alias[bid] = ent["url"]
-    for bid, ent in (cur.get("reference-books") or {}).items():
-        if ent.get("url"):
-            url_alias.setdefault(bid, ent["url"])
-
-    def edition_url(book_url):
-        """The long url of an edition id, when curation knows one."""
-        return url_alias.get(_book_id(book_url)) or book_url
-
-    # the work relation, resolved once per shelf edition from the edition pages'
+    # reference notes: works the TEXTS cite that no shelf holds and no
+    # quote/review record names — the edition card JSON (/art-editions/{id})
+    # supplies title and author, cached beside the export so a rebuild stays
+    # offline. Such a note declares the short canonical url its id always
+    # redirects to, so the citation a text wrote resolves from the note.
+    ref_warnings: list[str] = []
+    if text_dir is not None:
+        known = {_book_id(b["book_url"]) for b in books}
+        known |= {str((rec.get("art_edition") or {}).get("id") or "")
+                  for rec in list(quotes) + list(reviews)}
+        known |= {_book_id((rec.get("art_edition") or {}).get("url") or "")
+                  for rec in list(quotes) + list(reviews)}
+        known |= set(curated_merges) | {o for v in curated_merges.values() for o in v}
+        extra: list[dict] = []
+        for bid in _text_book_ids(text_dir):
+            if bid in known:
+                continue
+            got = resolve_edition_cached(bid, cache_path=editions_cache_path,
+                                        client=LivelibClient(fetch=fetch)
+                                        if fetch is not None else None)
+            if not (got.get("title") or got.get("author")):
+                # nothing to make a note from: the link stays unresolved and the
+                # validator reports it, instead of a note with an invented title
+                ref_warnings.append(bid)
+                continue
+            extra.append({"id": bid, "title": got["title"],
+                         "book": {"book_url": f"https://www.livelib.ru/book/{bid}",
+                                 "title": got["title"], "author": got["author"],
+                                 # a work the text quotes from is read, whatever
+                                 # the shelves say about it
+                                 "status": "read", "my_mark": None}})
+        for rec in extra:
+            if rec["id"] in book_ov:
+                rec["book"].update(book_ov[rec["id"]])
+            if rec["id"] in important:
+                rec["book"]["important"] = True
+                rec["book"]["weight"] = important[rec["id"]]
+            books.append(rec["book"])
+        # the work relation of a derived edition is resolved with the rest: it is
+        # what groups the edition into a sibling note instead of leaving it alone
+        if extra:
+            resolved_extra = resolve_works_cached(extra, cache_path=works_cache_path,
+                                                 fetch=fetch)
+            work_id_by_edition = {**{k: v for k, v in resolved_extra.items() if v},
+                                 **(work_id_by_edition or {})}
+    # the work relation, resolved once per SHELF edition from the edition pages'
     # «Содержание» (LivelibClient.work_id). The cache lives beside the export
     # (default: works-cache.json next to the editions cache), so a rebuild with
     # the same inputs reproduces without the network. An explicit
@@ -859,12 +800,6 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
     for r in reviews:
         book_editions.setdefault(_book_id(r["art_edition"]["url"]), set()).add(
             str(r["art_edition"].get("id") or "") or _book_id(r["art_edition"]["url"]))
-    # shelf/curation names and citation urls reach the long form through the
-    # edition ids their records name
-    for bid, ids in book_editions.items():
-        for i in ids:
-            if i in url_alias:
-                url_alias.setdefault(bid, url_alias[i])
     resolved: dict[str, str | None] = {}
     if works_cache_path is not None:
         resolved = resolve_works_cached(
@@ -891,28 +826,33 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
         qid = _book_id(q["art_edition"]["url"])
         if qid in ov_by_id:
             q["art_edition"]["authors"] = [{"full_name": a} for a in ov_by_id[qid].split(", ")]
-    omni_ids = set(collections)
-    placed_quotes = [q for q in quotes if _book_id(q["art_edition"]["url"]) not in omni_ids]
-    in_collections = [q for q in quotes if _book_id(q["art_edition"]["url"]) in omni_ids]
-    entries, own_quotes, note_editions = group_export(books, placed_quotes, reviews,
+    # a curated MAIN may hold no shelf record (the id lives only in the texts
+    # or as an own-note): the note must still exist and key by the main id, so
+    # its card (title/author) is resolved the same way a reference book's is
+    for main in list(curated_merges):
+        if any(_book_id(b["book_url"]) == main for b in books):
+            continue
+        got = resolve_edition_cached(main, cache_path=editions_cache_path,
+                                     client=LivelibClient(fetch=fetch)
+                                     if fetch is not None else None)
+        if not (got.get("title") or got.get("author")):
+            ref_warnings.append(f"curated main {main} unresolvable")
+            continue
+        b = {"book_url": f"https://www.livelib.ru/book/{main}",
+             "title": got["title"], "author": got.get("author") or "",
+             "status": None, "my_mark": None}
+        if main in book_ov:
+            b.update(book_ov[main])
+        if main in important:
+            b["important"] = True
+            b["weight"] = important[main]
+        books.append(b)
+
+    entries, own_quotes, _note_editions = group_export(books, quotes, reviews,
                                                      work_id_by_edition,
                                                      curated_merges)
-    # omnibuses have no author metadata: collections, not authored books.
-    # Match by exact full title or declared edition id — NOT by work key,
-    # so individual works sharing the main title keep their authors.
-    omni_full_titles = set()
-    for v in collections.values():
-        if isinstance(v, str) and v.strip():
-            omni_full_titles.add(re.sub(r"\s*\(омнибус\)\s*$", "", v).strip())
-    def _is_omnibus(title, url):
-        return _book_id(url) in omni_ids or title.strip() in omni_full_titles
-    for e in entries:
-        if _is_omnibus(e["book"]["title"], e["book"]["book_url"]):
-            e["book"]["author"] = ""
-    for q in own_quotes:
-        if _is_omnibus(q["art_edition"]["title"], q["art_edition"]["url"]):
-            q["art_edition"]["authors"] = []
-    # user-curated authors win over the omnibus strip
+    # a curated author is the human's word against livelib's: it wins over what
+    # the record carried, everywhere that id appears
     for b in books:
         bid = _book_id(b["book_url"])
         if bid in ov_by_id:
@@ -962,62 +902,8 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
         })
         own_notes += 1
 
-    # (url_alias / edition_url are defined above, before grouping: a citation
-    # url reaches an edition through the ids its records name, and that mapping
-    # must exist while the edition sets are being collected)
-
-    # manual work merges (legacy shape): attach extra edition urls / status into
-    # an existing note, and fold a duplicate note into its canonical. A FOLD is
-    # no longer here — the per-book `merges` array (or the legacy section) feeds
-    # group_export above, so the fold already happened while grouping. What is
-    # kept: `merge-extra` / `merge-status`, keyed by a slug OR an edition id —
-    # an id-named canonical survives the collision renaming that a slug cannot.
-    merges = []
-    for key in sorted(set(cur.get("merge-extra") or {}) | set(cur.get("merge-status") or {})):
-        m = {"remove": key}
-        if cur.get("merge-extra", {}).get(key):
-            m["extra"] = cur["merge-extra"][key]
-        if cur.get("merge-status", {}).get(key):
-            m["status"] = cur["merge-status"][key]
-        merges.append(m)
-
-    entry_by_slug = {e["slug"]: e for e in entries}
-
-    def find_entry(name):
-        """The note `name` denotes: its slug, or any id the note declares.
-
-        A merge names its canonical by slug, but a slug is only a name and
-        collision handling can rename it; ids are what a note really is, so an
-        id-named canonical is resolved through ids instead of through a name.
-        """
-        e = entry_by_slug.get(name)
-        if e is not None:
-            return e
-        if not str(name).isdigit():
-            return None
-        for candidate in entries:
-            ids = {_book_id(candidate["book"]["book_url"])} | {
-                _book_id(u) for u in (candidate["book"].get("_extra_urls") or [])}
-            if name in ids:
-                return candidate
-        return None
-
-    for m in merges:
-        # what survives is the note named by `into` when one is named, else the
-        # note the entry is keyed by (`remove` without a canonical describes it)
-        target = find_entry(m.get("into") or m["remove"])
-        if not target:
-            continue
-        # the merge's own url belongs to the SURVIVOR: attaching it to a note
-        # about to be folded away dropped it, which is what the old order did
-        if m.get("extra"):
-            urls = target["book"].setdefault("_extra_urls", [])
-            if m["extra"] not in urls:
-                urls.append(m["extra"])
-        # status belongs to the surviving note, so it is applied to the target
-        # only; the old fold order let a doomed entry overwrite the canonical
-        if m.get("status"):
-            target["book"]["status"] = m["status"]
+    # (a derived edition's urls are already the short canonical form: the id the
+    # text cited is the id the note declares)
 
     used: set[str] = set()
 
@@ -1035,10 +921,6 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
             extended = f"{e['slug']}-{ext_words}" if ext_words else e["slug"]
             e["slug"] = extended if extended not in used else f"{e['slug']}-{_book_id(e['book']['book_url'])}"
             used.add(e["slug"])
-    # a merge that named its canonical by id must still resolve after collision
-    # handling renamed that note: the slug map follows the notes to new names
-    for k, v in list(entry_by_slug.items()):
-        entry_by_slug[k] = v["slug"]
 
     for e in entries:
         # final pass: one copy per quote id (same quote can arrive via several editions)
@@ -1050,20 +932,13 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
             seen.add(qid)
             uniq.append(q)
         e["quotes"] = uniq
-        # the long url of every edition the note declares, applied at the last
-        # step so urls added by grouping and by merges are all covered
-        extra = e["book"].get("_extra_urls")
-        if extra:
-            e["book"]["_extra_urls"] = [edition_url(u) for u in extra]
-        if _book_id(e["book"]["book_url"]) in url_alias:
-            e["book"]["book_url"] = edition_url(e["book"]["book_url"])
         (out / f"{e['slug']}.md").write_text(render_note(e), encoding="utf-8")
 
     placed = sum(len(e["quotes"]) for e in entries) + sum(len(qs) for qs in by_work_own.values())
 
-    # link mappings land here: a curated link targets a note by slug, so the
-    # mapping is derived from what the built notes actually declare (a slug that
-    # collision handling renamed is followed to its new name).
+    # link mappings land here: the mapping is derived from what the built notes
+    # actually declare (a slug that collision handling renamed is followed to its
+    # new name), so every id a note holds resolves to it.
     link_map = {}
 
     def add_link(url, slug):
@@ -1083,13 +958,10 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
             rid = _review_id(e["review"]["url"])
             if rid:
                 link_map.setdefault(f"https://www.livelib.ru/review/{rid}", e["slug"])
-    for u, slug in (cur.get("links") or {}).items():
-        add_link(u, slug)
 
     return {
         "books": len(entries),
         "quotes_placed": placed,
-        "quotes_in_collections": len(in_collections),
         "quotes_unmatched": 0,
         "own_notes": own_notes,
         "unresolved_reference_books": ref_warnings,
@@ -1111,51 +983,38 @@ def _note_index(books_dir) -> dict:
 
 def _curation_section(path_or_map, section):
     """Read one section from a curation source given as a path to a consolidated
-    .jsonc, as a plain path to legacy JSON, or as the mapping/list itself (the
-    form build_books emits, e.g. its `link_map`)."""
+    .jsonc or as the mapping itself (the form build_books emits, e.g. its
+    `link_map`)."""
     if path_or_map is None:
         return None
     if isinstance(path_or_map, (dict, list)):
         return path_or_map
-    p = pathlib.Path(path_or_map)
-    if p.suffix in (".jsonc",):
-        return load_curation(p).get(section)
-    if not p.exists():
-        return None
-    return _load_json(p)
+    return load_curation(path_or_map).get(section)
 
 
-def validate_text_links(text_dir, books_dir, external_path=None, link_mappings_path=None) -> dict:
+def validate_text_links(text_dir, books_dir, link_mappings_path=None) -> dict:
     """Report-only: resolve every livelib link in text/*.md against note-books.
 
-    A link resolves when its numeric id appears in any note (book/review attr or
-    quote livelib URL). Links listed in external_path (old-format LiveLib pages,
-    site-only) are classified as external. link_mappings_path maps URLs to note
-    slugs when the text edition id differs from the note edition. Either argument
-    may also be a consolidated curation.jsonc, in which case the `external` /
-    `links` section is read out of it. Returns
-    {total, resolved, external, unresolved: [{url, file}]}.
+    A link resolves when its numeric id appears in any note (book/review attr,
+    an edition line, or a quote url). link_mappings_path — the mapping
+    build_books emits — maps URLs to note slugs for the cases a note names its
+    subject by an id the note file does not print. Returns
+    {total, resolved, unresolved: [{url, file}]}.
     """
     import re as _re
     index = _note_index(books_dir)
-    external = set()
-    ext = _curation_section(external_path, "external")
-    if ext:
-        external = set(ext)
     mappings = _curation_section(link_mappings_path, "links") or {}
-    # normalise both url shapes: a text may link the short /book/<id> form while
-    # the curation names the slug-suffixed one (livelib redirects between them)
     # keyed two ways so the written form of a url does not matter: by the url as
     # written, and by its canonical (kind, id). livelib redirects between the
     # short /book/<id> and the slug-suffixed /book/<id>-<title>-<author> form, so
-    # a text and its curation may name the same work differently.
+    # a text and a note may name the same work differently.
     norm_url, norm_key = {}, {}
     for url, slug in mappings.items():
         norm_url[url] = slug
         key = _link_key(url)
         if key:
             norm_key[key] = slug
-    total, resolved, ext_n, unresolved = 0, 0, 0, []
+    total, resolved, unresolved = 0, 0, []
     for chapter in sorted(pathlib.Path(text_dir).glob("*.md")):
         for m in _re.finditer(r"https://www\.livelib\.ru/(?:book|work|review|quote)/(\d+)[^)\s\"']*",
                               chapter.read_text(encoding="utf-8")):
@@ -1164,11 +1023,9 @@ def validate_text_links(text_dir, books_dir, external_path=None, link_mappings_p
             key = (m.group(0).split("/")[3], m.group(1))  # (kind, id)
             if m.group(1) in index or url in norm_url or key in norm_key:
                 resolved += 1
-            elif url in external:
-                ext_n += 1
             else:
                 unresolved.append({"url": url, "file": chapter.name})
-    return {"total": total, "resolved": resolved, "external": ext_n, "unresolved": unresolved}
+    return {"total": total, "resolved": resolved, "unresolved": unresolved}
 
 
 # ------------------------------------------------------------------ p3-references

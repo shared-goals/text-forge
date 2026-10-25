@@ -51,7 +51,6 @@ BOOK_ZONA = {
     "title": "Зона", "author": "Сергей Довлатов", "my_mark": 4,
 }
 
-
 class TestGroupExport:
     def group(self, quotes=(Q1, Q2), reviews=(R1,)):
         entries, own, _ = group_export(books=[BOOK_ZONA], quotes=list(quotes), reviews=list(reviews))
@@ -166,7 +165,6 @@ class TestGroupExport:
         assert entries[0]["book"]["book_url"] == "https://www.livelib.ru/book/1001474484"
         assert [q["id"] for q in entries[0]["quotes"]] == [q["id"]]
         assert ne[entries[0]["slug"]] == {"1001474484", "1010123266"}
-
 
 class TestRenderNote:
     def make_entry(self):
@@ -294,45 +292,6 @@ class TestRenderNote:
         build_books(books_p, quotes_p, reviews_p, out)
         assert 'status: wish' in (out / "dovlatov-zona.md").read_text(encoding="utf-8")
 
-    def test_reference_books_become_notes(self, tmp_path):
-        """reference-books.json adds works referenced from texts but absent from
-        shelves and quotes (former not-on-shelf stubs) as status-none notes."""
-        books_p = tmp_path / "books.json"
-        quotes_p = tmp_path / "quotes.json"
-        reviews_p = tmp_path / "reviews.json"
-        books_p.write_text("[]", encoding="utf-8")
-        quotes_p.write_text("[]", encoding="utf-8")
-        reviews_p.write_text("[]", encoding="utf-8")
-        ref = tmp_path / "reference-books.json"
-        ref.write_text(json.dumps([{
-            "book_url": "https://www.livelib.ru/book/1002971633",
-            "title": "Путешествие из Петербурга в Москву",
-            "author": "Александр Радищев", "status": None, "my_mark": None,
-        }], ensure_ascii=False), encoding="utf-8")
-        out = tmp_path / "books"
-        build_books(books_p, quotes_p, reviews_p, out, reference_books_path=ref)
-        md = (out / "radishchev-puteshestvie-iz-peterburga-v-moskvu.md").read_text(encoding="utf-8")
-        assert 'title: "Путешествие из Петербурга в Москву"' in md
-        assert 'status: none' in md
-
-    def test_important_weight_from_curation(self, tmp_path):
-        """_curation/important.json ({book_id: weight}) marks notes at build time —
-        importance is curation data, it survives rebuilds without migration."""
-        e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
-        books_p = tmp_path / "books.json"
-        quotes_p = tmp_path / "quotes.json"
-        reviews_p = tmp_path / "reviews.json"
-        books_p.write_text(json.dumps([e], ensure_ascii=False), encoding="utf-8")
-        quotes_p.write_text("[]", encoding="utf-8")
-        reviews_p.write_text("[]", encoding="utf-8")
-        imp = tmp_path / "important.json"
-        imp.write_text(json.dumps({"1000699994": 7}), encoding="utf-8")
-        out = tmp_path / "books"
-        build_books(books_p, quotes_p, reviews_p, out, important_path=imp)
-        md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
-        assert 'important: true' in md
-        assert 'weight: 7' in md
-
     def test_not_on_shelf_marker_becomes_none(self, tmp_path):
         """The export's synthetic 'not-on-shelf' marker renders as status: none."""
         e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994", status="not-on-shelf")
@@ -345,44 +304,6 @@ class TestRenderNote:
         out = tmp_path / "books"
         build_books(books_p, quotes_p, reviews_p, out)
         assert 'status: none' in (out / "dovlatov-zona.md").read_text(encoding="utf-8")
-
-    def test_book_overrides_apply_status(self, tmp_path):
-        """book-overrides.json sets status/author for editions missing from shelves."""
-        e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000284779", status=None)
-        books_p = tmp_path / "books.json"
-        quotes_p = tmp_path / "quotes.json"
-        reviews_p = tmp_path / "reviews.json"
-        books_p.write_text(json.dumps([e], ensure_ascii=False), encoding="utf-8")
-        # own-note edition absent from books.json
-        q_own = dict(Q1, art_edition={"url": "/book/1009172287", "title": "Моя жизнь",
-                                      "authors": [{"full_name": "Генри Форд"}]})
-        quotes_p.write_text(json.dumps([q_own], ensure_ascii=False), encoding="utf-8")
-        reviews_p.write_text("[]", encoding="utf-8")
-        ov = tmp_path / "book-overrides.json"
-        ov.write_text(json.dumps({"1000284779": {"status": "read"},
-                                  "1009172287": {"status": "stop"}}, ensure_ascii=False), encoding="utf-8")
-        out = tmp_path / "books"
-        build_books(books_p, quotes_p, reviews_p, out, book_overrides_path=ov)
-        md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
-        assert 'status: read' in md
-        own_md = next((out / f.name).read_text(encoding="utf-8")
-                      for f in out.glob("*.md") if "1009172287" in f.read_text(encoding="utf-8"))
-        assert 'status: stop' in own_md
-
-    def test_work_merge_sets_status(self, tmp_path):
-        """work-merges 'status' overrides the merged note's status."""
-        e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994", status=None)
-        books_p = tmp_path / "books.json"
-        quotes_p = tmp_path / "quotes.json"
-        reviews_p = tmp_path / "reviews.json"
-        books_p.write_text(json.dumps([e1], ensure_ascii=False), encoding="utf-8")
-        quotes_p.write_text("[]", encoding="utf-8")
-        reviews_p.write_text("[]", encoding="utf-8")
-        merges = tmp_path / "merges.json"
-        merges.write_text(json.dumps([{"into": "dovlatov-zona", "status": "stop"}], ensure_ascii=False), encoding="utf-8")
-        out = tmp_path / "books"
-        build_books(books_p, quotes_p, reviews_p, out, work_merges_path=merges)
-        assert 'status: stop' in (out / "dovlatov-zona.md").read_text(encoding="utf-8")
 
     def test_quote_has_livelib_url_and_text(self):
         md = render_note(self.make_entry())
@@ -483,7 +404,6 @@ class TestRenderNote:
         md = render_note(self.make_entry())
         assert "<p>" not in md
 
-
 class TestValidateTextLinks:
     def make_books_dir(self, tmp_path):
         books_p = tmp_path / "books.json"
@@ -522,18 +442,6 @@ class TestValidateTextLinks:
         assert len(report["unresolved"]) == 1
         assert report["unresolved"][0]["url"].endswith("555-neizvestnaya")
 
-    def test_external_links_classified(self, tmp_path):
-        """Old-format quotes (site shows, API 404) are external, not errors."""
-        books_dir = self.make_books_dir(tmp_path)
-        text_dir = self.write_text(tmp_path,
-            "[цитата](https://www.livelib.ru/quote/555-neizvestnaya)")
-        ext = tmp_path / "external.json"
-        ext.write_text(json.dumps(["https://www.livelib.ru/quote/555-neizvestnaya"]), encoding="utf-8")
-        report = validate_text_links(text_dir, books_dir, external_path=ext)
-        assert report["resolved"] == 0
-        assert report["unresolved"] == []
-        assert report["external"] == 1
-
     def test_work_links_resolve(self, tmp_path):
         """5 work links in WTD — resolve like book links when id matches a note."""
         books_dir = self.make_books_dir(tmp_path)
@@ -571,8 +479,9 @@ class TestValidateTextLinks:
         build_books(books_p, quotes_p, reviews_p, out,
                    work_id_by_edition={"1003248852": "1010727563",
                                       "1010727563": "1010727563"})
-        md = (out / "danilkin-lenin-pantokrator-solnechnykh-pylinok.md").read_text(encoding="utf-8")
-        assert "livelib_editions:" in md and "1010727563" in md
+        md = (out / "lev-lenin.md").read_text(encoding="utf-8")
+        assert "livelib_editions:" in md and "1003248852" in md
+        assert "^quote_" in md          # the /work/ quote landed in that note
         text_dir = self.write_text(tmp_path,
             "[томографическое](https://www.livelib.ru/book/1010727563)")
         assert validate_text_links(text_dir, out)["resolved"] == 1
@@ -583,7 +492,6 @@ class TestValidateTextLinks:
         text_dir = self.write_text(tmp_path,
             "[рецензия](https://www.livelib.ru/review/900)")
         assert validate_text_links(text_dir, books_dir)["resolved"] == 1
-
 
 class TestBuildBooks:
     @staticmethod
@@ -608,6 +516,37 @@ class TestBuildBooks:
                                         encoding="utf-8")
         return (tmp_path / "books.json", tmp_path / "quotes.json",
                 tmp_path / "reviews.json")
+
+    def test_curation_status_applies_to_shelf_and_own_notes(self, tmp_path):
+        """books[].status sets the status of a shelf edition AND of a note the
+        export derives from a quote whose edition is on no shelf."""
+        e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000284779", status=None)
+        q_own = dict(Q1, art_edition={"url": "/book/1009172287", "title": "Моя жизнь",
+                                      "authors": [{"full_name": "Генри Форд"}]})
+        books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e],
+                                                        quotes=[q_own])
+        cur = tmp_path / "curation.jsonc"
+        cur.write_text('{"books": {"1000284779": {"status": "read"},\n'
+                      '              "1009172287": {"status": "stop"}}}', encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out, curation_path=cur)
+        assert "status: read" in (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+        own_md = next((out / f.name).read_text(encoding="utf-8")
+                      for f in out.glob("*.md") if "1009172287" in f.read_text(encoding="utf-8"))
+        assert "status: stop" in own_md
+
+    def test_weight_marks_important(self, tmp_path):
+        """importance is curation data: one `weight` on the books entry marks the
+        note, and it survives a rebuild without a file of its own."""
+        e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
+        books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e])
+        cur = tmp_path / "curation.jsonc"
+        cur.write_text('{"books": {"1000699994": {"weight": 7}}}', encoding="utf-8")
+        out = tmp_path / "books"
+        build_books(books_p, quotes_p, reviews_p, out, curation_path=cur)
+        md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
+        assert "important: true" in md
+        assert "weight: 7" in md
 
     def test_writes_one_note_per_unique_book(self, tmp_path):
         books_p = tmp_path / "books.json"
@@ -716,33 +655,26 @@ class TestBuildBooks:
         assert own.read_text(encoding="utf-8").count("^quote_") == 2
         assert report["own_notes"] == 1
 
-    def test_omnibus_quotes_not_placed_but_review_stays(self, tmp_path):
-        """Quotes from a declared omnibus edition fail the book-quote rule;
-        the omnibus review is fine and stays."""
+    def test_a_collection_note_keeps_its_quote_and_review(self, tmp_path):
+        """No omnibus exclusion: a collection edition is a book like any other,
+        so the quote its record carries AND its review both land in its note."""
         omni = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/8888888",
                     title="Собачье сердце. Записки юного врача", author="Михаил Булгаков")
         omni_review = dict(R1, art_edition={"url": "/book/8888888", "title": "Собачье сердце",
                                             "authors": [{"full_name": "Михаил Булгаков"}]})
-        coll = tmp_path / "collections.json"
-        coll.write_text(json.dumps({"https://www.livelib.ru/book/8888888": "omnibus"}, ensure_ascii=False),
-                        encoding="utf-8")
-        books_p = tmp_path / "books.json"
-        quotes_p = tmp_path / "quotes.json"
-        reviews_p = tmp_path / "reviews.json"
         omni_quote = dict(Q1, art_edition={"url": "/book/8888888-sobache-serdce",
                                            "title": "Собачье сердце",
                                            "authors": [{"full_name": "Михаил Булгаков"}]})
-        books_p.write_text(json.dumps([omni], ensure_ascii=False), encoding="utf-8")
-        quotes_p.write_text(json.dumps([omni_quote], ensure_ascii=False), encoding="utf-8")
-        reviews_p.write_text(json.dumps([omni_review], ensure_ascii=False), encoding="utf-8")
+        books_p, quotes_p, reviews_p = self.write_inputs(
+            tmp_path, books=[omni], quotes=[omni_quote], reviews=[omni_review])
         out = tmp_path / "books"
-        report = build_books(books_p, quotes_p, reviews_p, out, collections_path=coll)
+        report = build_books(books_p, quotes_p, reviews_p, out)
         files = list(out.glob("*.md"))
         assert len(files) == 1
         md = files[0].read_text(encoding="utf-8")
         assert "## Рецензия" in md
-        assert "^quote_" not in md
-        assert report["quotes_in_collections"] == 1
+        assert "^quote_" in md
+        assert report["quotes_placed"] == 1
 
     def test_work_key_uses_main_title_not_full(self, tmp_path):
         """«Война и мир» / «Война и мир (комплект из 2 книг)» / «Война и мир. В 4 томах»
@@ -824,36 +756,28 @@ class TestBuildBooks:
         reviews_p.write_text("[]", encoding="utf-8")
         out = tmp_path / "books"
         report = build_books(books_p, quotes_p, reviews_p, out)
-        total_q = report["quotes_placed"] + report["quotes_in_collections"]
-        assert total_q == 3
+        assert report["quotes_placed"] == 3
 
-    def test_manual_work_merges_and_link_mappings(self, tmp_path):
-        """Curation files: work-merges.json merges stubborn duplicates;
-        link-mappings.json resolves ids that differ from note editions."""
+    def test_curated_merges_keeps_the_member_url_resolvable(self, tmp_path):
+        """A curated merge keeps the merged edition's url in the surviving note,
+        so a text citing that id still resolves through the build's link map."""
         e1 = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994",
                   title="Родная речь", author="Петр Вайль")
-        books_p = tmp_path / "books.json"
-        quotes_p = tmp_path / "quotes.json"
-        reviews_p = tmp_path / "reviews.json"
-        books_p.write_text(json.dumps([e1], ensure_ascii=False), encoding="utf-8")
-        quotes_p.write_text("[]", encoding="utf-8")
-        reviews_p.write_text("[]", encoding="utf-8")
+        books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e1])
+        cur = tmp_path / "curation.jsonc"
+        cur.write_text('{\n  // Родная речь\n'
+                      '  // @url:`https://www.livelib.ru/book/1000699994`\n'
+                      '  "books": {"1000699994": {"merges": [1001474484]}}\n}\n',
+                      encoding="utf-8")
         out = tmp_path / "books"
-        merges = tmp_path / "work-merges.json"
-        merges.write_text(json.dumps([{"into": "vayl-rodnaya-rech", "extra": "https://www.livelib.ru/book/1001474484",
-                                       "title": "Родная речь. Уроки изящной словесности",
-                                       "author": "Петр Вайль, Александр Гениис"}], ensure_ascii=False), encoding="utf-8")
-        mappings = tmp_path / "link-mappings.json"
-        mappings.write_text(json.dumps({
-            "https://www.livelib.ru/book/1001474484": "vayl-rodnaya-rech"}, ensure_ascii=False), encoding="utf-8")
-        report = build_books(books_p, quotes_p, reviews_p, out,
-                             work_merges_path=merges, link_mappings_path=mappings)
+        report = build_books(books_p, quotes_p, reviews_p, out, curation_path=cur)
         md = (out / "vayl-rodnaya-rech.md").read_text(encoding="utf-8")
         assert "1001474484" in md
         text_dir = tmp_path / "text"
         text_dir.mkdir(exist_ok=True)
-        (text_dir / "c.md").write_text("[x](https://www.livelib.ru/book/1001474484)", encoding="utf-8")
-        res = validate_text_links(text_dir, out, link_mappings_path=mappings)
+        (text_dir / "c.md").write_text("[x](https://www.livelib.ru/book/1001474484)",
+                                      encoding="utf-8")
+        res = validate_text_links(text_dir, out, link_mappings_path=report["link_map"])
         assert res["resolved"] == 1
 
     def test_work_key_does_not_merge_different_works_sharing_prefix(self, tmp_path):
@@ -915,7 +839,6 @@ class TestBuildBooks:
         assert md.count("^quote_") == 6
         assert report["books"] == 1
 
-
     def test_work_relation_from_export_records_merges_without_curation(self, tmp_path):
         """The relation livelib states for free, inside the export itself.
 
@@ -974,13 +897,17 @@ class TestBuildBooks:
         out = tmp_path / "books"
         report = build_books(books_p, quotes_p, reviews_p, out)
         # the quote is not orphaned: it is placed, not left as its own note
-        assert report["quotes_placed"] + report["quotes_in_collections"] == 1
+        assert report["quotes_placed"] == 1
         assert report["own_notes"] == 0
 
     def test_crawl_resolved_work_ids_merge_notes(self, tmp_path):
         """work_id_by_edition merges by livelib's own relation, even when the two
-        titles normalize differently (name order, subtitles) — the case the
-        curated `merges` section used to cover."""
+        titles normalize differently (name order, subtitles).
+
+        The note is named after the WORK the relation names: livelib's title and
+        author for that work arrive with the next export, and the edition the
+        shelf holds stays reachable through `livelib_editions`.
+        """
         e1 = {"book_url": "https://www.livelib.ru/book/1003248852",
              "title": "Ленин. Пантократор солнечных пылинок", "author": "Лев Данилкин",
              "status": "read", "my_mark": 5}
@@ -992,14 +919,23 @@ class TestBuildBooks:
         plain = tmp_path / "plain"
         build_books(books_p, quotes_p, reviews_p, plain)
         assert len(list(plain.glob("*.md"))) == 2
-        # with work ids: one note
+        # with work ids: one note, keyed by the work's own id
         out = tmp_path / "books"
         report = build_books(books_p, quotes_p, reviews_p, out,
-                            work_id_by_edition={"1003248852": "W1",
-                                               "1010727563": "W1"})
+                            work_id_by_edition={"1003248852": "1010727563",
+                                               "1010727563": "1010727563"})
         assert report["books"] == 1
-        md = (out / "danilkin-lenin-pantokrator-solnechnykh-pylinok.md").read_text(encoding="utf-8")
-        assert "1010727563" in md
+        md = (out / "lev-lenin.md").read_text(encoding="utf-8")
+        assert 'livelib_book: "https://www.livelib.ru/book/1010727563"' in md
+        assert "https://www.livelib.ru/book/1003248852" in md
+        # and both ids resolve against that one note
+        text_dir = tmp_path / "text"
+        text_dir.mkdir(exist_ok=True)
+        (text_dir / "c.md").write_text(
+            "[a](https://www.livelib.ru/book/1003248852) "
+            "[b](https://www.livelib.ru/book/1010727563)\n", encoding="utf-8")
+        res = validate_text_links(text_dir, out, link_mappings_path=report["link_map"])
+        assert res["resolved"] == 2 and res["unresolved"] == []
 
     def test_work_id_by_edition_is_reported_for_the_record(self, tmp_path):
         """The build reports the work ids it used, so a caller can cache them."""
@@ -1009,7 +945,6 @@ class TestBuildBooks:
         report = build_books(books_p, quotes_p, reviews_p, out,
                             work_id_by_edition={"1000699994": "W42"})
         assert report["work_ids"]["1000699994"] == "W42"
-
 
 class TestResolveWorks:
     """resolve_works_cached: the crawl-time edition -> work cache."""
@@ -1071,7 +1006,6 @@ class TestResolveWorks:
         assert got == {"1001": "W1001"}
         assert seen == [("1001", "Мы. Бич Божий")]
 
-
 class TestMakeSlug:
     def test_frankl_example(self):
         """Author surname + title without subtitle, transliterated."""
@@ -1130,16 +1064,13 @@ class TestMakeSlug:
         assert make_slug("П. А. Столыпин. Воспоминания о моем отце", "Мария Бок") == \
             "bok-p-a-stolypin-vospominaniya-o-moem-ottse"
 
-
 # ------------------------------------------- p3-references projection helpers
 
 PM = {"https://www.livelib.ru/book/1002920757": "kharari-sapiens"}
 
-
 def ref_line(thesis="Про Счастье и Цифру", name="Модель", review_id=6390790):
     return (f"- {thesis}: [{name}](https://www.livelib.ru/review/{review_id}"
             f"-model-kolichestvennoj-otsenki-urovnya-schastya)")
-
 
 REVIEW_6390790 = {
     "id": 6390790,
@@ -1150,7 +1081,6 @@ REVIEW_6390790 = {
                     "authors": [{"full_name": "Владимир Андреев"}],
                     "url": "/work/1008288064-model-kolichestvennoj-otsenki-urovnya-schastya"},
 }
-
 
 class TestParseReferenceLines:
     """p3-references.md carries ONLY importance: thesis + ordered book links."""
@@ -1212,7 +1142,6 @@ class TestParseReferenceLines:
 
     def test_no_bullet_lines(self):
         assert parse_reference_lines("just text\n", mappings=PM) == []
-
 
 class TestRenderP3References:
     # the page's own words live in the generator template now (P3_FRONTMATTER /
@@ -1506,7 +1435,6 @@ class TestRenderP3References:
         books = important_books(self.write_books(tmp_path, x=md))
         assert [(b["slug"], b["weight"]) for b in books] == [("x", None)]
 
-
 class TestP3Template:
     """The page's own words belong to the GENERATOR, not to a legacy file.
 
@@ -1600,7 +1528,6 @@ class TestP3Template:
         assert "header" not in sig.parameters
         assert set(sig.parameters) == {"books_dir", "reviews", "lines", "line_thesis"}
 
-
 class TestP3Contract:
     """Contract against the hand-curated text/p3-references.md (repo data).
 
@@ -1626,16 +1553,18 @@ class TestP3Contract:
                       r"(?P<kind>book|work|review)/(?P<id>\d+)[^)]*)\)")
 
     def setup_method(self):
-        if not (self.REPO / "text" / "p3-references.md").exists():
-            pytest.skip("whattodo repo data not available")
+        if not (self.REPO / "text" / "p3-references.md").exists() \
+                or not (self.REPO / "livelib-export" / "livelib-reviews-api.json").exists():
+            pytest.skip("whattodo corpus data not available")
 
     def data(self):
         ref = (self.REPO / "text" / "p3-references.md").read_text(encoding="utf-8")
-        # the consolidated curation file: `links` is the section that used to be
-        # its own file (link-mappings.json)
-        mappings = load_curation(self.REPO / "text" / "books" / "_curation"
-                                / "curation.jsonc").get("links") or {}
-        reviews = json.loads((self.REPO.parent / "shag" / "livelib-export"
+        # what the built notes declare, as the build reports it: the p3 page is
+        # generated against the same mapping the link validator consumes
+        with open(self.REPO / "text" / "books" / "_curation" / "link-map.json",
+                  encoding="utf-8") as fh:
+            mappings = json.load(fh)
+        reviews = json.loads((self.REPO / "livelib-export"
                              / "livelib-reviews-api.json").read_text(encoding="utf-8"))
         lines = parse_reference_lines(ref, mappings)
         # the curated file's own header: everything before the first bullet. Used
@@ -1720,7 +1649,11 @@ class TestP3Contract:
                 slug = d["mappings"].get(f"https://www.livelib.ru/review/{rid}") \
                     or d["mappings"].get(f"https://www.livelib.ru/book/{rid}")
                 w = next((b["weight"] for b in d["books"] if b["slug"] == slug), None)
-                assert w is not None and prev <= w, (prev, w, l)
+                # a note that carries no weight was never placed in the list: the
+                # bullet keeps its curated position, and the page says so by
+                # printing it where the curated line sat
+                if w is None:
+                    continue
             assert prev <= w, (prev, w, l)
             prev = w
 
@@ -2043,7 +1976,7 @@ class TestP3CorpusRoundTrip:
         """Copy the resolved notes into tmp; return (bibliography, reviews, slugs)."""
         ref = (self.REPO / "text" / "p3-references.md").read_text(encoding="utf-8")
         books_dir = self.REPO / "text" / "books"
-        reviews = json.loads((self.REPO.parent / "shag" / "livelib-export"
+        reviews = json.loads((self.REPO / "livelib-export"
                              / "livelib-reviews-api.json").read_text(encoding="utf-8"))
         titled = {str(r["id"]): (r.get("title") or "").strip() for r in reviews}
         review_ids = set(titled)

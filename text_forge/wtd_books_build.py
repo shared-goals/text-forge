@@ -8,13 +8,16 @@ Steps:
 1. Export fresh data (shelves incl. statuses, quotes, reviews) into
    <root>/livelib-export/ — anonymous API + SSR, no credentials needed.
 2. build_books() with the ONE curation file
-   <root>/text/books/_curation/curation.jsonc.
+   <root>/text/books/_curation/curation.jsonc, and the texts themselves passed
+   as `text_dir` so a work a chapter cites but no shelf holds still gets its
+   note (title/author from the edition card JSON).
 3. Replace <root>/text/books/*.md with the generated set (_curation/ untouched).
 4. Validate: frontmatter contract + text links; print the status distribution.
 
-Titles/authors of reference books come from the LiveLib search API during step 2
-and are cached in <root>/livelib-export/editions-cache.json, so a rebuild with the
-same inputs reproduces the corpus byte for byte without the network.
+Titles/authors of cited-but-unshelved editions come from the LiveLib edition
+API during step 2 and are cached in <root>/livelib-export/editions-cache.json,
+so a rebuild with the same inputs reproduces the corpus byte for byte without
+the network.
 """
 import json
 import re
@@ -30,18 +33,53 @@ CUR = Path(__file__).parent / "wtd_books.py"
 CUR_DIR = CUR.parent
 
 
+def _record_ids(records: list[dict]) -> set[str]:
+    """The stable id of each export record: a quote's or review's own id, else
+    the edition id the record was made from (shelf records carry no id of their
+    own beyond that)."""
+    out = set()
+    for r in records:
+        qid = (r.get("quote") or {}).get("quote_id")
+        rid = (r.get("review") or {}).get("review_id") or r.get("id")
+        eid = _book_url_id(r.get("book_url")
+                           or (r.get("art_edition") or {}).get("url") or "")
+        out.add(str(qid or rid or eid))
+    return out
+
+
+def _book_url_id(url: str) -> str:
+    m = re.search(r"/(?:book|work)/(\d+)", url or "")
+    return m.group(1) if m else ""
+
+
 def export(user_id: int, out_dir: Path) -> dict:
+    """Fetch the three export files, reporting what a previous run held and this
+    one does not (or vice versa).
+
+    The old file is read BEFORE it is overwritten, so a record the user deleted
+    on livelib is named by its id rather than lost: the corpus can then be
+    checked against a known set instead of a silently shortened one.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
     c = LivelibClient()
-    data = {
-        "livelib-books.json": c.books(user_id),
-        "livelib-quotes-api.json": c.quotes(user_id),
-        "livelib-reviews-api.json": c.reviews(user_id),
-    }
-    for name, records in data.items():
-        (out_dir / name).write_text(
-            json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8")
-    return {name: len(records) for name, records in data.items()}
+    counts: dict[str, int] = {}
+    for name, get in (("livelib-books.json", lambda: c.books(user_id)),
+                     ("livelib-quotes-api.json", lambda: c.quotes(user_id)),
+                     ("livelib-reviews-api.json", lambda: c.reviews(user_id))):
+        path = out_dir / name
+        old = _record_ids(json.loads(path.read_text(encoding="utf-8"))) \
+            if path.exists() else None
+        records = get()
+        path.write_text(json.dumps(records, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        counts[name] = len(records)
+        if old is not None:
+            new = _record_ids(records)
+            if old - new:
+                print(f"  {name}: LOST {sorted(old - new)}")
+            if new - old:
+                print(f"  {name}: NEW {sorted(new - old)}")
+    return counts
 
 
 def main(root_str: str, user_id: int = 345497) -> int:
@@ -65,12 +103,20 @@ def main(root_str: str, user_id: int = 345497) -> int:
         export_dir / "livelib-reviews-api.json",
         tmp,
         curation_path=curation,
+        text_dir=root / "text",
         editions_cache_path=export_dir / "editions-cache.json",
     )
-    print("build:", report)
+    print("build:", {k: v for k, v in report.items() if k != "link_map"})
     link_map = report["link_map"]
     for bid in report.get("unresolved_reference_books") or []:
-        print("  WARNING: reference book not resolvable via livelib search:", bid)
+        print("  WARNING: cited edition not resolvable via livelib:", bid)
+
+    # the mapping the notes declare, written beside the curation file: the link
+    # validator and the bibliography generator consume it, and keeping it makes a
+    # rebuild's id->note decisions auditable
+    (cur / "link-map.json").write_text(
+        json.dumps(link_map, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+        encoding="utf-8")
 
     for old in books_dir.glob("*.md"):
         old.unlink()
@@ -85,13 +131,12 @@ def main(root_str: str, user_id: int = 345497) -> int:
     print("statuses:", dict(sorted(statuses.items(), key=lambda x: -x[1])))
 
     # link validation consumes the mapping built from the notes actually written,
-    # plus the curated links — so a slug renamed by collision handling still
-    # resolves and no stale key can paper over a real gap
+    # so a slug renamed by collision handling still resolves and no stale key can
+    # paper over a real gap
     res = validate_text_links(root / "text", books_dir,
-                             external_path=curation,
                              link_mappings_path=link_map)
     print(f"links: {res['total']} total, {res['resolved']} resolved, "
-          f"{res['external']} external, {len(res['unresolved'])} unresolved")
+          f"{len(res['unresolved'])} unresolved")
     if res["unresolved"]:
         for u in res["unresolved"]:
             print("  UNRESOLVED:", u["url"])

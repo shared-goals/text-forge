@@ -12,7 +12,8 @@ Channels verified against livelib.ru (anonymous; last sweep 2026-10-24):
   → edition card: title, authors, isbn, publication_year, publishers, stats,
   art_id; sub-resources: /contents (the «Содержание» works, each with its
   /work/<id>), /quotes, /reviews, /stats, /sections, /selections, /similars,
-  /cycles, /views — all plain JSON
+  /cycles, /views — all plain JSON. THE metadata source for an edition: it
+  answers for ANY id, including one no shelf record carries
 - beta.api.livelib.ru/trisolaris/api/art-works/{work_id}
   → work card; /editions lists EVERY edition of the work in one call
 - beta.api.livelib.ru/trisolaris/api/arts/{art_id}/editions?limit
@@ -195,6 +196,9 @@ class LivelibClient:
         data = json.loads(body).get("payload", {}).get("data") or []
         out = []
         for item in data:
+            # a contents entry without a url carries no work relation
+            if not isinstance(item, dict):
+                continue
             m = re.search(r"/work/(\d+)", item.get("url") or "")
             if m and item.get("title"):
                 out.append((item["title"], m.group(1)))
@@ -253,69 +257,29 @@ class LivelibClient:
         """The one work an edition stands for (see `work_id`)."""
         return pick_work_id(works, title)
 
-    def search(self, query: str, limit: int = 20) -> list[dict]:
-        from urllib.parse import quote
-        envelope = json.loads(self.fetch(f"{API_BASE}/search?query={quote(query)}&limit={limit}"))
-        results = []
-        for item in envelope.get("payload", {}).get("data") or []:
-            if item.get("type") != "art_editions":
-                continue
-            inst = item.get("instance") or {}
-            if not inst.get("id"):
-                continue
-            results.append({
-                "edition_id": str(inst["id"]),
-                "title": inst.get("title", ""),
-                "author": ", ".join(a["full_name"] for a in inst.get("authors") or [] if a.get("full_name")),
-                "livelib_url": "https://beta.livelib.ru" + (inst.get("url") or f"/book/{inst['id']}"),
-            })
-        return results
+    def edition_meta(self, edition_id: str) -> dict:
+        """{title, author} of one edition id, from the edition card JSON.
 
-    def resolve_edition(self, edition_id: str, extra_queries=()) -> dict:
-        """{title, author} of one edition id, or {} when livelib has no such edition.
+        /art-editions/{id} answers the card for ANY edition — including one no
+        shelf record carries — so it replaces the search API as the metadata
+        source: no query to guess, no ~20-hit index to hope the id falls in.
 
-        The search API returns no more than ~20 editions per query and ignores
-        `limit` beyond that, so an id cannot be looked up directly. Every query
-        tried is the caller's to supply (the edition slug, the title, ...); the
-        match itself is exact — of all the hits, only the one carrying this id is
-        taken, so a returned title is that edition's own, never a neighbour's.
-
-        Returns {} rather than raising: an unresolved id is a curation problem the
-        caller reports and works around (slug-derived title), not a transport one.
-
-        Transport failures are swallowed on purpose and reported as 'unresolved':
-        the caller reaches this only for an id the export does not carry, so there
-        is nothing else to lose — and a build must not die because livelib is
-        unreachable or has no such edition. `resolve_edition_cached` records the
-        miss, so a retry does not repeat the network round.
+        Returns {} when livelib has no such edition or the page is unreachable:
+        an unresolved id is a curation problem the caller reports, not a
+        transport failure to raise over.
         """
-        for q in extra_queries:
-            if not str(q).strip():
-                continue
-            try:
-                found = self._search_hit(edition_id, q)
-            except Exception:  # noqa: BLE001, S112 - see above: miss, not a crash
-                continue
-            if found:
-                return found
-        return {}
-
-    def _search_hit(self, edition_id: str, query: str) -> dict:
-        from urllib.parse import quote
-        for item in (json.loads(self.fetch(
-                f"{API_BASE}/search?query={quote(query)}&limit=20"))
-                .get("payload", {}).get("data") or []):
-            if item.get("type") != "art_editions":
-                continue
-            inst = item.get("instance") or {}
-            if str(inst.get("id", "")) != str(edition_id):
-                continue
-            return {
-                "title": inst.get("title", ""),
-                "author": ", ".join(a["full_name"] for a in inst.get("authors") or []
-                                   if a.get("full_name")),
-            }
-        return {}
+        try:
+            item = json.loads(self.fetch(f"{API_BASE}/art-editions/{edition_id}")
+                             ).get("payload", {}).get("data") or {}
+        except Exception:  # noqa: BLE001 - unreachable is a miss, not a crash
+            return {}
+        if not isinstance(item, dict) or str(item.get("id", "")) != str(edition_id):
+            return {}
+        return {
+            "title": item.get("title", ""),
+            "author": ", ".join(a["full_name"] for a in item.get("authors") or []
+                               if a.get("full_name")),
+        }
 
     # -------------------------------------------------------------- SSR
 

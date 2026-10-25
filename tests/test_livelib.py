@@ -141,18 +141,44 @@ def test_reviews_uses_reviews_endpoint():
     assert LivelibClient(fetch=fetch).reviews(345497)[0]["id"] == 7
 
 
-def test_search_returns_editions_only():
-    payload = {"status": 200, "error": None, "payload": {"data": [
-        {"type": "art_editions", "instance": {"id": 100, "title": "Зона",
-         "authors": [{"full_name": "Сергей Довлатов"}], "url": "/book/100-zona"}},
-        {"type": "authors", "instance": {"id": 5, "title": "Довлатов"}},
-    ]}}
+def test_edition_meta_reads_the_edition_card():
+    """/art-editions/{id} answers the CARD for one edition: a bare object, not a
+    list — and it answers for any id, shelf record or not. That is what makes the
+    search API unnecessary as a metadata source."""
+    card = json.dumps({"status": 200, "error": None, "payload": {"data": {
+        "id": 100, "title": "Зона", "url": "/book/100-zona-sergej-dovlatov",
+        "authors": [{"id": 5, "full_name": "Сергей Довлатов"},
+                    {"id": 6, "full_name": "Третий Ли"}]}}},
+        separators=(",", ":"))
+    seen = []
 
-    results = LivelibClient(fetch=lambda url: json.dumps(payload)).search("зона")
-    assert len(results) == 1
-    assert results[0]["edition_id"] == "100"
-    assert results[0]["author"] == "Сергей Довлатов"
-    assert results[0]["livelib_url"].startswith("https://beta.livelib.ru/book/")
+    def fetch(url):
+        seen.append(url)
+        return card
+
+    assert LivelibClient(fetch=fetch).edition_meta("100") == {
+        "title": "Зона", "author": "Сергей Довлатов, Третий Ли"}
+    assert seen == ["https://beta.api.livelib.ru/trisolaris/api/art-editions/100"]
+
+
+def test_edition_meta_of_another_id_is_a_miss():
+    """A card naming a different id is not an answer for ours — livelib answers
+    a redirect-ish body, and a wrong title would silently corrupt the note."""
+    card = json.dumps({"payload": {"data": {"id": 101, "title": "Чужая",
+                                           "authors": []}}})
+    assert LivelibClient(fetch=lambda u: card).edition_meta("100") == {}
+
+
+def test_edition_meta_of_an_empty_card_is_a_miss():
+    for body in ('{"payload": {"data": {}}}', '{"payload": {}}', "{}"):
+        assert LivelibClient(fetch=lambda u: body).edition_meta("100") == {}
+
+
+def test_edition_meta_swallows_a_transport_error():
+    def boom(url):
+        raise RuntimeError("403 Forbidden")
+
+    assert LivelibClient(fetch=boom).edition_meta("100") == {}
 
 
 # ---------------------------------------------------- edition -> work (Содержание)
