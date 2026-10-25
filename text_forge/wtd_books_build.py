@@ -133,30 +133,15 @@ def main(root_str: str, user_id: int = 345497) -> int:
         return 1
 
     # crawl progress: one line per livelib page actually fetched (a cached id
-    # costs no network and prints nothing), named by the book title a human knows
-    titles = {}
-    for b in json.loads((export_dir / "livelib-books.json").read_text(encoding="utf-8")):
-        titles[_book_url_id(b["book_url"])] = b["title"]
-    for q in json.loads((export_dir / "livelib-quotes-api.json").read_text(encoding="utf-8")):
-        ae = q.get("art_edition") or {}
-        titles.setdefault(str(ae.get("id") or "") or _book_url_id(ae.get("url") or ""),
-                          ae.get("title") or "")
-    # editions resolved in a previous build keep their titles in the cache: a
-    # re-crawl of one of them still prints its name, not a bare id
-    ed_cache = export_dir / "editions-cache.json"
-    if ed_cache.exists():
-        for eid, rec in json.loads(ed_cache.read_text(encoding="utf-8")).items():
-            if rec and rec.get("title"):
-                titles.setdefault(eid, rec["title"])
+    # costs no network and prints nothing) — the url of the record being read
     seen_pages = [0]
 
     def progress_fetch(url: str) -> str:
         if "/art-editions/" in url:
             seen_pages[0] += 1
             m = re.search(r"/art-editions/(\d+)", url)
-            what = "Содержание" if url.endswith("/contents") else "карточка"
-            title = titles.get(m.group(1) if m else "", "") or (url[-40:] if not m else "")
-            print(f"  crawl {seen_pages[0]:3d}: {what}: {title}")
+            if m:
+                print(f"  crawl {seen_pages[0]:3d}: https://www.livelib.ru/book/{m.group(1)}")
         return LivelibClient().fetch(url)
 
     report = build_books(
