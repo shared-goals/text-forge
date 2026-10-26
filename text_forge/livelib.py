@@ -18,16 +18,18 @@ Channels verified against livelib.ru (anonymous; last sweep 2026-10-24):
   → work card; /editions lists EVERY edition of the work in one call
 - beta.api.livelib.ru/trisolaris/api/arts/{art_id}/editions?limit
   → editions by art_id
+- beta.api.livelib.ru/trisolaris/api/users/{id}/arts/{reads,readings,unreads,wants}
+  → paged JSON of shelf records (edition, title, authors, user rating 0-10),
+  anonymous, exact totals (verified 2026-10-26). THE shelf channel: the old
+  SSR walk is retired — www ignored ?page, beta SSR capped at 343 of 370.
 - www.livelib.ru/users/{id}/books/{read,reading,unread,want}?page=N
-  → SSR HTML (the ONLY channel still parsed as HTML); collection records
-  (edition, title, authors, user rating 0-10) embedded as Next.js flight
-  chunks (self.__next_f.push([1,"..."])). No anonymous JSON API exists for
-  shelves: /users/{id}/books/*, /collections, /editions, /library, /shelf/*
-  answer 404 and /users/me/collections answers 405 without cookies
-  (verified 2026-10-24).
+  → legacy SSR HTML (parse_flight_collections kept for debugging);
+  /users/{id}/books/* via trisolaris, /collections, /editions, /library, /shelf/*
+  answer 404 and
+  /users/me/collections answers 405 without cookies (verified 2026-10-24).
 
-Known limits: the want shelf (url; its status is wish) ignores ?page
-server-side (first 20 only);
+Known limits: livelib keeps a second collection record when a book is
+re-marked read (27 on this profile) — shelf() dedupes by edition id;
 write endpoints (POST/PATCH/DELETE /users/me/collections, per
 advokatb/livelib.koplugin) need session cookies and are out of scope here.
 
@@ -44,6 +46,8 @@ SITE_BASE = "https://www.livelib.ru"
 
 # shelf URL slug → note status (livelib names, see wtd_books)
 SHELF_STATUS = {"read": "read", "reading": "reading", "unread": "unread", "want": "wish"}
+# shelf slug → trisolaris API collection plural (verified 2026-10-26, anonymous)
+ART_SHELF = {"read": "reads", "reading": "readings", "unread": "unreads", "want": "wants"}
 # higher wins when the same edition sits on several shelves
 _STATUS_RANK = {"read": 0, "reading": 1, "unread": 2, "wish": 3}
 
@@ -143,6 +147,10 @@ def default_fetch(url: str, timeout: int = 30) -> str:
 def parse_flight_collections(html: str) -> list[dict]:
     """Extract user-collection records from SSR flight chunks.
 
+    Legacy SSR path, kept for reference/debugging; shelf() now reads the
+    trisolaris JSON API (/users/{id}/arts/...), which serves the same record
+    shape without SSR pagination bugs.
+
     Returns dicts with collection_id, edition_id, title, author, url,
     rating (0-10 as LiveLib stores it) and my_mark (1-5 stars, None if unrated).
     """
@@ -156,21 +164,28 @@ def parse_flight_collections(html: str) -> list[dict]:
             rec, _ = decoder.raw_decode(stream, m.start())
         except json.JSONDecodeError:
             continue
-        ae = rec.get("art_edition") or {}
-        if not isinstance(ae, dict) or "id" not in ae:
-            continue
-        authors = ", ".join(a["full_name"] for a in ae.get("authors") or [] if a.get("full_name"))
-        rating = rec.get("rating") or 0
-        records.append({
-            "collection_id": rec["id"],
-            "edition_id": str(ae["id"]),
-            "title": ae.get("title", ""),
-            "author": authors,
-            "url": ae.get("url") or f"/book/{ae['id']}",
-            "rating": rating,
-            "my_mark": round(rating / 2) if rating else None,
-        })
+        parsed = parse_api_record(rec)
+        if parsed:
+            records.append(parsed)
     return records
+
+
+def parse_api_record(rec: dict) -> dict | None:
+    """One collection record (API or flight) → export schema entry."""
+    ae = rec.get("art_edition") or {}
+    if not isinstance(ae, dict) or "id" not in ae:
+        return None
+    authors = ", ".join(a["full_name"] for a in ae.get("authors") or [] if a.get("full_name"))
+    rating = rec.get("rating") or 0
+    return {
+        "collection_id": rec["id"],
+        "edition_id": str(ae["id"]),
+        "title": ae.get("title", ""),
+        "author": authors,
+        "url": ae.get("url") or f"/book/{ae['id']}",
+        "rating": rating,
+        "my_mark": round(rating / 2) if rating else None,
+    }
 
 
 class LivelibClient:
@@ -300,24 +315,25 @@ class LivelibClient:
     # -------------------------------------------------------------- SSR
 
     def shelf(self, user_id: int, shelf: str) -> list[dict]:
-        """One shelf; walks ?page=N until a page adds no new editions.
+        """One shelf via the trisolaris JSON API, exact and anonymous.
 
-        Prints one progress line per page — the SSR walk is the slow part of
-        an export, and a human watching `make books` should see it moving."""
+        /users/{id}/arts/{reads|readings|unreads|wants} — paged JSON, no SSR.
+        Livelib keeps a second record when a book is re-marked read (27 such
+        records on this profile): dedupe by edition id, one book one entry.
+        Prints one progress line per shelf — a human watching `make books`
+        should see it moving.
+        """
         status = SHELF_STATUS[shelf]
-        base = f"{SITE_BASE}/users/{user_id}/books/{shelf}"
+        records = self._paged(f"users/{user_id}/arts/{ART_SHELF[shelf]}")
         seen: dict[str, dict] = {}
-        page = 1
-        while True:
-            records = parse_flight_collections(self.fetch(f"{base}?page={page}"))
-            fresh = [r for r in records if r["edition_id"] not in seen]
-            for r in fresh:
-                r["status"] = status
-                seen[r["edition_id"]] = r
-            print(f"  shelf {shelf}: page {page} → {len(seen)} books")
-            if not fresh:
-                return list(seen.values())
-            page += 1
+        for rec in records:
+            parsed = parse_api_record(rec)
+            if not parsed or parsed["edition_id"] in seen:
+                continue
+            parsed["status"] = status
+            seen[parsed["edition_id"]] = parsed
+        print(f"  shelf {shelf}: {len(records)} records → {len(seen)} books")
+        return list(seen.values())
 
     def books(self, user_id: int, shelves=("read", "reading", "unread", "want")) -> list[dict]:
         """Union of shelves → wtd_books input schema (livelib-books.json)."""

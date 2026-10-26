@@ -66,50 +66,58 @@ def test_parse_flight_collections_ignores_pages_without_data():
 
 
 # ----------------------------------------------------------------- shelves
+# since 2026-10-26 shelves come from the trisolaris JSON API
+# (/users/{id}/arts/{reads,readings,unreads,wants}) — anonymous, paged, exact.
+# The old SSR walk is gone: www ignored ?page, beta capped at 343 of 370.
 
-def test_shelf_paginates_until_no_new_editions():
-    p1 = flight_html([collection(1, 100, "А"), collection(2, 200, "Б")])
-    p2 = flight_html([collection(1, 100, "А"), collection(3, 300, "В")])
-    p3 = flight_html([collection(1, 100, "А")])
+
+def test_shelf_walks_api_pages():
+    p1 = api_page([collection(1, 100, "А"), collection(2, 200, "Б")], next_offset=2)
+    p2 = api_page([collection(3, 300, "В")])
     urls = []
 
     def fetch(url):
         urls.append(url)
-        return [p1, p2, p3][len(urls) - 1]
+        return [p1, p2][len(urls) - 1]
 
     c = LivelibClient(fetch=fetch)
     recs = c.shelf(345497, "read")
     assert {r["edition_id"] for r in recs} == {"100", "200", "300"}
     assert all(r["status"] == "read" for r in recs)
-    assert urls[0].endswith("/books/read?page=1")
+    assert "users/345497/arts/reads" in urls[0]
 
 
-def test_shelf_dedupes_repeated_page1_payloads():
-    """want-style shelves ignore ?page and keep returning page 1: stop cleanly."""
-    same = flight_html([collection(1, 100, "А")])
+def test_shelf_dedupes_double_read_records():
+    """Livelib keeps a second record when a book is re-marked read: one book, one entry."""
+    p1 = api_page([collection(1, 100, "А"), collection(2, 100, "А")])
 
-    def fetch(url):
-        return same
+    recs = LivelibClient(fetch=lambda url: p1).shelf(345497, "read")
+    assert len(recs) == 1 and recs[0]["edition_id"] == "100"
 
-    recs = LivelibClient(fetch=fetch).shelf(345497, "want")
+
+def test_shelf_want_uses_wish_status():
+    p1 = api_page([collection(1, 100, "А")])
+
+    recs = LivelibClient(fetch=lambda url: p1).shelf(345497, "want")
     assert len(recs) == 1 and recs[0]["status"] == "wish"
 
 
-def test_rating_scales_to_my_mark():
-    recs = parse_flight_collections(flight_html([collection(1, 100, "А", rating=8)]))
-    assert recs[0]["rating"] == 8
-    assert recs[0]["my_mark"] == 4
-    assert parse_flight_collections(flight_html([collection(2, 200, "Б", rating=0)]))[0]["my_mark"] is None
+def test_shelf_api_records_carry_rating_and_mark():
+    p1 = api_page([collection(1, 100, "А", rating=8), collection(2, 200, "Б", rating=0)])
+
+    recs = LivelibClient(fetch=lambda url: p1).shelf(345497, "read")
+    marks = {r["edition_id"]: r["my_mark"] for r in recs}
+    assert marks == {"100": 4, "200": None}
 
 
 def test_books_merges_shelves_with_status_priority():
     def fetch(url):
-        if "/books/read" in url:
-            return flight_html([collection(1, 100, "Зона", rating=8)])
-        if "/books/unread" in url:
-            return flight_html([collection(9, 100, "Зона", rating=8),
-                                collection(2, 200, "Идиот")])
-        return flight_html([])
+        if "/arts/reads" in url:
+            return api_page([collection(1, 100, "Зона", rating=8)])
+        if "/arts/unreads" in url:
+            return api_page([collection(9, 100, "Зона", rating=8),
+                             collection(2, 200, "Идиот")])
+        return api_page([])
 
     books = LivelibClient(fetch=fetch).books(345497)
     by_id = {b["book_url"].rsplit("/", 1)[-1]: b for b in books}
