@@ -2056,3 +2056,94 @@ class TestP3CorpusRoundTrip:
         assert rendered == sorted(rendered), rendered
         assert out["warnings"] == [], out["warnings"]
         assert text.endswith("\n")
+
+class TestBuildExport:
+    """wtd_books_build.export(): the shelf merge must BE LivelibClient.books()."""
+
+    UID = 345497
+
+    def fetch(self, url):
+        import json
+        if "/arts/reads" in url:
+            return json.dumps({"status": 200, "error": None, "payload": {
+                "pagination": {"next_page": None},
+                "data": [{"id": 1, "rating": 8,
+                         "art_edition": {"id": 100, "title": "Зона",
+                                        "authors": [{"full_name": "Сергей Довлатов"}],
+                                        "url": "/book/100-zona"}}]}},
+                ensure_ascii=False)
+        if "/arts/unreads" in url:
+            return json.dumps({"status": 200, "error": None, "payload": {
+                "pagination": {"next_page": None},
+                "data": [{"id": 2, "rating": 0,
+                         "art_edition": {"id": 100, "title": "Зона",
+                                        "authors": [{"full_name": "Сергей Довлатов"}],
+                                        "url": "/book/100-zona"}},
+                        {"id": 3, "rating": 6,
+                         "art_edition": {"id": 200, "title": "Идиот",
+                                        "authors": [{"full_name": "Фёдор Достоевский"}],
+                                        "url": "/book/200-idiot"}}]}},
+                ensure_ascii=False)
+        if "/quotes" in url or "/reviews" in url:
+            return json.dumps({"status": 200, "error": None, "payload": {
+                "pagination": {"next_page": None}, "data": []}})
+        if "/arts/" in url:   # empty shelf (reading, want)
+            return json.dumps({"status": 200, "error": None, "payload": {
+                "pagination": {"next_page": None}, "data": []}})
+        raise AssertionError(f"unexpected url: {url}")
+
+    def test_export_books_equal_client_books(self, tmp_path, monkeypatch):
+        """export() must not re-implement the shelf merge: same input, byte-identical
+        livelib-books.json as LivelibClient.books() (read wins over unread, and the
+        my_mark only the losing shelf carries survives)."""
+        from text_forge import livelib, wtd_books_build
+        monkeypatch.setattr(wtd_books_build, "LivelibClient", lambda: livelib.LivelibClient(fetch=self.fetch))
+        out = tmp_path / "livelib-export"
+        counts = wtd_books_build.export(self.UID, out)
+        written = (out / "livelib-books.json").read_text(encoding="utf-8")
+        expected = livelib.LivelibClient(fetch=self.fetch).books(self.UID)
+        assert written == json.dumps(expected, ensure_ascii=False, indent=1)
+        assert counts["livelib-books.json"] == len(expected) == 2
+        by_id = {b["book_url"].rsplit("/", 1)[-1]: b for b in expected}
+        assert by_id["100"]["status"] == "read"
+        assert by_id["100"]["my_mark"] == 4   # mark kept from the losing unread record
+
+    def test_export_prints_no_second_shelf_line(self, tmp_path, monkeypatch, capsys):
+        """shelf() already prints one progress line per shelf; export() must not
+        print its own (the build log showed each shelf twice)."""
+        from text_forge import livelib, wtd_books_build
+        monkeypatch.setattr(wtd_books_build, "LivelibClient", lambda: livelib.LivelibClient(fetch=self.fetch))
+        wtd_books_build.export(self.UID, tmp_path / "livelib-export")
+        lines = [ln for ln in capsys.readouterr().out.splitlines() if "shelf" in ln]
+        assert len(lines) == 4, lines
+        assert all(ln.startswith("  shelf ") for ln in lines), lines
+
+
+class TestBookUrlId:
+    """One url-id helper: _book_id for /book/ and /work/, '' when no id matches."""
+
+    def test_book_id_covers_book_work_slug_and_no_match(self):
+        from text_forge.wtd_books import _book_id
+        assert _book_id("https://www.livelib.ru/book/1000699994-zona") == "1000699994"
+        assert _book_id("/book/1000699994") == "1000699994"
+        assert _book_id("/work/1000880978-belyy-klyk") == "1000880978"
+        assert _book_id("https://www.livelib.ru/review/900-x") == \
+            "https://www.livelib.ru/review/900-x"
+
+    def test_edition_and_work_helpers_return_empty_on_no_match(self):
+        """wtd_books._edition_url_id / wtd_books_build._book_url_id are deleted;
+        their ''-on-no-match callers use wtd_books._work_id / _edition_id."""
+        from text_forge import wtd_books, wtd_books_build
+        assert wtd_books._work_id("/work/42-x") == "42"
+        assert wtd_books._work_id("/review/900-x") == ""
+        assert wtd_books._edition_id("/book/42-x") == "42"
+        assert wtd_books._edition_id("/work/42-x") == ""
+        assert wtd_books_build._record_ids(
+            [{"book_url": "https://www.livelib.ru/work/42-x"}]) == {"42"}
+        # shelf records carry /book/ urls — the LOST/NEW report keys on them
+        assert wtd_books_build._record_ids(
+            [{"book_url": "https://www.livelib.ru/book/100-zona"}]) == {"100"}
+        assert wtd_books_build._record_ids([{"book_url": "/review/9"}]) == {""}
+        assert not hasattr(wtd_books, "_edition_url_id")
+        assert not hasattr(wtd_books, "_work_url_id")
+        assert not hasattr(wtd_books_build, "_book_url_id")

@@ -81,15 +81,15 @@ def _review_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
-def _edition_url_id(url: str) -> str:
-    """The /book/<id> of a livelib url, when it names one. '' otherwise."""
-    m = re.search(r"/book/(\d+)", url)
+def _work_id(url: str) -> str:
+    """The /work/<id> of a livelib url, when it names one. '' otherwise."""
+    m = re.search(r"/work/(\d+)", url)
     return m.group(1) if m else ""
 
 
-def _work_url_id(url: str) -> str:
-    """The /work/<id> of a livelib url, when it names one. '' otherwise."""
-    m = re.search(r"/work/(\d+)", url)
+def _edition_id(url: str) -> str:
+    """The /book/<id> of a livelib url, when it names one. '' otherwise."""
+    m = re.search(r"/book/(\d+)", url)
     return m.group(1) if m else ""
 
 
@@ -463,7 +463,7 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
         qid = _book_id(ae["url"])
         target = next((e for e in final if qid in e["_edition_ids"]), None)
         if target is None:
-            target = by_work_id.get(_work_url_id(ae["url"])
+            target = by_work_id.get(_work_id(ae["url"])
                                     or str(ae.get("id") or "")
                                     or work_of.get(qid, ""))
         if target is None:
@@ -792,7 +792,7 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
     book_editions: dict[str, set] = {}
     for b in books:
         bid = _book_id(b["book_url"])
-        if bid == _edition_url_id(b["book_url"]):
+        if _edition_id(b["book_url"]) == bid:
             book_editions.setdefault(bid, set()).add(bid)
     for q in quotes:
         book_editions.setdefault(_book_id(q["art_edition"]["url"]), set()).add(

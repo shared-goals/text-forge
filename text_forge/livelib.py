@@ -125,9 +125,9 @@ def pick_work_id(titles: list[tuple[str, str]], title: str = "") -> str | None:
 
 
 def default_fetch(url: str, timeout: int = 30) -> str:
-    """GET with a small retry on transient livelib errors (5xx / 429):
-    the SSR shelves and edition pages answer 500 a few times a day — a build
-    should survive that instead of dying mid-export. Fatal (4xx except 429)
+    """GET with a small retry on transient livelib errors (5xx / 429): the
+    JSON API endpoints answer 500/429 a few times a day — a build should
+    survive that instead of dying mid-export. Fatal (4xx except 429)
     raises at once."""
     import time as _time
     last: Exception = RuntimeError("unreached")
@@ -235,10 +235,6 @@ class LivelibClient:
                 out.append((item["title"], m.group(1)))
         return out
 
-    def _work_id_from_contents(self, stream: list[tuple[str, str]], title: str = "") -> str | None:
-        """The work id of the contents entry named after the edition."""
-        return pick_work_id(stream, title)
-
     def work_id(self, edition_id: str, *, title: str = "", cache_path=None) -> str | None:
         """The livelib work id an edition belongs to (None when unknowable).
 
@@ -264,7 +260,7 @@ class LivelibClient:
             works = self._contents_stream(key)
             if works is None:             # livelib unreachable: nothing to record
                 return None
-            cache[key] = {"work_id": self._pick_work_id(works, title)}
+            cache[key] = {"work_id": pick_work_id(works, title)}
             if cache_path:
                 pathlib.Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
                 pathlib.Path(cache_path).write_text(
@@ -283,10 +279,6 @@ class LivelibClient:
         note — «Собачье сердце. Записки юного врача» carries both.
         """
         return [wid for _t, wid in self._contents_stream(edition_id)]
-
-    def _pick_work_id(self, works: list[tuple[str, str]], title: str = "") -> str | None:
-        """The one work an edition stands for (see `work_id`)."""
-        return pick_work_id(works, title)
 
     def edition_meta(self, edition_id: str) -> dict:
         """{title, author} of one edition id, from the edition card JSON.

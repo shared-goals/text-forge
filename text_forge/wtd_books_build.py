@@ -26,8 +26,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from text_forge.livelib import LivelibClient, _STATUS_RANK
-from text_forge.wtd_books import build_books, validate_text_links
+from text_forge.livelib import LivelibClient
+from text_forge.wtd_books import _edition_id, _work_id, build_books, validate_text_links
 
 CUR = Path(__file__).parent / "wtd_books.py"
 CUR_DIR = CUR.parent
@@ -41,15 +41,9 @@ def _record_ids(records: list[dict]) -> set[str]:
     for r in records:
         qid = (r.get("quote") or {}).get("quote_id")
         rid = (r.get("review") or {}).get("review_id") or r.get("id")
-        eid = _book_url_id(r.get("book_url")
-                           or (r.get("art_edition") or {}).get("url") or "")
-        out.add(str(qid or rid or eid))
+        u = r.get("book_url") or (r.get("art_edition") or {}).get("url") or ""
+        out.add(str(qid or rid or _edition_id(u) or _work_id(u)))
     return out
-
-
-def _book_url_id(url: str) -> str:
-    m = re.search(r"/(?:book|work)/(\d+)", url or "")
-    return m.group(1) if m else ""
 
 
 def export(user_id: int, out_dir: Path) -> dict:
@@ -70,22 +64,8 @@ def export(user_id: int, out_dir: Path) -> dict:
         return f"[{head}{more}]"
 
     counts: dict[str, int] = {}
-    # shelves with per-shelf progress — the slow SSR part is visible
-    merged: dict[str, dict] = {}
-    for shelf in ("read", "reading", "unread", "want"):
-        rows = c.shelf(user_id, shelf)
-        print(f"  shelf {shelf}: {len(rows)} books")
-        for r in rows:
-            cur_rec = merged.get(r["edition_id"])
-            if cur_rec is None or _STATUS_RANK[r["status"]] < _STATUS_RANK[cur_rec["status"]]:
-                merged[r["edition_id"]] = cur_rec = dict(r)
-            if cur_rec.get("my_mark") is None and r["my_mark"] is not None:
-                cur_rec["my_mark"] = r["my_mark"]
-    records = [{
-        "book_url": f"https://www.livelib.ru/book/{b['edition_id']}",
-        "title": b["title"], "author": b["author"],
-        "status": b["status"], "my_mark": b["my_mark"],
-    } for b in merged.values()]
+    # shelves: shelf() prints one progress line per shelf, books() merges them
+    records = c.books(user_id)
     path = out_dir / "livelib-books.json"
     old = _record_ids(json.loads(path.read_text(encoding="utf-8"))) \
         if path.exists() else None
