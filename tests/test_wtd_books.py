@@ -991,20 +991,100 @@ class TestResolveWorks:
         assert resolve_works_cached(["1001"], cache_path=cache, fetch=boom) == {"1001": None}
         assert not cache.exists() or json.loads(cache.read_text(encoding="utf-8")) == {}
 
-    def test_title_is_passed_to_the_resolver_for_omnibuses(self, tmp_path):
-        """The edition title is the disambiguator livelib needs for collections."""
+    def test_title_disambiguates_a_collection(self, tmp_path):
+        """The edition title picks which contents work the edition is named after."""
         from text_forge.wtd_books import resolve_works_cached
+
+        class Fake:
+            def _contents_stream(self, eid):
+                return [("Морской волк", "W-sea"), ("Белый Клык", "W-fang")]
+
+        got = resolve_works_cached(
+            [{"id": "1001", "title": "Морской волк. Белый Клык"}],
+            client=Fake())
+        assert got == {"1001": "W-sea"}
+
+    def test_mixed_ids_read_the_cache_once_and_write_it_once(self, tmp_path):
+        """The function owns its cache: one load, one store, no delegation.
+
+        Four states at once — an answered id, a placeholder written by the
+        editions builder (no `work_id` field: not an answer), an id absent from
+        the file, and an id whose page is unreachable (answered None in memory,
+        left OUT of the file so the next build retries it).
+        """
+        from text_forge.wtd_books import resolve_works_cached
+        cache = tmp_path / "works-cache.json"
+        cache.write_text(json.dumps({"a": {"work_id": "Wa"},
+                                    "b": {"title": "Запись другого строителя"}},
+                                   ensure_ascii=False), encoding="utf-8")
+        reads = writes = 0
+        real_read, real_write = pathlib.Path.read_text, pathlib.Path.write_text
+
+        def count_read(self, *a, **kw):
+            nonlocal reads
+            reads += 1
+            return real_read(self, *a, **kw)
+
+        def count_write(self, *a, **kw):
+            nonlocal writes
+            writes += 1
+            return real_write(self, *a, **kw)
+
         seen = []
 
         class Fake:
-            def work_id(self, eid, *, title="", cache_path=None):
-                seen.append((eid, title))
-                return "W" + eid
+            """A client WITHOUT `work_id`: caching is no longer the client's job."""
 
-        got = resolve_works_cached([{"id": "1001", "title": "Мы. Бич Божий"}],
-                                   client=Fake())
-        assert got == {"1001": "W1001"}
-        assert seen == [("1001", "Мы. Бич Божий")]
+            def _contents_stream(self, eid):
+                seen.append(eid)
+                if eid == "d":
+                    return None        # the page could not be fetched at all
+                return [("Произведение", "W" + eid)]
+
+        pathlib.Path.read_text, pathlib.Path.write_text = count_read, count_write
+        try:
+            got = resolve_works_cached(["a", "b", "c", "d"], cache_path=cache,
+                                      client=Fake())
+        finally:
+            pathlib.Path.read_text, pathlib.Path.write_text = real_read, real_write
+        assert got == {"a": "Wa", "b": "Wb", "c": "Wc", "d": None}
+        assert seen == ["b", "c", "d"]      # the answered id needs no transport
+        assert reads == 1                 # one load for the whole call
+        assert writes == 1                # ONE store, not one per item
+        # the unreachable id stays out of the record on disk, and a placeholder
+        # the fetch replaced is gone — the record now says what was read
+        assert json.loads(real_read(cache, encoding="utf-8")) == {
+            "a": {"work_id": "Wa"},
+            "b": {"work_id": "Wb"},
+            "c": {"work_id": "Wc"}}
+
+    def test_a_client_that_still_caches_itself_does_not_double_the_store(self, tmp_path):
+        """The real LivelibClient still caches on its own account through
+        `work_id`; when this function drives the fetch the file is stored once."""
+        from text_forge.livelib import LivelibClient
+        from text_forge.wtd_books import resolve_works_cached
+        cache = tmp_path / "works-cache.json"
+        body = json.dumps({"status": 200, "error": None, "payload": {"data": [
+            {"id": 5, "title": "Произведение", "url": "/work/77-x"}]}},
+            separators=(",", ":"))
+        writes = 0
+        real_write = pathlib.Path.write_text
+
+        def count_write(self, *a, **kw):
+            nonlocal writes
+            writes += 1
+            return real_write(self, *a, **kw)
+
+        pathlib.Path.write_text = count_write
+        try:
+            got = resolve_works_cached(["1", "2"], cache_path=cache,
+                                      client=LivelibClient(fetch=lambda u: body))
+        finally:
+            pathlib.Path.write_text = real_write
+        assert got == {"1": "77", "2": "77"}
+        assert writes == 1
+        assert json.loads(pathlib.Path(cache).read_text(encoding="utf-8")) \
+            == {"1": {"work_id": "77"}, "2": {"work_id": "77"}}
 
 class TestMakeSlug:
     def test_frankl_example(self):

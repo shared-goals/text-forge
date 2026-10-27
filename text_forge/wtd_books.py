@@ -583,34 +583,94 @@ def render_note(entry: dict) -> str:
     return "\n".join(body).rstrip() + "\n"
 
 
+def _load_cache(cache_path) -> dict:
+    """The JSON record at `cache_path`, or {} when there is none yet.
+
+    The cache file is a derived record, not curated input: a file that holds no
+    JSON object (a truncation, a stray touch) is no record at all — the build
+    starts from an empty cache and its next store overwrites the junk, rather
+    than dying on a file it could rebuild anyway.
+    """
+    if not cache_path:
+        return {}
+    path = pathlib.Path(cache_path)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):        # unreadable or not JSON: no record
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _store_cache(cache_path, cache) -> None:
+    """Write the whole record back — the caller's one and only store."""
+    if cache_path:
+        pathlib.Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+        pathlib.Path(cache_path).write_text(
+            json.dumps(cache, ensure_ascii=False, indent=1, sort_keys=True),
+            encoding="utf-8")
+
+
+def _cached_lookup(cache, key, is_answer, fetch):
+    """The cache-aside skeleton the livelib caches share, on ONE in-memory record.
+
+    `is_answer(record)` says whether a cached record already answers the question.
+    A key that is ABSENT, or holds a placeholder written by another builder (so,
+    no answer field), is fetched; `fetch()` returns the record to store — it
+    REPLACES any placeholder, which would otherwise survive as half-true
+    provenance beside a fresh answer — or None meaning "the source could not be
+    read", and then NOTHING is recorded: None comes back and the next build tries
+    the key again, so a temporary failure is never pinned. A fetch that raises is
+    treated exactly like that, since an unreachable source is a miss, not a crash.
+
+    A record carrying the answer is returned as is, no network: None IN it is a
+    genuine miss ("this edition lists no works"), recorded on purpose.
+
+    The record dict is mutated in place, so a caller holding several keys loads
+    the file once and stores it once.
+    """
+    key = str(key)
+    if is_answer(cache.get(key)):
+        return cache[key]                       # the record IS the answer
+    try:
+        got = fetch()
+    except Exception:                           # noqa: BLE001 - a miss, not a crash
+        return None
+    if got is None:                             # nothing to record
+        return None
+    cache[key] = got
+    return cache[key]
+
+
 def resolve_edition_cached(book_id: str, *, cache_path=None, client=None) -> dict:
     """{title, author} of an edition id via the edition card, with a JSON cache.
 
     Keyed by edition id. An id livelib could not resolve is cached too (as an
-    empty entry), so a rebuild does not re-hit the network for what livelib does
-    not have. The cache is the build's record of where each fetched title came
-    from; `source` says whether it was the API or a recorded miss.
+    empty entry with `source: "none"`), so a rebuild does not re-hit the network
+    for what livelib does not have. The cache is the build's record of where
+    each fetched title came from; `source` says whether it was the API or a
+    recorded miss.
     """
     if client is None:
         from .livelib import LivelibClient
         client = LivelibClient()
-    cache = {}
-    if cache_path and pathlib.Path(cache_path).exists():
-        cache = json.loads(pathlib.Path(cache_path).read_text(encoding="utf-8"))
     key = str(book_id)
-    # a record already marked as an answer is not retried: the empty entry IS
-    # the answer, and re-hitting the network for what livelib does not have
-    # would make a rebuild depend on livelib being up
-    if key not in cache or not (cache[key] or {}).get("source"):
+    cache = _load_cache(cache_path)
+
+    def has_answer(rec) -> bool:
+        """`source` marks the record as answered — "none" is the answer too."""
+        return bool(rec) and bool(rec.get("source"))
+
+    def fetch():
         got = client.edition_meta(key) or {}
-        cache[key] = {**got,
-                     "source": "api" if got.get("title") or got.get("author") else "none"}
-        if cache_path:
-            pathlib.Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-            pathlib.Path(cache_path).write_text(
-                json.dumps(cache, ensure_ascii=False, indent=1, sort_keys=True),
-                encoding="utf-8")
-    return {"title": "", "author": "", **cache[key]}
+        return {**got,
+                "source": "api" if got.get("title") or got.get("author") else "none"}
+
+    rec = _cached_lookup(cache, key, has_answer, fetch)
+    if rec is not None:
+        _store_cache(cache_path, cache)
+    return {"title": "", "author": "", **(rec or {})}
 
 
 
@@ -626,44 +686,70 @@ def resolve_works_cached(ids, *, cache_path=None, client=None, titles=None, fetc
     misses ("this edition lists no works") so a rebuild is offline-repeatable; an
     id whose page could not be fetched at all is left OUT of the cache, so the
     next build tries it again rather than pinning a temporary network failure.
+
+    This function OWNS that file: one load, one store, and only the ids the
+    cache does not answer are fetched — no per-iteration re-read, and no second
+    caching of the same fact by the client (`LivelibClient.work_id` stays as the
+    single-item primitive for callers that want it, and is not used here).
     """
-    cache = {}
-    if cache_path and pathlib.Path(cache_path).exists():
-        cache = json.loads(pathlib.Path(cache_path).read_text(encoding="utf-8"))
+    from .livelib import LivelibClient, pick_work_id
+
+    cache = _load_cache(cache_path)
     titles = titles or {}
 
-    def answered(rec) -> bool:
-        """Does this cached record answer the question?
+    def has_answer(rec) -> bool:
+        """Only a `work_id` field answers — None in it means "lists no works".
 
-        Only a `work_id` field does — a record written by another builder (an
-        edition title from the search API) carries no relation and must not stop
-        the fetch.
+        A record written by another builder (an edition title from the edition
+        card) carries no relation and must not stop the fetch.
         """
         return bool(rec) and "work_id" in rec
 
+    def answered(i):
+        """Is this requested id already answered in the loaded record?"""
+        return has_answer(cache.get(_key_of(i)))
+
     # ids the cache already answers need no client at all
-    todo = [i for i in ids
-            if not answered(cache.get(str(i["id"] if isinstance(i, dict) else i)))]
+    todo = [i for i in ids if not answered(i)]
     if todo and client is None:
-        from .livelib import LivelibClient
         client = LivelibClient(fetch=fetch)
+
     out: dict[str, str | None] = {}
+    fetched = False
+
+    def fetch(_client, _key, _title):
+        """Read one edition's contents, as the record to store.
+
+        None from the stream means the page could not be read — nothing is then
+        recorded; an empty list is the real fact "this edition lists no works",
+        and IS recorded, as a None answer. The title disambiguates collections:
+        only it says which of the contents the edition is named after.
+        """
+        works = _client._contents_stream(_key)
+        return None if works is None else {"work_id": pick_work_id(works, _title)}
+
     for item in ids:
-        eid, title = (item["id"], item.get("title", "")) \
-            if isinstance(item, dict) else (item, titles.get(str(item), ""))
-        key = str(eid)
-        if answered(cache.get(key)):
-            out[key] = cache[key].get("work_id")
-            continue
-        # LivelibClient.work_id does the caching itself: it writes a
-        # {"work_id": ...} entry for a page it read (including "no works
-        # listed") and writes nothing at all when the page was unreachable — so
-        # the caller's copy must match what the cache ended up holding.
-        work = client.work_id(key, title=title, cache_path=cache_path)
-        if cache_path and pathlib.Path(cache_path).exists():
-            cache = json.loads(pathlib.Path(cache_path).read_text(encoding="utf-8"))
-        out[key] = cache[key]["work_id"] if answered(cache.get(key)) else work
+        key = _key_of(item)
+        rec = _cached_lookup(cache, key, has_answer,
+                             lambda i=item: fetch(client, _key_of(i), _title_of(i, titles)))
+        if rec is not None:
+            fetched = True
+        out[key] = (rec or {}).get("work_id")
+    if fetched:
+        _store_cache(cache_path, cache)
     return out
+
+
+def _key_of(item) -> str:
+    """The cache key of a requested id: bare, or the id of a {id,title} dict."""
+    return str(item["id"]) if isinstance(item, dict) else str(item)
+
+
+def _title_of(item, titles) -> str:
+    """The edition title offered for a requested id, "" when none was offered."""
+    if isinstance(item, dict):
+        return item.get("title", "")
+    return (titles or {}).get(str(item), "")
 
 
 def _load_json(path):
@@ -704,7 +790,7 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
 
     Work merges need no section of their own: pass `works_cache_path` (or let the
     build derive it from `editions_cache_path`) and every shelf edition's work is
-    resolved through LivelibClient.work_id, cached beside the export, and the
+    resolved through resolve_works_cached, cached beside the export, and the
     cache feeds group_export — editions livelib itself links merge themselves.
     A curated `merges` entry still works, and then just matches (or no-ops over)
     what the resolution already did.
@@ -778,8 +864,9 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
             work_id_by_edition = {**{k: v for k, v in resolved_extra.items() if v},
                                  **(work_id_by_edition or {})}
     # the work relation, resolved once per SHELF edition from the edition pages'
-    # «Содержание» (LivelibClient.work_id). The cache lives beside the export
-    # (default: works-cache.json next to the editions cache), so a rebuild with
+    # «Содержание» (resolve_works_cached, which reads the contents itself and
+    # keeps works-cache.json). The cache lives beside the export (default:
+    # works-cache.json next to the editions cache), so a rebuild with
     # the same inputs reproduces without the network. An explicit
     # work_id_by_edition from the caller overrides what the cache says.
     # The record of one crawl feeds the next build — an id whose page could not
