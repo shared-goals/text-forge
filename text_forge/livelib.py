@@ -1,65 +1,106 @@
-"""Stable LiveLib export client — the single code path behind wtd-books
-and the future livelib-mcp.
+"""LiveLib pipeline adapter — the seam between the wtd-books build and livelib-mcp.
 
-Channels verified against livelib.ru (anonymous; last sweep 2026-10-24):
+Everything about *how* to read LiveLib — endpoints, envelopes, pagination, retry,
+shelf-record shaping — lives in `livelib_mcp` (the pinned git dependency). What
+stays here is pipeline policy, the part that belongs to this build alone:
 
-- beta.api.livelib.ru/trisolaris/api/users/{id}/quotes|reviews?limit&offset
-  → open JSON, envelope {status, error, payload:{pagination:{next_page}, data}}
-- beta.api.livelib.ru/trisolaris/api/search?query=&limit=
-  → search; types include art_editions and art_works (art_works carry the
-  work id in instance.id)
-- beta.api.livelib.ru/trisolaris/api/art-editions/{id}
-  → edition card: title, authors, isbn, publication_year, publishers, stats,
-  art_id; sub-resources: /contents (the «Содержание» works, each with its
-  /work/<id>), /quotes, /reviews, /stats, /sections, /selections, /similars,
-  /cycles, /views — all plain JSON. THE metadata source for an edition: it
-  answers for ANY id, including one no shelf record carries
-- beta.api.livelib.ru/trisolaris/api/art-works/{work_id}
-  → work card; /editions lists EVERY edition of the work in one call
-- beta.api.livelib.ru/trisolaris/api/arts/{art_id}/editions?limit
-  → editions by art_id
-- beta.api.livelib.ru/trisolaris/api/users/{id}/arts/{reads,readings,unreads,wants}
-  → paged JSON of shelf records (edition, title, authors, user rating 0-10),
-  anonymous, exact totals (verified 2026-10-26). THE shelf channel: the old
-  SSR walk is retired — www ignored ?page, beta SSR capped at 343 of 370.
-- www.livelib.ru/users/{id}/books/{read,reading,unread,want}?page=N
-  → legacy SSR HTML (parse_flight_collections kept for debugging);
-  /users/{id}/books/* via trisolaris, /collections, /editions, /library, /shelf/*
-  answer 404 and
-  /users/me/collections answers 405 without cookies (verified 2026-10-24).
+- the work-key heuristics (`_norm_title`, `_words`, `_tokens_by_index`,
+  `pick_work_id`): deciding which work an omnibus edition is named after is a
+  corpus decision, not an API fact;
+- the caching contract of `work_id` (one record per edition id at `cache_path`,
+  placeholder vs answer, failures never recorded);
+- the error policy of the crawl: an unreachable edition is a MISS (None / {})
+  and never raises, so the caller keeps its title-based grouping;
+- the export-file writing (`export_all`) and the per-shelf progress line.
 
-Known limits: livelib keeps a second collection record when a book is
-re-marked read (27 on this profile) — shelf() dedupes by edition id;
-write endpoints (POST/PATCH/DELETE /users/me/collections, per
-advokatb/livelib.koplugin) need session cookies and are out of scope here.
+Callers (`wtd_books.py`, `wtd_books_build.py`) see the same `LivelibClient`
+interface as before, so nothing outside this module changed.
 
-Transport is injected so tests run without network.
+Transport injection: pass `transport=` (a livelib_mcp transport, i.e.
+`(method, url, *, json_body, headers) -> response body as a dict`) or the legacy
+`fetch=` callable `(url) -> text`, which the adapter wraps. Tests use either; the
+default is the package's own retrying transport.
 """
+import inspect
 import json
 import pathlib
 import re
-import urllib.error
-import urllib.request
 
-API_BASE = "https://beta.api.livelib.ru/trisolaris/api"
-SITE_BASE = "https://www.livelib.ru"
+from livelib_mcp.client import TrisolarisClient
 
 # shelf URL slug → note status (livelib names, see wtd_books)
 SHELF_STATUS = {"read": "read", "reading": "reading", "unread": "unread", "want": "wish"}
-# shelf slug → trisolaris API collection plural (verified 2026-10-26, anonymous)
-ART_SHELF = {"read": "reads", "reading": "readings", "unread": "unreads", "want": "wants"}
+# shelf slug → livelib-mcp collection name (the package's shelf vocabulary)
+SHELF_COLLECTION = {"read": "reads", "reading": "readings",
+                    "unread": "unreads", "want": "wants"}
 # higher wins when the same edition sits on several shelves
 _STATUS_RANK = {"read": 0, "reading": 1, "unread": 2, "wish": 3}
 
-_HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
-    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-}
 
-_FLIGHT = re.compile(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)')
-_RECORD = re.compile(r'\{"id":\d+,"art_edition":\{')
+def _is_transport(fn) -> bool:
+    """Is `fn` a livelib_mcp transport — i.e. declared with (method, url) first?
 
+    Discrimination by SIGNATURE, not by argument guessing: a transport is written
+    as a def taking the method positionally, while every legacy caller is
+    fetch(url). `functools.partial` and other callables with no nameable
+    signature count as legacy, which is exactly what callers used them for.
+    """
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    if len(params) < 2 or params[0].name != "method" or params[1].name != "url":
+        return False
+    return all(p.kind is p.KEYWORD_ONLY for p in params[2:])
+
+
+def _as_transport(fetch):
+    """A legacy fetch(url) / fetch(url, headers=...) -> text, as a transport.
+
+    The text is parsed and the body handed back as is — NO envelope check: the
+    old fetch path had none, and a wrapper must not invent error behaviour its
+    callee never had. Headers are passed on when the callee can take them.
+    """
+    def transport(method, url, *, json_body=None, headers=None):
+        try:
+            body = fetch(url, headers=headers)
+        except TypeError:
+            # a fetch written as fetch(url) takes nothing else
+            body = fetch(url)
+        return body if isinstance(body, dict) else json.loads(body)
+    return transport
+
+
+def _counting(transport, marks):
+    """Wrap a transport, counting the shelf marks its pages carry.
+
+    Counts the same fact on either wire style — a package transport returns the
+    checked body (payload contents), a legacy one the raw envelope — and passes
+    the body through untouched, so nothing but the count changes.
+    """
+    def wrapper(method, url, *, json_body=None, headers=None):
+        body = transport(method, url, json_body=json_body, headers=headers)
+        if not isinstance(body, dict):
+            body = json.loads(body)
+        data = (body.get("payload") or {}).get("data")
+        if data is None:
+            data = body.get("data")
+        marks[0] += len(data or [])
+        return body
+    return wrapper
+
+
+def _id(edition_id):
+    """The package takes an int-ish id; the pipeline hands around strings.
+
+    A non-numeric id passes through unchanged, so the call just misses instead
+    of raising on int(): the pipeline's miss policy wins over a type complaint.
+    """
+    s = str(edition_id)
+    return int(s) if s.isdigit() else s
+
+
+# ------------------------------------------------------ work-key heuristics
 
 def _norm_title(text: str) -> str:
     """Title for comparing a work title with an edition title: case, punctuation
@@ -100,8 +141,8 @@ def pick_work_id(titles: list[tuple[str, str]], title: str = "") -> str | None:
     longer match, then to the page order that livelib itself uses.
 
       - «Белый клык. Сказание о Кише»: «Белый Клык» runs from 0, «Сказание о
-        Кише» from 3 → theLondon work wins.
-      - «Морской волк. Белый Клык»: «Морской волк" from 0 → it wins.
+        Кише» from 3 → the London work wins.
+      - «Морской волк. Белый Клык»: «Морской волк» from 0 → it wins.
       - Nothing matches any run: livelib's own choice, the first listed work.
     A match must be contiguous, so a title that only shares scattered words does
     not claim the edition.
@@ -124,116 +165,43 @@ def pick_work_id(titles: list[tuple[str, str]], title: str = "") -> str | None:
     return titles[0][1]
 
 
-def default_fetch(url: str, timeout: int = 30) -> str:
-    """GET with a small retry on transient livelib errors (5xx / 429): the
-    JSON API endpoints answer 500/429 a few times a day — a build should
-    survive that instead of dying mid-export. Fatal (4xx except 429)
-    raises at once."""
-    import time as _time
-    last: Exception = RuntimeError("unreached")
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(url, headers=_HEADERS)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return r.read().decode("utf-8", "replace")
-        except urllib.error.HTTPError as e:
-            if e.code not in (429, 500, 502, 503, 504):
-                raise
-            last = e
-            _time.sleep(2 * (attempt + 1))
-    raise last
-
-
-def parse_flight_collections(html: str) -> list[dict]:
-    """Extract user-collection records from SSR flight chunks.
-
-    Legacy SSR path, kept for reference/debugging; shelf() now reads the
-    trisolaris JSON API (/users/{id}/arts/...), which serves the same record
-    shape without SSR pagination bugs.
-
-    Returns dicts with collection_id, edition_id, title, author, url,
-    rating (0-10 as LiveLib stores it) and my_mark (1-5 stars, None if unrated).
-    """
-    stream = "".join(json.loads(m.group(1)) for m in _FLIGHT.finditer(html))
-    if not stream:
-        return []
-    decoder = json.JSONDecoder()
-    records = []
-    for m in _RECORD.finditer(stream):
-        try:
-            rec, _ = decoder.raw_decode(stream, m.start())
-        except json.JSONDecodeError:
-            continue
-        parsed = parse_api_record(rec)
-        if parsed:
-            records.append(parsed)
-    return records
-
-
-def parse_api_record(rec: dict) -> dict | None:
-    """One collection record (API or flight) → export schema entry."""
-    ae = rec.get("art_edition") or {}
-    if not isinstance(ae, dict) or "id" not in ae:
-        return None
-    authors = ", ".join(a["full_name"] for a in ae.get("authors") or [] if a.get("full_name"))
-    rating = rec.get("rating") or 0
-    return {
-        "collection_id": rec["id"],
-        "edition_id": str(ae["id"]),
-        "title": ae.get("title", ""),
-        "author": authors,
-        "url": ae.get("url") or f"/book/{ae['id']}",
-        "rating": rating,
-        "my_mark": round(rating / 2) if rating else None,
-    }
-
-
 class LivelibClient:
-    """Read-only LiveLib client; `fetch` returns the response body as text."""
+    """Read-only LiveLib client backed by livelib-mcp; `fetch`/`transport` inject
+    the wire so tests run without network."""
 
-    def __init__(self, fetch=None):
-        self.fetch = fetch or default_fetch
+    def __init__(self, fetch=None, *, transport=None):
+        if transport is None and fetch is not None:
+            transport = fetch if _is_transport(fetch) else _as_transport(fetch)
+        self.client = TrisolarisClient(transport=transport)
+        # legacy attribute: a call site may hold `client.fetch` and call it with
+        # a bare url (wtd_books_build.progress_fetch)
+        self.fetch = lambda url: self.client.transport("GET", url)
 
-    # ---------------------------------------------------------- json API
-
-    def _paged(self, path: str) -> list[dict]:
-        out, offset, limit = [], 0, 50
-        while True:
-            envelope = json.loads(self.fetch(f"{API_BASE}/{path}?limit={limit}&offset={offset}"))
-            if envelope.get("error"):
-                raise RuntimeError(f"livelib api error on {path}: {envelope['error']}")
-            data = envelope["payload"]["data"]
-            out.extend(data)
-            if not envelope["payload"]["pagination"]["next_page"] or not data:
-                return out
-            offset += limit
+    # ---------------------------------------------------------- channels
 
     def quotes(self, user_id: int) -> list[dict]:
-        return self._paged(f"users/{user_id}/quotes")
+        """Every quote the user marked, as RAW API records — the build consumes
+        the envelope records (quote_id, art_edition, text_json, …) as they are."""
+        return self.client.get_quotes(user_id)
 
     def reviews(self, user_id: int) -> list[dict]:
-        return self._paged(f"users/{user_id}/reviews")
+        """Every review the user wrote, as RAW API records."""
+        return self.client.get_reviews(user_id)
 
-    def _contents_stream(self, edition_id: str) -> list[tuple[str, str]]:
-        """[(work title, work id)] of the edition's «Содержание», via the
-        trisolaris JSON API — /art-editions/{id}/contents (live-verified
-        2026-10-24). Empty when unreachable: a transport failure is a miss,
-        never raised, so the caller keeps its title-based grouping. The
-        failure is NOT cached, so a later build gets another chance."""
+    # ------------------------------------------------------- edition -> work
+
+    def _contents_stream(self, edition_id) -> list[tuple[str, str]] | None:
+        """[(work title, work id)] of the edition's «Содержание», or None when
+        the page could not be read.
+
+        None is the caller's signal "no fact was learned" — write no cache
+        record, try again next build; an empty list IS the fact "this edition
+        lists no works". A transport failure is never raised over the build.
+        """
         try:
-            body = self.fetch(f"{API_BASE}/art-editions/{edition_id}/contents")
+            return self.client.get_edition_contents(_id(edition_id))
         except Exception:  # noqa: BLE001 - unreachable is a miss, not a crash
             return None
-        data = json.loads(body).get("payload", {}).get("data") or []
-        out = []
-        for item in data:
-            # a contents entry without a url carries no work relation
-            if not isinstance(item, dict):
-                continue
-            m = re.search(r"/work/(\d+)", item.get("url") or "")
-            if m and item.get("title"):
-                out.append((item["title"], m.group(1)))
-        return out
 
     def work_id(self, edition_id: str, *, title: str = "", cache_path=None) -> str | None:
         """The livelib work id an edition belongs to (None when unknowable).
@@ -277,11 +245,12 @@ class LivelibClient:
         one called after the edition (the canonical), while grouping treats
         these as the works whose quotes legitimately land in this edition's
         note — «Собачье сердце. Записки юного врача» carries both.
+        An unreachable page lists nothing: the caller keeps its own grouping.
         """
-        return [wid for _t, wid in self._contents_stream(edition_id)]
+        return [wid for _t, wid in (self._contents_stream(edition_id) or [])]
 
     def edition_meta(self, edition_id: str) -> dict:
-        """{title, author} of one edition id, from the edition card JSON.
+        """{title, author} of one edition id, from the edition card.
 
         /art-editions/{id} answers the card for ANY edition — including one no
         shelf record carries — so it replaces the search API as the metadata
@@ -292,8 +261,7 @@ class LivelibClient:
         transport failure to raise over.
         """
         try:
-            item = json.loads(self.fetch(f"{API_BASE}/art-editions/{edition_id}")
-                             ).get("payload", {}).get("data") or {}
+            item = self.client.get_edition(_id(edition_id))
         except Exception:  # noqa: BLE001 - unreachable is a miss, not a crash
             return {}
         if not isinstance(item, dict) or str(item.get("id", "")) != str(edition_id):
@@ -304,28 +272,27 @@ class LivelibClient:
                                if a.get("full_name")),
         }
 
-    # -------------------------------------------------------------- SSR
+    # -------------------------------------------------------------- shelves
 
     def shelf(self, user_id: int, shelf: str) -> list[dict]:
-        """One shelf via the trisolaris JSON API, exact and anonymous.
+        """One shelf: deduped edition records with the note status attached.
 
-        /users/{id}/arts/{reads|readings|unreads|wants} — paged JSON, no SSR.
-        Livelib keeps a second record when a book is re-marked read (27 such
-        records on this profile): dedupe by edition id, one book one entry.
-        Prints one progress line per shelf — a human watching `make books`
-        should see it moving.
+        The package walks the collection, dedupes by edition id (livelib keeps a
+        second mark when a book is re-marked read) and shapes each mark into
+        collection_id/edition_id/title/author/url/rating/my_mark. This adds
+        `status` — the note status the build keys on — and prints one progress
+        line per shelf: a human watching `make books` should see it moving. The
+        line counts RAW marks seen and deduped books, which is what makes the
+        known duplicate-mark drift visible.
         """
         status = SHELF_STATUS[shelf]
-        records = self._paged(f"users/{user_id}/arts/{ART_SHELF[shelf]}")
-        seen: dict[str, dict] = {}
-        for rec in records:
-            parsed = parse_api_record(rec)
-            if not parsed or parsed["edition_id"] in seen:
-                continue
-            parsed["status"] = status
-            seen[parsed["edition_id"]] = parsed
-        print(f"  shelf {shelf}: {len(records)} records → {len(seen)} books")
-        return list(seen.values())
+        marks = [0]
+        paging = TrisolarisClient(transport=_counting(self.client.transport, marks))
+        records = paging.shelf_records(user_id, SHELF_COLLECTION[shelf])
+        for r in records:
+            r["status"] = status
+        print(f"  shelf {shelf}: {marks[0]} records → {len(records)} books")
+        return records
 
     def books(self, user_id: int, shelves=("read", "reading", "unread", "want")) -> list[dict]:
         """Union of shelves → wtd_books input schema (livelib-books.json)."""
@@ -345,21 +312,24 @@ class LivelibClient:
             "my_mark": b["my_mark"],
         } for b in merged.values()]
 
+    @classmethod
+    def export_all(cls, user_id: int, out_dir: str, fetch=None, *, transport=None) -> dict:
+        """Full export → livelib-books.json / livelib-quotes-api.json / livelib-reviews-api.json."""
+        out = pathlib.Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        c = cls(fetch=fetch, transport=transport)
+        files = {
+            "livelib-books.json": c.books(user_id),
+            "livelib-quotes-api.json": c.quotes(user_id),
+            "livelib-reviews-api.json": c.reviews(user_id),
+        }
+        for name, data in files.items():
+            (out / name).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        return {name: len(data) for name, data in files.items()}
 
-def export_all(user_id: int, out_dir: str, fetch=None) -> dict:
-    """Full export → livelib-books.json / livelib-quotes-api.json / livelib-reviews-api.json."""
-    from pathlib import Path
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    c = LivelibClient(fetch=fetch)
-    files = {
-        "livelib-books.json": c.books(user_id),
-        "livelib-quotes-api.json": c.quotes(user_id),
-        "livelib-reviews-api.json": c.reviews(user_id),
-    }
-    for name, data in files.items():
-        (out / name).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    return {name: len(data) for name, data in files.items()}
+
+# module-level entry kept for callers of `livelib.export_all(uid, out_dir)`
+export_all = LivelibClient.export_all
 
 
 if __name__ == "__main__":
