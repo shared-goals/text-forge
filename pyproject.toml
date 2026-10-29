@@ -35,9 +35,10 @@ dependencies = [
     "livereload>=2.7.1",
     # mkdocs.yml uses !ENV tags
     "pyyaml>=6.0.3",
-    # LiveLib reads go through the livelib-mcp client (pinned: transport retry,
-    # edition contents, shaped shelf records); text-forge keeps only pipeline logic
-    "livelib-mcp @ git+https://github.com/shared-goals/livelib-mcp@a21d17f#subdirectory=scripts",
+    # LiveLib reads go through the livelib-mcp client (branch ref; the LOCKED
+    # commit in uv.lock is what builds install — refresh it with
+    # `uv lock --upgrade-package livelib-mcp`); text-forge keeps only pipeline logic
+    "livelib-mcp @ git+https://github.com/shared-goals/livelib-mcp@main#subdirectory=scripts",
 ]
 
 [project.urls]

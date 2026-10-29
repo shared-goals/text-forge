@@ -508,7 +508,7 @@ wheels = [
 [[package]]
 name = "livelib-mcp"
 version = "0.1.0"
-source = { git = "https://github.com/shared-goals/livelib-mcp?subdirectory=scripts&rev=a21d17f#a21d17fdddd1e013c6dfc1ba5d9d70e7606948e2" }
+source = { git = "https://github.com/shared-goals/livelib-mcp?subdirectory=scripts&rev=main#11b4a2bf7265df2c8732b53e2a9fc9fbb9fe5a47" }
 dependencies = [
     { name = "httpx", extra = ["socks"] },
     { name = "mcp" },
@@ -1343,7 +1343,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1.7,<8.2.2" },
-    { name = "livelib-mcp", git = "https://github.com/shared-goals/livelib-mcp?subdirectory=scripts&rev=a21d17f" },
+    { name = "livelib-mcp", git = "https://github.com/shared-goals/livelib-mcp?subdirectory=scripts&rev=main" },
     { name = "livereload", specifier = ">=2.7.1" },
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocs-git-committers-plugin-2", specifier = ">=2.5.0" },
