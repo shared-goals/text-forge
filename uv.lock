@@ -417,11 +417,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517, upload-time = "2024-12-06T15:37:21.509Z" },
 ]
 
-[package.optional-dependencies]
-socks = [
-    { name = "socksio" },
-]
-
 [[package]]
 name = "httpx2"
 version = "2.16.0"
@@ -508,10 +503,14 @@ wheels = [
 [[package]]
 name = "livelib-mcp"
 version = "0.1.0"
-source = { git = "https://github.com/shared-goals/livelib-mcp?subdirectory=scripts&rev=main#11b4a2bf7265df2c8732b53e2a9fc9fbb9fe5a47" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "httpx", extra = ["socks"] },
+    { name = "httpx" },
     { name = "mcp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ce/38/91452c0a6facd58498578ae24718c99c6434a3bab7f448137fa0aa5de171/livelib_mcp-0.1.0.tar.gz", hash = "sha256:87c7dae9c0d201f69f415266f67fba86287dc36c2f62839d3c201cd38340cffd", size = 119007, upload-time = "2026-10-30T10:48:31.67Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/e2/61f19e31cf8bc0dc519eee661ab2128131b4838298ec3573aef5543d7ddd/livelib_mcp-0.1.0-py3-none-any.whl", hash = "sha256:1869dd6074bede08a6119c58e25b4c7bf25ca31d48f8969a851f0aeeddb90008", size = 9250, upload-time = "2026-10-30T10:48:30.132Z" },
 ]
 
 [[package]]
@@ -1343,7 +1342,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1.7,<8.2.2" },
-    { name = "livelib-mcp", git = "https://github.com/shared-goals/livelib-mcp?subdirectory=scripts&rev=main" },
+    { name = "livelib-mcp", specifier = ">=0.1" },
     { name = "livereload", specifier = ">=2.7.1" },
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocs-git-committers-plugin-2", specifier = ">=2.5.0" },
@@ -1374,15 +1373,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/44/cd/a040c4b3119bbe532e5b0732286f805445375489fceaec1f48306068ee3b/smmap-5.0.2.tar.gz", hash = "sha256:26ea65a03958fa0c8a1c7e8c7a58fdc77221b8910f6be2131affade476898ad5", size = 22329, upload-time = "2025-01-02T07:14:40.909Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/be/d09147ad1ec7934636ad912901c5fd7667e1c858e19d355237db0d0cd5e4/smmap-5.0.2-py3-none-any.whl", hash = "sha256:b30115f0def7d7531d22a0fb6502488d879e75b260a9db4d0819cfb25403af5e", size = 24303, upload-time = "2025-01-02T07:14:38.724Z" },
-]
-
-[[package]]
-name = "socksio"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f8/5c/48a7d9495be3d1c651198fd99dbb6ce190e2274d0f28b9051307bdec6b85/socksio-1.0.0.tar.gz", hash = "sha256:f88beb3da5b5c38b9890469de67d0cb0f9d494b78b106ca1845f96c10b91c4ac", size = 19055, upload-time = "2020-04-17T15:50:34.664Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/c3/6eeb6034408dac0fa653d126c9204ade96b819c936e136c5e8a6897eee9c/socksio-1.0.0-py3-none-any.whl", hash = "sha256:95dc1f15f9b34e8d7b16f06d74b8ccf48f609af32ab33c608d08761c5dcbb1f3", size = 12763, upload-time = "2020-04-17T15:50:31.878Z" },
 ]
 
 [[package]]

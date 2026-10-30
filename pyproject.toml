@@ -35,10 +35,10 @@ dependencies = [
     "livereload>=2.7.1",
     # mkdocs.yml uses !ENV tags
     "pyyaml>=6.0.3",
-    # LiveLib reads go through the livelib-mcp client (branch ref; the LOCKED
-    # commit in uv.lock is what builds install — refresh it with
+    # LiveLib reads go through the livelib-mcp client (PyPI; the LOCKED
+    # version in uv.lock is what builds install — refresh it with
     # `uv lock --upgrade-package livelib-mcp`); text-forge keeps only pipeline logic
-    "livelib-mcp @ git+https://github.com/shared-goals/livelib-mcp@main#subdirectory=scripts",
+    "livelib-mcp>=0.1",
 ]
 
 [project.urls]
@@ -56,10 +56,6 @@ text-forge = "text_forge.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.hatch.metadata]
-# the livelib-mcp git dependency is a direct reference; hatchling opts in
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["text_forge"]
