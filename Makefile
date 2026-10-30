@@ -5,6 +5,8 @@
 # Content repos should use their own Makefile + text-forge CLI commands.
 # See whattodo/Makefile for example.
 
+SHELL := /bin/bash
+
 TEXT_FORGE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 # Tooling
