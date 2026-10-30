@@ -348,6 +348,7 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
         link_map = link_map_from_notes(books_dir)
     books = important_books(books_dir)
     by_slug = {b["slug"]: b for b in books}
+    by_any_note = {b["slug"]: b for b in _all_notes(books_dir)}
     by_review = {b["review_id"]: b for b in books if b["review_id"]}
     by_book: dict[str, dict] = {}
     for b in books:
@@ -385,6 +386,16 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
             for candidate in (link["book_id"], link["review_id"]):
                 if candidate in WORK_ID_TO_SLUG and WORK_ID_TO_SLUG[candidate] in by_slug:
                     return by_slug[WORK_ID_TO_SLUG[candidate]]
+        # the corpus map keys EVERY note, important or not: a curated link to a
+        # book cited through a non-important note still lands on its local page
+        target = (link_map.get(f"review/{link['review_id']}")
+                  if link["review_id"] else None) \
+            or (link_map.get(f"book/{link['book_id']}")
+                if link["book_id"] else None)
+        if target:
+            m = re.match(r"^/books/(.+?)/?$", target)
+            if m and m.group(1) in by_any_note:
+                return by_any_note[m.group(1)]
         return None
 
     def note_review(book: dict) -> dict | None:

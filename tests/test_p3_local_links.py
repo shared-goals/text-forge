@@ -8,6 +8,7 @@ reported by warn().
 
 
 from text_forge.wtd_books_p3 import (
+    parse_reference_lines,
     P3_FRONTMATTER,
     P3_INTRO,
     P3_TITLE,
@@ -233,3 +234,19 @@ class TestByteStability:
         second = render_p3_references(books, [REVIEW_1, REVIEW_2])
         assert first["text"] == second["text"]
         assert first["warnings"] == second["warnings"]
+
+
+def test_curated_link_resolves_through_non_important_note(tmp_path):
+    """A curated /review/ link whose note lost `important:` still lands locally.
+
+    The corpus map keys EVERY note; only the thesis machinery stays restricted
+    to the page's importance. Regression: review 4002646 (Мастер и Маргарита)
+    fell back to livelib.ru because its note is not important.
+    """
+    write_books(tmp_path,
+                master=note("Мастер и Маргарита", "1000736563", review="4002646"))
+    lines = parse_reference_lines(
+        "- Книга, запустившая размышления о Боге: "
+        "[Мастер и Маргарита](https://www.livelib.ru/review/4002646)\n")
+    out = render_p3_references(tmp_path / "books", [], lines=lines)
+    assert "/books/" in out["text"] and "livelib.ru/review/4002646" not in out["text"]

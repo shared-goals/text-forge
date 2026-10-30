@@ -27,7 +27,9 @@ import tempfile
 from pathlib import Path
 
 from text_forge.livelib import LivelibClient
-from text_forge.wtd_books import _edition_id, _work_id, build_books, validate_text_links
+from text_forge.wtd_books import (_edition_id, _work_id, build_books,
+                                  parse_reference_lines, render_p3_references,
+                                  validate_text_links)
 
 CUR = Path(__file__).parent / "wtd_books.py"
 CUR_DIR = CUR.parent
@@ -157,6 +159,23 @@ def main(root_str: str, user_id: int = 345497) -> int:
         old.unlink()
     for gen in tmp.glob("*.md"):
         shutil.copy2(gen, books_dir / gen.name)
+
+    # p3-references is a PROJECTION of the notes (importance in frontmatter,
+    # thesis = the book's own LiveLib review title, LOCAL link targets) plus the
+    # collapsed shelf lists — regenerated on every build, never hand-edited.
+    # The curated bullets of the CURRENT page (prefix labels, grouping) are the
+    # lines input; the renderer keeps their text and re-resolves the targets.
+    p3_path = root / "text" / "p3-references.md"
+    lines = (parse_reference_lines(p3_path.read_text(encoding="utf-8"))
+             if p3_path.exists() else None)
+    p3 = render_p3_references(
+        books_dir,
+        json.loads((export_dir / "livelib-reviews-api.json").read_text(encoding="utf-8")),
+        lines=lines,
+    )
+    for w in p3["warnings"]:
+        print("  P3:", w.get("reason"), w.get("slug") or w.get("url"))
+    (root / "text" / "p3-references.md").write_text(p3["text"], encoding="utf-8")
 
     statuses: dict[str, list[str]] = {}
     for f in sorted(books_dir.glob("*.md")):
