@@ -1321,7 +1321,7 @@ wheels = [
 
 [[package]]
 name = "sg-text-forge"
-version = "0.1.20"
+version = "0.1.21"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
