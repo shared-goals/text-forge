@@ -1,8 +1,13 @@
 import importlib.util
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "hindsight-ingest.py"
+# spec-loading does not add the script's directory to sys.path (unlike
+# `python hindsight-ingest.py`), so the sibling `hindsight_common` import
+# needs the scripts dir on the path explicitly.
+sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 spec = importlib.util.spec_from_file_location("hindsight_ingest", SCRIPT_PATH)
 assert spec is not None
