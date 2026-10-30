@@ -183,8 +183,18 @@ def main(root_str: str, user_id: int = 345497) -> int:
     if res["unresolved"]:
         for u in res["unresolved"]:
             print("  UNRESOLVED:", u["url"], f"(cited in {u.get('file', '?')})")
+    # the local-target check: chapters must carry no livelib URL at all — the
+    # report-only stage that tells the author which lines still need rewriting
+    # (apply it with text_forge.wtd_links.rewrite_text_links(root, apply=True))
+    outside = res["livelib_outside_books"]
+    print(f"outside-books livelib links: {len(outside)}"
+          + ("" if outside else " (clean)"))
+    for u in outside:
+        print(f"  OUTSIDE BOOKS: {u['url']} ({u['file']}:{u['line']})")
     # fail-loud ONLY on unresolved links (a lost reference is data loss);
-    # NONE/OWN notes are legitimate exceptions printed above for manual review
+    # NONE/OWN notes are legitimate exceptions printed above for manual review,
+    # and leftover outside links are reported without failing the build — the
+    # rewrite is a separate, opt-in step
     if res["unresolved"]:
         print("FAIL: unresolved link above — fix on livelib (shelf/review) or in text, then re-run")
         return 1

@@ -14,6 +14,20 @@ from mkdocs.config.defaults import MkDocsConfig
 from mkdocs.plugins import BasePlugin
 
 
+def _is_book_page(page) -> bool:
+    """True when the page's source lives under `books/` in docs_dir.
+
+    The guard sits here (not inside `convert_block_ids`) because the conversion is
+    a site concern for book notes only: a chapter must reach the reader with the
+    bytes its author wrote.
+    """
+    try:
+        path = str(getattr(page.file, "src_uri", None) or page.file.src_path).replace("\\", "/")
+    except AttributeError:
+        return False
+    return path.startswith("books/")
+
+
 class TextForgePlugin(BasePlugin):
     """
     text-forge MkDocs plugin.
@@ -27,6 +41,7 @@ class TextForgePlugin(BasePlugin):
     config_scheme = (
         ("editor_enabled", config_options.Type(bool, default=True)),
         ("nobr_emoticons_enabled", config_options.Type(bool, default=True)),
+        ("anchor_block_ids", config_options.Type(bool, default=True)),
         ("downloads_enabled", config_options.Type(bool, default=False)),
         ("ai_readable_prompt", config_options.Type(str, default="")),
         (
@@ -168,14 +183,24 @@ class TextForgePlugin(BasePlugin):
         return files
 
     def on_page_markdown(self, markdown, page, config, files):
-        """Apply nobr_emoticons hook if enabled."""
-        # Apply nobr_emoticons hook if enabled
+        """Apply the markdown post-processors this plugin owns.
+
+        Order matters: nobr_emoticons (span wrapping) first, as before, then
+        block-id anchors. Anchors are applied ONLY to pages under books/ — the
+        book note-books are the only pages that carry Obsidian `^quote_N` ids,
+        and a chapter's bytes must not change at build time.
+        """
         if (
             self.config["nobr_emoticons_enabled"]
             and hasattr(self, "_nobr_hook")
             and hasattr(self._nobr_hook, "on_page_markdown")
         ):
-            return self._nobr_hook.on_page_markdown(markdown, page, config, files)
+            markdown = self._nobr_hook.on_page_markdown(markdown, page, config, files)
+
+        if self.config["anchor_block_ids"] and _is_book_page(page):
+            from text_forge.anchor_ids import convert_block_ids
+
+            markdown = convert_block_ids(markdown)
         return markdown
 
     def on_env(self, env, config, files):

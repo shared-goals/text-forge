@@ -96,8 +96,15 @@ def test_important_note_without_thesis_warns(tmp_path: pathlib.Path):
     assert books[0]["book_id"] == "7654321"
 
     out = render_p3_references(tmp_path, [])
-    assert out["items"] == ["- [Важная книга](https://www.livelib.ru/book/7654321)"]
-    assert [w["reason"] for w in out["warnings"]] == ["no-thesis"]
-    assert out["warnings"][0]["slug"] == "important-note"
+    # P5: the bullet targets the note's own page; the missing thesis is still
+    # reported, and the note (which carries no `status:`) is reported by the
+    # shelf check too — both are warnings, neither is invented content
+    assert out["items"] == ["- [Важная книга](/books/important-note/)"]
+    assert [w["reason"] for w in out["warnings"]] == ["no-thesis", "no status"] \
+        or [w["reason"] for w in out["warnings"]] == ["no status", "no-thesis"], \
+        out["warnings"]
+    thesis_warnings = [w for w in out["warnings"] if w["reason"] == "no-thesis"]
+    assert len(thesis_warnings) == 1
+    assert thesis_warnings[0]["slug"] == "important-note"
     assert out["text"].startswith(p3_header())
     assert out["text"].endswith("\n".join(out["items"]) + "\n")

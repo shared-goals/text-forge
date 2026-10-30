@@ -69,6 +69,13 @@ def _surname(author: str) -> str:
     return ""
 
 
+# a livelib URL of any kind, in either www shape — the url ends at `)`, a quote
+# mark or whitespace, so a link's target is taken whole and prose text next to it
+# is not swallowed
+LIVELIB_URL_RE = re.compile(
+    r"https?://(?:www\.)?livelib\.ru/(?:book|work|review|quote)/\d+[^)\s\"']*")
+
+
 def _book_id(url: str) -> str:
     """Numeric id from /book/<id> or /work/<id> (with or without slug)."""
     m = re.search(r"/(?:book|work)/(\d+)", url)
@@ -1086,6 +1093,41 @@ def _curation_section(path_or_map, section):
     return load_curation(path_or_map).get(section)
 
 
+def livelib_outside_books(root) -> list[dict]:
+    """Every livelib.ru URL still sitting in text/*.md outside text/books/.
+
+    After the local-target rewrite (text_forge.wtd_links.rewrite_text_links) this
+    must be EMPTY on a clean corpus: a chapter has no business sending the reader
+    to livelib when the site carries the book itself. Attribution and
+    frontmatter belong to the note-books, so text/books/** — including the
+    `_curation` directories — is excluded, as are quotes/superscripts inside
+    fenced code samples.
+
+    Returns [{"file", "line", "url"}] sorted by (file, line); [] when clean or
+    when there is no text/ directory to check (nothing to validate, no error).
+    """
+    root = pathlib.Path(root)
+    # accept text_dir as well as the repo root, so either call shape works
+    text_dir = root if root.name == "text" else root / "text"
+    if not text_dir.is_dir():
+        return []
+    out: list[dict] = []
+    for chapter in sorted(text_dir.glob("*.md")):
+        in_code = False
+        for lineno, line in enumerate(chapter.read_text(encoding="utf-8").split("\n"),
+                                    start=1):
+            if line.lstrip().startswith(("```", "~~~")):
+                in_code = not in_code
+                continue
+            if in_code:
+                continue
+            for m in LIVELIB_URL_RE.finditer(line):
+                out.append({"file": chapter.name, "line": lineno,
+                          "url": m.group(0).rstrip(".,;")})
+    out.sort(key=lambda f: (f["file"], f["line"]))
+    return out
+
+
 def validate_text_links(text_dir, books_dir, link_mappings_path=None) -> dict:
     """Report-only: resolve every livelib link in text/*.md against note-books.
 
@@ -1093,7 +1135,10 @@ def validate_text_links(text_dir, books_dir, link_mappings_path=None) -> dict:
     an edition line, or a quote url). link_mappings_path — the mapping
     build_books emits — maps URLs to note slugs for the cases a note names its
     subject by an id the note file does not print. Returns
-    {total, resolved, unresolved: [{url, file}]}.
+    {total, resolved, unresolved: [{url, file}], livelib_outside_books}.
+
+    `livelib_outside_books` is the post-rewrite cleanliness check: chapters must
+    carry no livelib URL at all once their targets are local pages.
     """
     import re as _re
     index = _note_index(books_dir)
@@ -1119,7 +1164,8 @@ def validate_text_links(text_dir, books_dir, link_mappings_path=None) -> dict:
                 resolved += 1
             else:
                 unresolved.append({"url": url, "file": chapter.name})
-    return {"total": total, "resolved": resolved, "unresolved": unresolved}
+    return {"total": total, "resolved": resolved, "unresolved": unresolved,
+            "livelib_outside_books": livelib_outside_books(text_dir)}
 
 
 # ------------------------------------------------------------------ p3-references

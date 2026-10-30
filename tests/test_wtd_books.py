@@ -1,6 +1,7 @@
 """Tests for wtd_books: LiveLib JSON export → books/<slug>.md note-books."""
 
 import copy
+import itertools
 import json
 import pathlib
 import re
@@ -1223,6 +1224,68 @@ class TestParseReferenceLines:
     def test_no_bullet_lines(self):
         assert parse_reference_lines("just text\n", mappings=PM) == []
 
+# P5: with no curated lines handed in, EVERY note is placed — so a note that
+# carries no thesis warns once for the missing thesis and once more as 'no
+# status' (it sits on no shelf). Known reasons, all of them reported, never
+# hidden: no-thesis / untitled-review / foreign-review / unmatched-link /
+# no local note (a link with nothing local to point at) / unknown-review /
+# no status (the book belongs to no shelf list).
+KNOWN_WARNING_REASONS = {"no-thesis", "untitled-review", "foreign-review",
+                         "unmatched-link", "no local note", "unknown-review",
+                         "no status"}
+
+
+def _ok_warnings(out):
+    """Every reported warning carries a known reason (the vocabulary is closed).
+
+    P5 adds two reasons the old fixtures never saw: 'no local note' (a link with
+    nothing local to point at) and 'no status' (the book sits on no shelf list).
+    A new reason must be named in KNOWN_WARNING_REASONS to be accepted.
+    """
+    reasons = {w["reason"] for w in out["warnings"]}
+    assert reasons <= KNOWN_WARNING_REASONS, reasons
+    return reasons
+
+
+def _about(out, reason, slug=None):
+    """Warnings for one reason (and optionally one note) — the way fixtures look
+    a specific report up now that 'no status' shares the list with the rest."""
+    return [w for w in out["warnings"]
+            if w["reason"] == reason and (slug is None or w["slug"] == slug)]
+
+
+def _fm_note(title, book_id, *, review=None, status="read", important=None, weight=None):
+    """A note spelled out as frontmatter (the fixture form `note()` lacks).
+
+    `status` is explicit here because these fixtures care about it: 'none' means
+    the book sits on no shelf and the page says nothing about it.
+    """
+    fm = ['---', f'title: "{title}"', 'tags:', '  - book', f'status: {status}',
+          f'livelib_book: "https://www.livelib.ru/book/{book_id}"']
+    if review:
+        fm.append(f'livelib_review: "https://www.livelib.ru/review/{review}"')
+    if important:
+        fm.append("important: true")
+    if weight is not None:
+        fm.append(f"weight: {weight}")
+    return "\n".join(fm) + "\n---\n\n"
+
+
+def _shelf_note(md: str, status: str = "read") -> str:
+    """Put a frontmatter note on a shelf (or off it, with status='none').
+
+    Without `status:` the generator reports 'no status' — correct behaviour, but
+    it makes `out["warnings"] == []` assertions impossible for fixtures that are
+    only about something else, so fixtures name their shelf explicitly.
+    """
+    m = re.match(r"\A---\n(.*?)\n---", md, re.DOTALL)
+    assert m, md[:80]
+    fm = m.group(1)
+    if re.search(r"^status:", fm, re.MULTILINE):
+        return md
+    return f"---\n{fm}\nstatus: {status}\n---" + md[m.end():]
+
+
 class TestRenderP3References:
     # the page's own words live in the generator template now (P3_FRONTMATTER /
     # P3_TITLE / P3_INTRO); fixtures assert against the template, not a header
@@ -1230,15 +1293,23 @@ class TestRenderP3References:
     FM = f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n"
 
     @staticmethod
-    def note(title, review_url, *, important=None, weight=None, book_id="1008288064"):
+    def note(title, review_url, *, important=None, weight=None, book_id="1008288064",
+             status="read"):
         fm = ['---', f'title: "{title}"', 'tags:', '  - book',
               f'livelib_book: "https://www.livelib.ru/book/{book_id}"']
+        if status:
+            # an explicit shelf overrides the default 'read' the fixture adds
+            fm.append(f"status: {status}")
         if review_url:
             fm.append(f'livelib_review: "{review_url}"')
         if important:
             fm.append("important: true")
         if weight is not None:
             fm.append(f"weight: {weight}")
+        # P5: a note with no `status:` sits on no shelf and is reported as
+        # 'no status'; the fixture puts it on one so each test keeps asserting
+        # only the thing it is about
+        fm.append("status: read")
         return "\n".join(fm) + "\n---\n\n> Цитата ^quote_1\n\n— [LiveLib](https://www.livelib.ru/quote/1)\n"
 
     @staticmethod
@@ -1255,8 +1326,10 @@ class TestRenderP3References:
             "Модель количественной оценки уровня счастья",
             "https://www.livelib.ru/review/6390790-model", important=True, weight=1))
         out = render_p3_references(books, [REVIEW_6390790])
+        # P5: the target is the note's own page; thesis (from the review) and
+        # label (the note's title) are unchanged
         assert ('- Про Счастье и Цифру: [Модель количественной оценки уровня счастья]'
-                '(https://www.livelib.ru/review/6390790)') in out["text"]
+                '(/books/a/)') in out["text"]
 
     def test_fm_scalar_unescapes_quoted_titles(self, tmp_path):
         """Frontmatter `\\"` escapes must not leak into rendered link text."""
@@ -1276,22 +1349,27 @@ class TestRenderP3References:
     def test_important_ordering_by_weight(self, tmp_path):
         a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=2, book_id="1")
         b = TestRenderP3References.note("Б", "https://www.livelib.ru/review/2", important=True, weight=1, book_id="2")
-        c = TestRenderP3References.note("В", "https://www.livelib.ru/review/3", book_id="3")
+        # no `important:` => no bullet at all, and no shelf entry either (a fixture
+        # note that is neither cited nor shelved would only add noise)
+        c = _shelf_note(TestRenderP3References.note("В", "https://www.livelib.ru/review/3", book_id="3"),
+                        status="none")
         reviews = [
             {"id": 1, "title": "Тезис А", "url": "/review/1", "art_edition": {"id": 1, "url": "/book/1"}},
             {"id": 2, "title": "Тезис Б", "url": "/review/2", "art_edition": {"id": 2, "url": "/book/2"}},
         ]
         books = TestRenderP3References.write_books(tmp_path, a=a, b=b, c=c)
         out = render_p3_references(books, reviews)
-        body = [l for l in out["text"].splitlines() if l.startswith("- ")]
-        assert body == ["- Тезис Б: [Б](https://www.livelib.ru/review/2)",
-                       "- Тезис А: [А](https://www.livelib.ru/review/1)"]
+        assert out["items"] == ["- Тезис Б: [Б](/books/b/)",
+                                "- Тезис А: [А](/books/a/)"]
 
     def test_book_without_important_is_ignored(self, tmp_path):
-        books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("А", "https://www.livelib.ru/review/1", book_id="1"))
+        # neither important nor shelved: no bullet, no shelf, nothing to report
+        books = TestRenderP3References.write_books(
+            tmp_path, a=_fm_note("А", "1", review="1", status="none"))
         out = render_p3_references(books, [{"id": 1, "title": "Т", "url": "/review/1",
                                           "art_edition": {"id": 1, "url": "/book/1"}}])
-        assert not [l for l in out["text"].splitlines() if l.startswith("- ")]
+        assert out["items"] == []
+        assert out["text"] == self.FM
 
     def test_multi_book_line_repeats_thesis(self, tmp_path):
         """Multi-book line: thesis comes from each book's own review title."""
@@ -1304,16 +1382,15 @@ class TestRenderP3References:
         lines = parse_reference_lines(
             "- Общий тезис: [А](https://www.livelib.ru/review/1), [Б](https://www.livelib.ru/review/2)\n")
         out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a, b=b), reviews, lines=lines)
-        body = [l for l in out["text"].splitlines() if l.startswith("- ")]
-        assert body == ["- Общий тезис: [А](https://www.livelib.ru/review/1)",
-                       "- Свой тезис Б: [Б](https://www.livelib.ru/review/2)"]
+        assert out["items"] == ["- Общий тезис: [А](/books/a/)",
+                                "- Свой тезис Б: [Б](/books/b/)"]
 
     def test_book_link_when_no_review(self, tmp_path):
         """A book with no own review links to /book/<id>; thesis from the line."""
         books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("Книга без рецензии", None,
                                                    important=True, weight=1, book_id="1005497029"))
         out = render_p3_references(books, [], line_thesis={"a": "Тезис из строки"})
-        assert "- Тезис из строки: [Книга без рецензии](https://www.livelib.ru/book/1005497029)" \
+        assert "- Тезис из строки: [Книга без рецензии](/books/a/)" \
             in out["text"]
 
     def test_book_link_without_thesis_drops_prefix_and_warns(self, tmp_path):
@@ -1321,10 +1398,9 @@ class TestRenderP3References:
         books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("Книга", None,
                                                    important=True, weight=1, book_id="1005497029"))
         out = render_p3_references(books, [])
-        assert "- [Книга](https://www.livelib.ru/book/1005497029)" in out["text"]
+        assert "- [Книга](/books/a/)" in out["text"]
         assert "- Тезис: [Книга]" not in out["text"]
-        assert out["warnings"] and out["warnings"][0]["slug"] == "a"
-        assert out["warnings"][0]["reason"] == "no-thesis"
+        assert _about(out, "no-thesis", "a"), out["warnings"]
 
     def test_review_present_but_untitled_uses_line_thesis(self, tmp_path):
         """Review exists but has no title: fall back to the line thesis, still warn."""
@@ -1333,15 +1409,18 @@ class TestRenderP3References:
                                  [{"id": 1, "title": None, "url": "/review/1",
                                    "art_edition": {"id": 1, "url": "/book/1"}}],
                                  line_thesis={"a": "Тезис строки"})
-        assert "- Тезис строки: [А](https://www.livelib.ru/review/1)" in out["text"]
-        assert out["warnings"][0]["reason"] == "untitled-review"
+        assert "- Тезис строки: [А](/books/a/)" in out["text"]
+        assert _about(out, "untitled-review", "a")[0]["reason"] == "untitled-review"
 
     def test_template_header_is_emitted_verbatim(self, tmp_path):
         a = TestRenderP3References.note("А", "https://www.livelib.ru/review/1", important=True, weight=1, book_id="1")
         reviews = [{"id": 1, "title": "Т", "url": "/review/1", "art_edition": {"id": 1, "url": "/book/1"}}]
         out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a), reviews)
         assert out["text"].startswith(self.FM)
-        assert out["text"].endswith("- Т: [А](https://www.livelib.ru/review/1)\n")
+        # P5 appends the shelf lists after the bibliography, so the bullets end
+        # the BIBLIOGRAPHY block rather than the whole file
+        bibliography = out["text"].split("\n///")[0]
+        assert bibliography.endswith("- Т: [А](/books/a/)\n")
 
     def test_plain_part_appended(self, tmp_path):
         """'to be published' style leftovers stay in the line, unlinked."""
@@ -1350,7 +1429,7 @@ class TestRenderP3References:
         out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a), reviews,
                                  lines=parse_reference_lines(
                                      "- Т: [А](https://www.livelib.ru/review/1), Моя книга (to be published)\n"))
-        assert "- Т: [А](https://www.livelib.ru/review/1), Моя книга (to be published)" in out["text"]
+        assert "- Т: [А](/books/a/), Моя книга (to be published)" in out["text"]
 
     def test_line_links_keep_their_order(self, tmp_path):
         """Within one line the order comes from the curated line, not from weight sort."""
@@ -1363,9 +1442,8 @@ class TestRenderP3References:
         lines = parse_reference_lines(
             "- Т: [А](https://www.livelib.ru/review/1), [Б](https://www.livelib.ru/review/2)\n")
         out = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a, b=b), reviews, lines=lines)
-        body = [l for l in out["text"].splitlines() if l.startswith("- ")]
-        assert body == ["- Т: [А](https://www.livelib.ru/review/1)",
-                       "- Т: [Б](https://www.livelib.ru/review/2)"]
+        assert out["items"] == ["- Т: [А](/books/a/)",
+                                "- Т: [Б](/books/b/)"]
 
     def test_unmatched_line_link_is_kept_as_is(self, tmp_path):
         """A line link with no note: line survives untouched (nothing is invented)."""
@@ -1375,7 +1453,8 @@ class TestRenderP3References:
                                                    important=True, weight=1, book_id="1"))
         out = render_p3_references(books, [], lines=lines)
         assert "- Т: [Призрак](https://www.livelib.ru/review/9999999)" in out["text"]
-        assert out["warnings"][0]["reason"] == "unmatched-link"
+        # the reason the validator greps for: an outside target left on the page
+        assert _about(out, "no local note"), out["warnings"]
 
     def test_curated_review_link_survives_when_the_note_has_no_review_of_its_own(self, tmp_path):
         """A /review/ link that reaches its note through link-mappings, landing on
@@ -1400,7 +1479,11 @@ class TestRenderP3References:
             lines=parse_reference_lines(
                 "- Тезис обзора: [Работа](https://www.livelib.ru/review/4242-izdanie)\n",
                 mappings={"https://www.livelib.ru/review/4242-izdanie": "rabota"}))
-        assert out["items"] == ["- Тезис обзора: [Работа](https://www.livelib.ru/review/4242)"], out["items"]
+        # P5: the note's own page is the target even when the line cited a
+        # review the export attributes to another edition — the reader stays on
+        # the site, and the thesis provenance is unaffected (still reported as
+        # 'untitled-review'/'foreign-review' elsewhere)
+        assert out["items"] == ["- Тезис обзора: [Работа](/books/rabota/)"], out["items"]
 
     def test_note_with_own_review_wins_and_the_line_target_is_normalized(self, tmp_path):
         """Counterpart: a note that CAN cite its review still overrides the line,
@@ -1414,7 +1497,7 @@ class TestRenderP3References:
         out = render_p3_references(books, reviews, line_thesis={"a": "Общий тезис"},
                                   lines=parse_reference_lines(
                                       "- Общий тезис: [Книга](https://www.livelib.ru/book/1)\n"))
-        assert out["items"] == ["- Свой тезис: [Книга](https://www.livelib.ru/review/1)"], out["items"]
+        assert out["items"] == ["- Свой тезис: [Книга](/books/a/)"], out["items"]
 
     def test_note_reviewed_under_another_book_cites_its_book_not_that_review(self, tmp_path):
         """A note whose review the export attributes to a DIFFERENT book cannot
@@ -1430,7 +1513,7 @@ class TestRenderP3References:
         out = render_p3_references(books, reviews,
                                   lines=parse_reference_lines(
                                       "- Тезис строки: [Икс](https://www.livelib.ru/book/1005497029)\n"))
-        assert out["items"] == ["- Тезис строки: [Икс](https://www.livelib.ru/book/1005497029)"], out["items"]
+        assert out["items"] == ["- Тезис строки: [Икс](/books/x/)"], out["items"]
         assert "foreign-review" in {w["reason"] for w in out["warnings"]}, out["warnings"]
 
     def test_line_target_is_normalized_when_it_names_the_note_itself(self, tmp_path):
@@ -1442,7 +1525,7 @@ class TestRenderP3References:
         out = render_p3_references(books, [], line_thesis={"a": "Общий тезис"},
                                   lines=parse_reference_lines(
                                       "- Общий тезис: [Книга](https://www.livelib.ru/book/1005497029)\n"))
-        assert out["items"] == ["- Общий тезис: [Книга](https://www.livelib.ru/book/1005497029)"], out["items"]
+        assert out["items"] == ["- Общий тезис: [Книга](/books/a/)"], out["items"]
 
     def test_a_curated_line_of_two_books_emits_two_bullets_and_keeps_two_targets(self, tmp_path):
         """One curated line, two notes — the corpus line 'Художественно про
@@ -1464,8 +1547,8 @@ class TestRenderP3References:
             "- Тезис строки: [А](https://www.livelib.ru/review/1), "
             "[В](https://www.livelib.ru/book/1005497029)\n")
         out = render_p3_references(books, reviews, lines=lines)
-        assert out["items"] == ["- Тезис строки: [А](https://www.livelib.ru/review/1)",
-                               "- Тезис строки: [В](https://www.livelib.ru/book/1005497029)"], out["items"]
+        assert out["items"] == ["- Тезис строки: [А](/books/a/)",
+                               "- Тезис строки: [В](/books/c/)"], out["items"]
         notes = important_books(books)
         assert [b["weight"] for b in notes] == [15, 15], notes
         # both citation targets of that one line reach the same weight
@@ -1473,7 +1556,9 @@ class TestRenderP3References:
         assert weight_of == {"1": 15, "1005497029": 15}, weight_of
 
     def test_empty_projection_has_no_bullet_lines(self, tmp_path):
-        books = TestRenderP3References.write_books(tmp_path, a=TestRenderP3References.note("А", None, book_id="1"))
+        # the one note is neither important nor shelved => nothing is projected
+        books = TestRenderP3References.write_books(
+            tmp_path, a=_fm_note("А", "1", status="none"))
         out = render_p3_references(books, [])
         assert out["text"] == self.FM
         assert out["warnings"] == []
@@ -1486,22 +1571,25 @@ class TestRenderP3References:
         """
         md = ('---\ntitle: "Икс"\nlivelib_book: "https://www.livelib.ru/book/1005497029"\n'
               'livelib_review: "https://www.livelib.ru/review/777"\nimportant: true\nweight: 1\n---\n\n')
-        out = render_p3_references(self.write_books(tmp_path, x=md),
+        out = render_p3_references(self.write_books(tmp_path, x=_shelf_note(md, status="none")),
                                   [{"id": 777, "title": "Чужой тезис", "url": "/review/777",
                                     "art_edition": {"id": 999, "url": "/book/999"}}])
-        assert '- [Икс](https://www.livelib.ru/book/1005497029)' in out["text"]
+        assert '- [Икс](/books/x/)' in out["text"]
         assert "Чужой тезис" not in out["text"]
-        assert {"no-thesis", "foreign-review"} == {w["reason"] for w in out["warnings"]}
+        assert {"no-thesis", "foreign-review"} <= {w["reason"] for w in out["warnings"]}
 
     def test_review_of_the_same_book_is_used(self, tmp_path):
         """A review whose URL names the note's own book id is the thesis source."""
         md = ('---\ntitle: "Икс"\nlivelib_book: "https://www.livelib.ru/book/1005497029"\n'
               'livelib_review: "https://www.livelib.ru/review/777-iks"\nimportant: true\nweight: 1\n---\n\n')
-        out = render_p3_references(self.write_books(tmp_path, x=md),
+        # the note sits explicitly off every shelf (`status: none`), so a clean
+        # run reports nothing: no bullet, no shelf, no warning
+        out = render_p3_references(self.write_books(tmp_path, x=_shelf_note(md, status="none")),
                                   [{"id": 777, "title": "Свой тезис", "url": "/review/777",
                                     "art_edition": {"id": 1005497029, "url": "/book/1005497029"}}])
-        assert '- Свой тезис: [Икс](https://www.livelib.ru/review/777)' in out["text"]
-        assert out["warnings"] == []
+        assert '- Свой тезис: [Икс](/books/x/)' in out["text"]
+        assert out["items"] == ["- Свой тезис: [Икс](/books/x/)"]
+        assert out["warnings"] == [], out["warnings"]
 
     def test_weight_of_an_unnumbered_note_is_none(self, tmp_path):
         """`important: true` without `weight:` reads back as None, never as 1.
@@ -1567,7 +1655,10 @@ class TestP3Template:
         assert h1 < text.index("\n- ")
         assert "\n# Книги как фундамент\n\n" in text
         assert f"\n{P3_INTRO}\n\n" in text
-        assert text.endswith("- Т: [А](https://www.livelib.ru/review/1)\n")
+        # P5: the bibliography is followed by the shelf lists, so the bullets end
+        # the BIBLIOGRAPHY block, not the file
+        bibliography = text.split("\n///")[0]
+        assert bibliography.endswith("- Т: [А](/books/a/)\n")
 
     def test_frontmatter_field_order_is_comments_created_published_description(self, tmp_path):
         a = TestRenderP3References.note("А", None, important=True, weight=1, book_id="1")
@@ -1589,14 +1680,17 @@ class TestP3Template:
         text = render_p3_references(TestRenderP3References.write_books(tmp_path, a=a, b=b),
                                    reviews)["text"]
         expected = (f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n\n"
-                   "- Тезис Б: [Б](https://www.livelib.ru/review/2)\n"
-                   "- Тезис А: [А](https://www.livelib.ru/review/1)\n")
-        assert text == expected
+                   "- Тезис Б: [Б](/books/b/)\n"
+                   "- Тезис А: [А](/books/a/)\n")
+        # P5 appends the shelf lists (both fixture notes are `status: read`)
+        assert text.startswith(expected), text
+        assert "/// details | Прочтённые (2)" in text
 
     def test_empty_projection_still_emits_the_whole_page(self, tmp_path):
         """No important books: the page is still a page, not an empty fragment."""
+        # the one note is neither important nor shelved => nothing is projected
         books = TestRenderP3References.write_books(
-            tmp_path, a=TestRenderP3References.note("А", None, book_id="1"))
+            tmp_path, a=_fm_note("А", book_id=None, status="none"))
         out = render_p3_references(books, [])
         assert out["items"] == []
         assert out["text"] == f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n"
@@ -1606,14 +1700,19 @@ class TestP3Template:
         import inspect
         sig = inspect.signature(render_p3_references)
         assert "header" not in sig.parameters
-        assert set(sig.parameters) == {"books_dir", "reviews", "lines", "line_thesis"}
+        # P5 adds `link_map` (the id -> local page map the generator resolves through)
+        assert set(sig.parameters) == {"books_dir", "reviews", "lines", "line_thesis",
+                                      "link_map"}
 
 class TestP3Contract:
     """Contract against the hand-curated text/p3-references.md (repo data).
 
     Generated output must equal the curated file except for the agreed
     normalization:
-      (a) URLs normalized to the short id form;
+      (a) a link whose id resolves to a note becomes that note's LOCAL page
+          (`/books/<slug>/`) — P5; the target keeps pointing at the same work,
+          the reader just stays on the site. A link with nothing local to point
+          at keeps its livelib.ru URL and is reported ('no local note');
       (b) link text = the note's frontmatter title instead of the hand-shortened
           name written in the curated line;
       (c) lines whose thesis cannot be resolved are emitted WITHOUT the
@@ -1629,8 +1728,16 @@ class TestP3Contract:
     """
 
     REPO = pathlib.Path(__file__).resolve().parents[2] / "whattodo"
-    LINK = re.compile(r"\[(?P<name>[^\]]*)\]\((?P<url>https?://(?:www\.)?livelib\.ru/"
-                      r"(?P<kind>book|work|review)/(?P<id>\d+)[^)]*)\)")
+    # a bullet's target: the local book page (the P5 rule), or the livelib URL
+    # it was written with when nothing local resolves
+    LINK = re.compile(r"\[(?P<name>[^\]]*)\]\("
+                     r"(?:/books/(?P<local>[^/]+)/|"
+                     r"(?P<url>https?://(?:www\.)?livelib\.ru/"
+                     r"(?P<kind>book|work|review)/(?P<id>\d+)[^)]*))\)")
+    # one id (book|review) carried by a CURATED line — a bullet is matched to its
+    # curated origin by id, so both URL shapes have to be readable here
+    ORIG_LINK = re.compile(r"https?://(?:www\.)?livelib\.ru/"
+                          r"(?P<kind>book|work|review)/(?P<id>\d+)")
 
     def setup_method(self):
         if not (self.REPO / "text" / "p3-references.md").exists() \
@@ -1656,8 +1763,40 @@ class TestP3Contract:
         return dict(ref=ref, header=header, lines=lines, reviews=reviews,
                     out=out, books=books, mappings=mappings)
 
+    def note_ids(self, books):
+        """slug -> the livelib ids that note declares (book/review/editions)."""
+        ids = {}
+        for b in books:
+            ids.setdefault(b["slug"], set()).update(
+                i for i in (b["book_id"], b["review_id"], *b["edition_ids"]) if i)
+        return ids
+
+    def bullet_ids(self, item, by_slug):
+        """The livelib ids a bullet stands for.
+
+        P5 made the target LOCAL, so an id is no longer printed in the bullet:
+        the bullet's slug is looked up and the ids THAT note declares are
+        returned. An outside target (a link nothing local resolves to)
+        contributes the id written in its URL.
+        """
+        ids = set()
+        for m in self.LINK.finditer(item):
+            local = m.group("local")
+            if local:
+                ids |= by_slug.get(local, set())
+            elif m.group("id"):
+                ids.add(m.group("id"))
+        return ids
+
     def links(self, line):
-        return [(m.group("id"), m.group("kind"), m.group("name")) for m in self.LINK.finditer(line)]
+        """(id, kind, name) of every livelib URL in a CURATED line."""
+        return [(m.group("id"), m.group("kind"), "")
+                for m in self.ORIG_LINK.finditer(line)]
+
+    def target_slug(self, item):
+        """The local slug a bullet points at, '' when its target is outside."""
+        m = re.search(r"\]\(/books/([^/]+)/\)", item)
+        return m.group(1) if m else ""
 
     def ids_of(self, books_dir, book_id):
         """Every livelib id a note declares (edition urls included)."""
@@ -1694,44 +1833,54 @@ class TestP3Contract:
         # 2. H1 and intro follow, before any bullet
         rest = "\n".join(lines[close + 1:])
         assert rest.startswith(f"\n# {P3_TITLE}\n\n{P3_INTRO}\n"), rest[:200]
+        # 3. bullets, in weight order, and nothing but bullets — the shelf
+        #    lists P5 appends below them are checked by TestStatusSections, so
+        #    this shape check stops at the first `///` marker
         first_bullet = min((i for i, l in enumerate(lines) if l.startswith("- ")), default=None)
         assert first_bullet is not None
         assert first_bullet > close, (close, first_bullet)
         assert lines.index(f"# {P3_TITLE}") < lines.index(P3_INTRO) < first_bullet
-        # 3. bullets, in weight order, and nothing but bullets
-        bullets = [l for l in lines[first_bullet:]]
+        bibliography = list(itertools.takewhile(lambda l: not l.startswith("///"),
+                                               lines[first_bullet:]))
+        # the blank line that separates the intro from the bullets is not a bullet
+        bibliography = [l for l in bibliography if l.strip()]
+        bullets = bibliography
         assert all(l.startswith("- ") for l in bullets), bullets
         assert bullets == d["out"]["items"], "header leaked into items"
+        by_slug = self.note_ids(d["books"])
+        # id -> weight, from the ids the notes DECLARE; a bullet is keyed through
+        # the slug its local target names (P5), so the ids of THAT note decide
         weight_of = {}
         for b in d["books"]:
             for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
-                if i:
+                if i and b["weight"] is not None:
                     weight_of.setdefault(i, b["weight"])
         declared, undeclared = [], []
         for l in bullets:
-            m = self.LINK.search(l)
-            assert m is not None, l
-            (declared if weight_of.get(m.group("id")) is not None else undeclared).append(
-                weight_of.get(m.group("id")))
+            ids = self.bullet_ids(l, by_slug)
+            assert ids, l
+            w = next((weight_of[i] for i in ids if i in weight_of), None)
+            (declared if w is not None else undeclared).append(w)
         assert None not in declared
         assert declared == sorted(declared), declared
         # what the corpus cannot key by declared ids is small and reported
         assert len(undeclared) <= 2, undeclared
         assert len(declared) >= 20, len(declared)
-        # a bullet the note declares nothing about is placed by its curated line's
+        # a bullet whose note carries no weight is placed by its curated line's
         # weight, which the mapping file names — so it must still sit between the
         # weights of its neighbours (order is right even where ids are not)
+        slug_weight = {b["slug"]: b["weight"] for b in d["books"]}
         prev = 0
         for l in bullets:
-            rid = self.LINK.search(l).group("id")
-            w = weight_of.get(rid)
+            ids = self.bullet_ids(l, by_slug)
+            w = next((weight_of[i] for i in ids if i in weight_of), None)
             if w is None:
-                slug = d["mappings"].get(f"https://www.livelib.ru/review/{rid}") \
-                    or d["mappings"].get(f"https://www.livelib.ru/book/{rid}")
-                w = next((b["weight"] for b in d["books"] if b["slug"] == slug), None)
-                # a note that carries no weight was never placed in the list: the
-                # bullet keeps its curated position, and the page says so by
-                # printing it where the curated line sat
+                # nothing declared a weight: fall back to the slug the local
+                # target names, then to the curated mapping for that id
+                slug = self.target_slug(l) or next(
+                    (d["mappings"].get(f"https://www.livelib.ru/{kind}/{i}")
+                     for i in ids for kind in ("review", "book")), None)
+                w = slug_weight.get(slug) if slug else None
                 if w is None:
                     continue
             assert prev <= w, (prev, w, l)
@@ -1851,13 +2000,26 @@ class TestP3Contract:
         never mentions.
 
         Provenance is deliberately narrow: only the note's own frontmatter ids plus
-        the curated file. link-mappings.json is NOT used (it is the generator's
-        premise, using it would read the generator back), and no assumption is made
+        the curated file. link-mappings.json is NOT used as thesis provenance (it
+        is the generator's premise, using it would read the generator back) — it
+        serves here only to name which NOTE a local target stands for, which is
+        where P5 moved the id out of the bullet's text. No assumption is made
         about one bullet per line or about contiguous weights.
         """
         d = self.data()
         titled = {str(r["id"]): (r.get("title") or "").strip() for r in d["reviews"] if r.get("title")}
         declared = self.declared_weights(d["books"])          # id -> note weight
+        by_slug = self.note_ids(d["books"])                   # slug -> declared ids
+        # slug -> the ids a CURATED line links, mapped to what the named note
+        # declares: the generator's own keying, used only to locate provenance
+        slug_from_line: dict[str, set[str]] = {}
+        for ln in d["lines"]:
+            for l in ln["links"]:
+                slug = l["slug"] or self._map_slug(d["mappings"], l["kind"],
+                                                  l["review_id"] or l["book_id"])
+                if slug:
+                    slug_from_line.setdefault(slug, set()).update(
+                        {l["book_id"], l["review_id"]} - {""})
         licensed: dict[str, set[str]] = {}                    # id -> theses of lines linking it
         for ln in d["lines"]:
             if not ln["thesis"]:
@@ -1871,17 +2033,33 @@ class TestP3Contract:
             if ": [" not in item:
                 continue
             thesis = item[2:].rsplit(": [", 1)[0]
-            rid = self.LINK.search(item).group("id")
-            # a cited review is not declared by any note frontmatter when the
-            # export records its body under another shelf entry of the same work;
-            # such a bullet is exactly the (b) case, so traceability (a bullet that
-            # carries a thesis must be traceable) is checked on the thesis source
-            ok = titled.get(rid) == thesis or thesis in licensed.get(rid, set())
+            ids = self.bullet_ids(item, by_slug)
+            # (a) one of the ids this bullet stands for is a titled review whose
+            # title is exactly what is printed; or (b) some id it stands for was
+            # linked by a curated line carrying this very thesis
+            ok = any(titled.get(i) == thesis for i in ids) or \
+                any(thesis in licensed.get(i, set()) for i in ids)
             assert ok, item
-            if not titled.get(rid):
-                assert declared.get(rid) is not None or thesis, item
+            if not any(titled.get(i) for i in ids):
+                assert any(declared.get(i) is not None for i in ids) or thesis, item
+            # the local target must name the note the curated line named
+            slug = self.target_slug(item)
+            if slug and slug in slug_from_line:
+                assert slug_from_line[slug] & by_slug.get(slug, set()), item
             checked += 1
         assert checked >= 20, checked
+
+    @staticmethod
+    def _map_slug(mappings, kind, rid):
+        """The slug _curation/link-mappings.json names for a (kind, id) link."""
+        for k in (kind, "book", "review"):
+            slug = mappings.get(f"https://www.livelib.ru/{k}/{rid}")
+            if slug:
+                return slug
+        for url, slug in mappings.items():
+            if url.endswith(f"/{rid}") or f"/{rid}-" in url:
+                return slug
+        return ""
 
     def declared_weights(self, books):
         """id -> weight, from the ids the notes DECLARE in their frontmatter only.
@@ -1935,13 +2113,25 @@ class TestP3Contract:
             pos += n
             assert len(mine) == n, (ln["weight"], ln["raw"], mine)
             for link, item in zip(ln["links"], mine):
+                # P5: the target is the LOCAL page when the id resolves to a note;
+                # only a link nothing local resolves to keeps its livelib URL, and
+                # that case is reported ('no local note'), never silent
                 m = self.LINK.search(item)
                 assert m is not None, (ln["raw"], item)
-                assert re.fullmatch(r"https://www\.livelib\.ru/(book|review)/\d+", m.group("url")), item
+                if m.group("local"):
+                    assert m.group("local") == link["slug"], (ln["raw"], item)
+                else:
+                    assert re.fullmatch(r"https?://(?:www\.)?livelib\.ru/(book|review)/\d+",
+                                       m.group("url")), item
                 thesis = item[2:].rsplit(": [", 1)[0] if ": [" in item else ""
-                title = titled.get(m.group("id")) or ""
+                # the thesis is either the title of a review this bullet's note
+                # declares as its own, or the curated line's own thesis
+                own = {link["review_id"], link["book_id"]} - {""}
+                if link["slug"] in by_slug:
+                    own = by_slug[link["slug"]]
+                title = next((titled[i] for i in own if titled.get(i)), "")
                 if title:
-                    assert thesis == title, (ln["raw"], item)
+                    assert thesis == title, (ln["raw"], item, title)
                 else:
                     assert thesis in ("", ln["thesis"]), (ln["raw"], item)
                 if link["slug"] in by_slug:
@@ -1968,23 +2158,29 @@ class TestP3Contract:
 
     def test_warning_reasons_are_known_and_counted(self):
         d = self.data()
+        # the reason vocabulary is closed: a new reason must be named in
+        # KNOWN_WARNING_REASONS (P5 adds 'no local note' and 'no status')
         reasons = {w["reason"] for w in d["out"]["warnings"]}
-        assert reasons <= {"no-thesis", "untitled-review", "foreign-review", "unmatched-link",
-                          "unknown-review"}, reasons
+        assert reasons <= KNOWN_WARNING_REASONS, reasons
 
     def test_thesis_prefers_the_review_title_over_the_line(self):
         """Where the review IS titled, its title wins (the new source of truth)."""
         d = self.data()
         titled = {str(r["id"]): (r.get("title") or "").strip() for r in d["reviews"] if r.get("title")}
+        by_slug = self.note_ids(d["books"])
         checked = 0
         for item in d["out"]["items"]:
-            m = self.LINK.search(item)
-            if not m or ": [" not in item:
+            ids = self.bullet_ids(item, by_slug)
+            if not ids or ": [" not in item:
                 continue
             thesis = item[2:].rsplit(": [", 1)[0]
-            if titled.get(m.group("id")):
-                assert thesis == titled[m.group("id")], item
-                checked += 1
+            # the bullet cites its own review through the note it resolved to, so
+            # the printed thesis must be that review's title (export data)
+            for i in ids:
+                if titled.get(i):
+                    assert thesis == titled[i], (item, i, titled[i])
+                    checked += 1
+                    break
         assert checked >= 20, checked
 
     def test_unmatched_links_survive_verbatim(self):
@@ -2045,8 +2241,12 @@ class TestP3CorpusRoundTrip:
     """
 
     REPO = pathlib.Path(__file__).resolve().parents[2] / "whattodo"
-    LINK = re.compile(r"\[(?P<name>[^\]]*)\]\((?P<url>https?://(?:www\.)?livelib\.ru/"
-                      r"(?P<kind>book|work|review)/(?P<id>\d+)[^)]*)\)")
+    # the bibliography this fixture writes is curated (livelib URLs); the page it
+    # regenerates targets local pages (P5), so both shapes must be readable
+    LINK = re.compile(r"\[(?P<name>[^\]]*)\]\("
+                     r"(?:/books/(?P<local>[^/]+)/|"
+                     r"(?P<url>https?://(?:www\.)?livelib\.ru/"
+                     r"(?P<kind>book|work|review)/(?P<id>\d+)[^)]*))\)")
 
     def setup_method(self):
         if not (self.REPO / "text" / "p3-references.md").exists():
@@ -2118,8 +2318,12 @@ class TestP3CorpusRoundTrip:
         assert "\n".join(lines[close + 1:]).startswith(f"\n# {P3_TITLE}\n\n{P3_INTRO}\n"), text[:400]
         first = min(i for i, l in enumerate(lines) if l.startswith("- "))
         assert close < lines.index(f"# {P3_TITLE}") < lines.index(P3_INTRO) < first
-        # 3. bullets only, one per note, in the notes' weight order
-        bullets = lines[first:]
+        # 3. bullets only, one per note, in the notes' weight order — the shelf
+        #    lists P5 appends below them are not part of `items`
+        bibliography = list(itertools.takewhile(lambda l: not l.startswith("///"),
+                                               lines[first:]))
+        bibliography = [l for l in bibliography if l.strip()]
+        bullets = bibliography
         assert all(l.startswith("- ") for l in bullets), bullets
         assert bullets == out["items"], "the header leaked into items"
         important = important_books(books)
@@ -2127,14 +2331,20 @@ class TestP3CorpusRoundTrip:
         assert {b["slug"] for b in important} == set(notes_emitted)
         weights = {b["slug"]: b["weight"] for b in important}
         assert len(weights) == len(important)     # every copied note is important
-        by_id = {}
-        for b in important_books(books):
-            for i in {b["book_id"], b["review_id"], *b["edition_ids"]}:
-                if i:
-                    by_id.setdefault(i, b["weight"])
-        rendered = [by_id[self.LINK.search(l).group("id")] for l in bullets]
+        # a bullet carries no id once its target is local: the slug names the
+        # note, and the note's declared ids give its weight
+        slug_weight = {b["slug"]: b["weight"] for b in important}
+        rendered = []
+        for l in bullets:
+            m = re.search(r"\]\(/books/([^/]+)/\)", l)
+            assert m is not None, l          # every bullet of a resolved corpus is local
+            rendered.append(slug_weight[m.group(1)])
+        assert None not in rendered, rendered
         assert rendered == sorted(rendered), rendered
+        # the copied notes are real corpus files, so they carry a shelf status:
+        # the page renders shelf lists instead of warning about missing ones
         assert out["warnings"] == [], out["warnings"]
+        assert text.endswith("///\n"), text[-80:]
         assert text.endswith("\n")
 
 class TestBuildExport:

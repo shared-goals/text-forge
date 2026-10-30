@@ -186,8 +186,134 @@ def important_books(books_dir) -> list[dict]:
     return out
 
 
+def _work_key(key: str) -> str:
+    """A /work/ id names the same work as the note's /book/ id."""
+    return "book/" + key.split("/", 1)[1] if key.startswith("work/") else key
+
+
+def link_map_from_notes(books_dir) -> dict:
+    """`<kind>/<id>` -> `/books/<slug>/` for every id a note declares.
+
+    The generator's own view of the map (it resolves ids it already parsed, and
+    needs no anchor): the note's book id, its edition ids and its review id all
+    name the same local page. Deterministic — notes are read in sorted order and
+    the first declaration of an id wins.
+
+    EVERY note is keyed, not only the important ones: a shelf list names books
+    the Text does not cite, and a chapter linking one must still land on its
+    page. An id keys only the kind it really is (a review id stays a review key)
+    — the same digits can name different works in different kinds.
+    """
+    out: dict[str, str] = {}
+    for b in _all_notes(books_dir):
+        target = f"/books/{b['slug']}/"
+        if b["book_id"].isdigit():
+            out.setdefault(f"book/{b['book_id']}", target)
+        if b["review_id"].isdigit():
+            out.setdefault(f"review/{b['review_id']}", target)
+        for eid in b["edition_ids"]:
+            if eid.isdigit():
+                out.setdefault(f"book/{eid}", target)
+    return out
+
+
+def _key_of(link) -> str:
+    """`<kind>/<id>` of a curated link dict or a plain URL (work -> book)."""
+    url = link["url"] if isinstance(link, dict) else str(link)
+    key = _link_key(url)
+    return _work_key(f"{key[0]}/{key[1]}") if key else ""
+
+
+# the collapsed shelf lists under the bibliography: LiveLib shelf name -> the
+# frontmatter `status:` value, in the order the sections are rendered
+STATUS_SECTIONS = (("Читаю", "reading"), ("Прочтённые", "read"),
+                   ("Недочитанные", "unread"), ("Хочу прочитать", "wish"))
+
+
+def render_status_sections(books_dir) -> tuple[str, list[dict]]:
+    """Collapsed per-shelf lists of the note-books, from frontmatter `status:`.
+
+    Returns (text, warnings). A book with `status: none` or no `status:` at all
+    belongs to no shelf and is NOT rendered — and is reported once per book, so
+    an unread shelf that lost a book is visible instead of silently shorter.
+    Titles sort alphabetically, case-folded and with punctuation pushed aside:
+    Cyrillic order must read like a dictionary, not like byte order.
+    """
+    shelves: dict[str, list[tuple[str, str]]] = {status: [] for _, status in STATUS_SECTIONS}
+    warnings: list[dict] = []
+    for b in _all_notes(books_dir):
+        status = b["status"]
+        # `status: none` is an EXPLICIT statement — the book is on no shelf, and
+        # that is not an anomaly worth reporting. Only a note that carries no
+        # `status:` key at all is the exception a human should look at.
+        if status == "none":
+            continue
+        if status not in shelves:
+            warnings.append({"slug": b["slug"], "reason": "no status", "weight": b["weight"],
+                            "title": b["title"], "review_id": b["review_id"] or None,
+                            "url": f"https://www.livelib.ru/book/{b['book_id']}"
+                            if b["book_id"] else None})
+            continue
+        shelves[status].append((b["title"], f"/books/{b['slug']}/"))
+
+    blocks: list[str] = []
+    for heading, status in STATUS_SECTIONS:
+        entries = shelves[status]
+        if not entries:
+            continue
+        entries.sort(key=lambda t: _sort_key(t[0]))
+        blocks.append("\n".join(
+            [f"/// details | {heading} ({len(entries)})"]
+            + [f"- [{title}]({target})" for title, target in entries]
+            + ["///"]))
+    text = "\n\n".join(blocks) + "\n" if blocks else ""
+    warnings.sort(key=lambda w: w["slug"] or "")
+    return text, warnings
+
+
+def _sort_key(title: str) -> list:
+    """Alphabetical key: case-folded, letters and digits only.
+
+    `"Яблоко"` vs `"Ярмо"` must order by their letters, so a space or a quote
+    sitting between them cannot decide the comparison.
+    """
+    return [c for c in title.casefold() if c.isalnum()]
+
+
+def _all_notes(books_dir) -> list[dict]:
+    """Every note-book, with the fields the shelf lists need (status included).
+
+    Same frontmatter reading as `important_books`, minus the importance filter —
+    a shelf lists every book the reader has, not only the ones the Text cites.
+    `status` is None (not 'none') when the note carries no `status:` key: the
+    generator must tell "I am on no shelf" from "I never said anything".
+    """
+    out: list[dict] = []
+    for note in sorted(pathlib.Path(books_dir).glob("*.md")):
+        m = re.match(r"---\n(.*?)\n---", note.read_text(encoding="utf-8"), re.DOTALL)
+        if not m:
+            continue
+        fm = m.group(1)
+        raw_status = _fm_scalar(fm, "status")
+        out.append({
+            "slug": note.stem,
+            "title": _fm_scalar(fm, "title") or note.stem,
+            "status": raw_status.lower() if raw_status else None,
+            "weight": None,
+            "book_id": _book_id(_fm_scalar(fm, "livelib_book") or ""),
+            "review_id": _review_id(_fm_scalar(fm, "livelib_review") or ""),
+            # a shelf lists every edition of the note, so a chapter citing any of
+            # them lands on this page
+            "edition_ids": {m2.group(1) for m2 in re.finditer(
+                r'^\s*-\s*"?https?://(?:www\.)?livelib\.ru/(?:book|work)/(\d+)', fm,
+                re.MULTILINE)},
+        })
+    return out
+
+
 def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | None = None,
-                        line_thesis: dict | None = None) -> dict:
+                        line_thesis: dict | None = None,
+                        link_map: dict | None = None) -> dict:
     """Project `important` books into the p3-references page.
 
     The returned `text` is the WHOLE page: closed frontmatter, `# {P3_TITLE}`, the
@@ -201,12 +327,25 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
     the same fallback for callers that pass no lines. Without either, every
     important book becomes its own line, thesis taken from its review only.
 
+    Targets are LOCAL: a bullet links the note's own page (`/books/<slug>/`),
+    resolved through `link_map` (`<kind>/<id>` -> `/books/<slug>/`, derived from
+    the notes when not handed in). A target that resolves to no note keeps its
+    livelib.ru URL and is reported with reason 'no local note' — the reader can
+    still follow it, and the gap is visible. Link TEXT never changes.
+
+    Below the bullets, collapsed shelf lists from the notes' `status:`
+    (render_status_sections).
+
     Returns {"text", "items", "warnings"}; a warning is {"slug", "reason", ...}
     with reason 'no-thesis' (line emitted without a thesis), 'untitled-review'
     (review exists but carries no title, so the curated line's thesis was used),
-    'foreign-review' (the note's review belongs to a different work) or
-    'unmatched-link' (a curated link resolves to no note: kept verbatim).
+    'foreign-review' (the note's review belongs to a different work),
+    'unmatched-link' / 'no local note' (a curated link resolves to no note, so
+    the bullet keeps the livelib.ru URL it was written with) or 'no status'
+    (a book belongs to no shelf list).
     """
+    if link_map is None:
+        link_map = link_map_from_notes(books_dir)
     books = important_books(books_dir)
     by_slug = {b["slug"]: b for b in books}
     by_review = {b["review_id"]: b for b in books if b["review_id"]}
@@ -297,6 +436,15 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
         else:
             # nothing to cite: the note's own book id, never a stranger's review
             url = f"https://www.livelib.ru/book/{book['book_id']}"
+        # the note's page is what the reader should get; the livelib URL above is
+        # only the fallback for a note the map does not carry (a slug collision,
+        # a note that is not on disk) — then the gap is reported, not hidden
+        local = link_map.get(_key_of(url)) or link_map.get(f"book/{book['book_id']}")
+        if local:
+            url = local
+        else:
+            warn(book["slug"], "no local note", weight, book["title"],
+                 book["review_id"] or None, url=url)
         link = f"[{book['title']}]({url})"
         items.append((weight, order, f"- {text}: {link}" if text else f"- {link}"))
 
@@ -311,8 +459,10 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
             known = [(link, resolve(link)) for link in ln["links"]]
             if all(book is None for _, book in known):
                 # nothing in this line resolves: keep the curated line verbatim
+                # — that IS a livelib target left on the page, so it is reported
+                # under the reason the validator looks for, once per link
                 for link in ln["links"]:
-                    warn(None, "unmatched-link", weight, link["name"], url=link["url"])
+                    warn(None, "no local note", weight, link["name"], url=link["url"])
                 items.append((weight, len(items), ln["raw"]))
                 continue
             for link, book in known:
@@ -322,7 +472,7 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
             for link, book in known:
                 if book is None:
                     # the curated link names nothing in the corpus: keep it verbatim
-                    warn(None, "unmatched-link", weight, link["name"], url=link["url"])
+                    warn(None, "no local note", weight, link["name"], url=link["url"])
                     items.append((weight, len(items),
                                 f"- {ln['thesis']}: [{link['name']}]({link['url']})"
                                 if ln["thesis"] else f"- [{link['name']}]({link['url']})"))
@@ -333,8 +483,17 @@ def render_p3_references(books_dir, reviews: list[dict], *, lines: list[dict] | 
                 w, o, text = items[-1]
                 items[-1] = (w, o, f"{text}, {ln['plain'].strip().lstrip(',').strip()}")
     items.sort(key=lambda t: (t[0] is None, t[0] or 0, t[1]))
-    warnings.sort(key=lambda w: (w.get("weight") or 0, w.get("slug") or "", w.get("url") or ""))
     text = p3_header()
     if items:
         text += "\n" + "\n".join(t for _, _, t in items) + "\n"
-    return {"text": text, "items": [t for _, _, t in items], "warnings": warnings}
+    # the shelf lists sit after the bibliography: the page first names what the
+    # Text stands on, then shows what the reader has on each shelf
+    shelves, shelf_warnings = render_status_sections(books_dir)
+    warnings.extend(shelf_warnings)
+    if shelves:
+        text += "\n" + shelves
+    warnings.sort(key=lambda w: (w.get("weight") or 0, w.get("slug") or "", w.get("url") or ""))
+    return {"text": text, "items": [t for _, _, t in items],
+            # the generator's own id -> page map, so a caller can hand it to the
+            # rewriter/validator without a second read of the notes
+            "link_map": link_map, "warnings": warnings}
