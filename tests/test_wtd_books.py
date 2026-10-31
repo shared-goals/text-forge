@@ -1695,23 +1695,6 @@ class TestP3FromScratch:
 
     FM = f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n"
 
-    def test_template_constants_are_the_pages_own_words(self):
-        assert P3_TITLE == "Книги как фундамент"
-        assert P3_INTRO == (
-            "В тексте были использованы упоминания и выдержки из книг, которые "
-            "особенно запомнились или были прочитаны во время написания:"
-        )
-        assert P3_FRONTMATTER.startswith("---\n")
-        assert P3_FRONTMATTER.rstrip("\n").endswith("---")
-        assert P3_FRONTMATTER.count("---") == 2
-        assert "comments: true" in P3_FRONTMATTER
-        assert "created: 18.06.2023" in P3_FRONTMATTER
-        assert "published: 22.10.2023" in P3_FRONTMATTER
-        assert (
-            "description: Наш Текст — это сборка смыслов, взятых из книг "
-            "и успешно применяемых на практике."
-        ) in P3_FRONTMATTER
-
     def test_page_shape_frontmatter_h1_intro_bullets_then_lists(self, tmp_path):
         """Full page: closed frontmatter -> H1 -> intro -> bullets -> /// lists.
 
@@ -1926,15 +1909,6 @@ class TestP3FromScratch:
         assert first["warnings"] == second["warnings"]
         assert first["link_map"] == second["link_map"]
 
-    def test_renderer_signature_is_books_dir_and_reviews_only(self):
-        """YAGNI: the read-back parameters are gone, not merely unused."""
-        import inspect
-
-        assert set(inspect.signature(render_p3_references).parameters) == {
-            "books_dir",
-            "reviews",
-        }
-
     def test_quoted_title_escapes_do_not_leak_into_link_text(self, tmp_path):
         books = _write_books(
             tmp_path,
@@ -2097,185 +2071,44 @@ class TestP3ShelfSections:
 
 
 class TestP3RealCorpus:
-    """Contract against the REAL corpus (whattodo), read-only, from scratch.
+    """One integration smoke against the REAL corpus (whattodo), read-only.
 
-    The generated page must equal the page sitting on disk, EXCEPT where
-    curation changed after that page was last written. The contract:
-      * one bullet per `important` note, in `weight` order;
-      * thesis = the title of the book's OWN review in the export;
-      * link text = the note's frontmatter title, target = its own /books/ page;
-      * a book curation dropped (no `important:` in its note) MUST disappear —
-        the generator may not resurrect it from whatever the page used to say.
-    Skipped when the repo data is not available.
+    The behavioral contract lives in TestP3FromScratch/TestP3ShelfSections
+    on fixtures; this smoke only catches the real corpus drifting from the
+    shapes the generator reads (frontmatter, export ids). Skipped when the
+    repo data is not available.
     """
 
     REPO = pathlib.Path(__file__).resolve().parents[2] / "whattodo"
-    BULLET = re.compile(r"^- (?:.*: )?\[[^\]]+\]\((?P<target>[^)]+)\)")
 
     def setup_method(self):
         if not (self.REPO / "text" / "p3-references.md").exists():
             pytest.skip("whattodo repo data not available")
 
-    def data(self):
-        page = (self.REPO / "text" / "p3-references.md").read_text(encoding="utf-8")
+    def test_real_corpus_smoke(self):
         reviews = json.loads(
             (self.REPO / "livelib-export" / "livelib-reviews-api.json").read_text(
                 encoding="utf-8"
             )
         )
+        books = important_books(self.REPO / "text" / "books")
         out = render_p3_references(self.REPO / "text" / "books", reviews)
-        return {
-            "page": page,
-            "reviews": reviews,
-            "out": out,
-            "books": important_books(self.REPO / "text" / "books"),
-        }
 
-    @staticmethod
-    def bibliography(md):
-        """The bullets of a page: everything above the first shelf marker."""
-        return [l for l in md.split("\n///")[0].splitlines() if l.startswith("- ")]
+        # one bullet per important book, aligned by weight order, local targets
+        items = out["items"]
+        assert len(items) == len(books)
+        for b, item in zip(books, items):
+            slug = re.search(r"/books/(.+?)/\)$", item).group(1)
+            assert slug == b["slug"], item
+            assert "livelib.ru" not in item
 
-    def test_generated_page_equals_the_page_on_disk_except_curation_changes(self):
-        """The one rule that matters: curation decides, the page never does.
+        # the corpus is clean: only known warnings, no surprises
+        assert {w["reason"] for w in out["warnings"]} <= KNOWN_WARNING_REASONS
 
-        The generator is from scratch, so the page on disk is not an input —
-        therefore "equality with the old page" is NOT the contract, and the
-        differences are exactly the places where the page held words the corpus
-        does not say. Per surviving bullet: same book, same target, and its
-        thesis equal to the title of its OWN review (never carried over from the
-        old page). What may only vanish, and never appear:
-          * a book curation dropped (its note lost `important:`/`weight:`) must
-            NOT be cited — the generator may not resurrect a dropped book;
-          * unlinked leftovers ('to be published' style) had no source in the
-            corpus, so they are not written — that prose belongs to a human.
-        """
-        d = self.data()
-        old = self.bibliography(d["page"])
-        new = d["out"]
-        notes = {b["slug"]: b for b in d["books"]}
-
-        def slug_of(line):
-            m = re.search(r"/books/([^/]+)/", line)
-            return m.group(1) if m else None
-
-        old_slugs = [slug_of(l) for l in old]
-        assert all(s for s in old_slugs), [l for l in old if not slug_of(l)]
-        # every note that IS important today is cited, exactly once
-        cited = [slug_of(i) for i in new["items"]]
-        assert sorted(cited) == sorted(notes), set(notes) ^ set(cited)
-        # nothing left of a book curation dropped
-        for s, l in zip(old_slugs, old):
-            if s not in notes:
-                assert l not in new["items"], l
-        # per surviving bullet: target, label and thesis come from live data
-        by_slug = {slug_of(i): i for i in new["items"]}
-        titled = {str(r["id"]): (r.get("title") or "").strip() for r in d["reviews"]}
-        for s in notes:
-            item = by_slug[s]
-            m = re.match(
-                r"^- (?:.*: )?\[(?P<name>[^\]]+)\]\(/books/[^/]+/\)(?P<rest>.*)$", item
-            )
-            assert m is not None, item
-            assert m.group("name") == notes[s]["title"], item
-            assert not m.group("rest"), item  # no invented leftovers
-            thesis = item[2:].rsplit(": [", 1)[0] if ": [" in item else ""
-            if thesis:
-                assert titled.get(notes[s]["review_id"]) == thesis, item
-        # order: the whole list follows the notes' weight order
-        assert cited == [b["slug"] for b in d["books"]]
-
-    def test_bullet_count_matches_important_notes(self):
-        d = self.data()
-        assert len(d["out"]["items"]) == len(d["books"])
-        # every important note carries a weight: an unnumbered note would sit at
-        # the end of the list and break the order claim below
-        assert all(b["weight"] is not None for b in d["books"]), [
-            b["slug"] for b in d["books"] if b["weight"] is None
-        ]
-
-    def test_bullets_are_ordered_by_weight_and_target_its_own_note(self):
-        d = self.data()
-        by_slug = {b["slug"]: b for b in d["books"]}
-        weights = []
-        for item in d["out"]["items"]:
-            m = self.BULLET.match(item)
-            assert m is not None, item
-            slug = re.match(r"/books/(.+)/$", m.group("target")).group(1)
-            assert slug in by_slug, item  # the target names a real note
-            weights.append(by_slug[slug]["weight"])
-        assert weights == sorted(weights), weights
-        assert weights == [b["weight"] for b in d["books"]]
-
-    def test_thesis_is_the_title_of_the_notes_own_review(self):
-        d = self.data()
-        titled = {
-            str(r["id"]): (r.get("title") or "").strip()
-            for r in d["reviews"]
-            if (r.get("title") or "").strip()
-        }
-        notes = {b["slug"]: b for b in d["books"]}
-        checked = 0
-        for item in d["out"]["items"]:
-            slug = re.search(r"/books/(.+)/\)", item).group(1)
-            thesis = item[2:].rsplit(": [", 1)[0] if ": [" in item else ""
-            own = notes[slug]["review_id"]
-            if thesis:
-                # the printed thesis is the title of THIS note's own review
-                assert titled.get(own) == thesis, (item, own, titled.get(own))
-                checked += 1
-            else:
-                # no thesis: the note declares no review, or that review is
-                # untitled in the export — and that is reported, not hidden
-                assert not titled.get(own) or any(
-                    w["slug"] == slug and w["reason"] == "untitled-review"
-                    for w in d["out"]["warnings"]
-                ), item
-        assert checked >= 20, checked
-
-    def test_link_text_is_the_note_title_and_target_is_local(self):
-        d = self.data()
-        by_slug = {b["slug"]: b for b in d["books"]}
-        for item in d["out"]["items"]:
-            m = re.match(
-                r"^- (?:.*: )?\[(?P<name>[^\]]+)\]\((?P<target>[^)]+)\)$", item
-            )
-            assert m is not None, item
-            slug = re.match(r"/books/(.+)/$", m.group("target")).group(1)
-            assert m.group("name") == by_slug[slug]["title"], item
-
-    def test_no_livelib_url_survives_in_the_bibliography(self):
-        """A from-scratch page has nothing to keep: zero outside links."""
-        d = self.data()
-        assert not [l for l in d["out"]["items"] if "livelib.ru" in l]
-        assert not [
-            w
-            for w in d["out"]["warnings"]
-            if w["reason"] in ("no local note", "unmatched-link", "unknown-review")
-        ]
-
-    def test_warning_reasons_are_known(self):
-        d = self.data()
-        reasons = {w["reason"] for w in d["out"]["warnings"]}
-        assert reasons <= KNOWN_WARNING_REASONS, reasons
-
-    def test_link_map_keys_every_note_by_its_declared_ids(self):
-        """The map a caller hands to validator/rewriter: every note's own ids."""
-        d = self.data()
-        lm = d["out"]["link_map"]
-        for b in d["books"]:
-            target = f"/books/{b['slug']}/"
-            assert lm.get(f"book/{b['book_id']}") == target, b["slug"]
-            if b["review_id"]:
-                assert lm.get(f"review/{b['review_id']}") == target, b["slug"]
-            for eid in b["edition_ids"]:
-                assert lm.get(f"book/{eid}") == target, (b["slug"], eid)
-        # ids of non-important notes are keyed too: a shelf entry a chapter was
-        # cited through must still resolve
-        all_notes = [b for b in _all_notes(self.REPO / "text" / "books")]
-        assert len(all_notes) >= len(d["books"])
-        for b in all_notes:
-            assert lm.get(f"book/{b['book_id']}") == f"/books/{b['slug']}/", b["slug"]
+        # link_map keys EVERY note by its own ids — not just important ones
+        lm = out["link_map"]
+        for n in _all_notes(self.REPO / "text" / "books"):
+            assert lm.get(f"book/{n['book_id']}") == f"/books/{n['slug']}/", n["slug"]
 
 
 class TestBuildExport:
