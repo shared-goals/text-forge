@@ -19,6 +19,7 @@ API during step 2 and are cached in <root>/livelib-export/editions-cache.json,
 so a rebuild with the same inputs reproduces the corpus byte for byte without
 the network.
 """
+
 import json
 import re
 import shutil
@@ -27,9 +28,13 @@ import tempfile
 from pathlib import Path
 
 from text_forge.livelib import LivelibClient
-from text_forge.wtd_books import (_edition_id, _work_id, build_books,
-                                  parse_reference_lines, render_p3_references,
-                                  validate_text_links)
+from text_forge.wtd_books import (
+    _edition_id,
+    _work_id,
+    build_books,
+    render_p3_references,
+    validate_text_links,
+)
 
 CUR = Path(__file__).parent / "wtd_books.py"
 CUR_DIR = CUR.parent
@@ -69,10 +74,12 @@ def export(user_id: int, out_dir: Path) -> dict:
     # shelves: shelf() prints one progress line per shelf, books() merges them
     records = c.books(user_id)
     path = out_dir / "livelib-books.json"
-    old = _record_ids(json.loads(path.read_text(encoding="utf-8"))) \
-        if path.exists() else None
-    path.write_text(json.dumps(records, ensure_ascii=False, indent=1),
-                   encoding="utf-8")
+    old = (
+        _record_ids(json.loads(path.read_text(encoding="utf-8")))
+        if path.exists()
+        else None
+    )
+    path.write_text(json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8")
     counts["livelib-books.json"] = len(records)
     if old is not None:
         new = _record_ids(records)
@@ -80,14 +87,20 @@ def export(user_id: int, out_dir: Path) -> dict:
             print(f"  livelib-books.json: LOST {_short(old - new)}")
         if new - old:
             print(f"  livelib-books.json: NEW {_short(new - old)}")
-    for name, get in (("livelib-quotes-api.json", lambda: c.quotes(user_id)),
-                     ("livelib-reviews-api.json", lambda: c.reviews(user_id))):
+    for name, get in (
+        ("livelib-quotes-api.json", lambda: c.quotes(user_id)),
+        ("livelib-reviews-api.json", lambda: c.reviews(user_id)),
+    ):
         path = out_dir / name
-        old = _record_ids(json.loads(path.read_text(encoding="utf-8"))) \
-            if path.exists() else None
+        old = (
+            _record_ids(json.loads(path.read_text(encoding="utf-8")))
+            if path.exists()
+            else None
+        )
         records = get()
-        path.write_text(json.dumps(records, ensure_ascii=False, indent=1),
-                       encoding="utf-8")
+        path.write_text(
+            json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
         counts[name] = len(records)
         if old is not None:
             new = _record_ids(records)
@@ -123,7 +136,9 @@ def main(root_str: str, user_id: int = 345497) -> int:
             seen_pages[0] += 1
             m = re.search(r"/art-editions/(\d+)", url)
             if m:
-                print(f"  crawl {seen_pages[0]:3d}: https://www.livelib.ru/book/{m.group(1)}")
+                print(
+                    f"  crawl {seen_pages[0]:3d}: https://www.livelib.ru/book/{m.group(1)}"
+                )
         return LivelibClient().fetch(url)
 
     report = build_books(
@@ -138,14 +153,18 @@ def main(root_str: str, user_id: int = 345497) -> int:
     )
     # human summary: counts, then every exception as a url to look at —
     # never an id dump (the machine-readable maps live in link-map.json)
-    print(f"build: {report['books']} notes, "
-          f"{report['quotes_placed']} quotes placed, "
-          f"{report['own_notes']} own notes")
+    print(
+        f"build: {report['books']} notes, "
+        f"{report['quotes_placed']} quotes placed, "
+        f"{report['own_notes']} own notes"
+    )
     for u in report.get("own_note_urls") or []:
         print(f"  OWN NOTE (quote of a work with no shelf record): {u}")
     for bid in report.get("unresolved_reference_books") or []:
-        print(f"  WARNING: cited edition not resolvable via livelib: "
-              f"https://www.livelib.ru/book/{bid}")
+        print(
+            f"  WARNING: cited edition not resolvable via livelib: "
+            f"https://www.livelib.ru/book/{bid}"
+        )
 
     # the mapping the notes declare, written beside the curation file: the link
     # validator and the bibliography generator consume it, and keeping it makes a
@@ -153,7 +172,8 @@ def main(root_str: str, user_id: int = 345497) -> int:
     link_map = report["link_map"]
     (cur / "link-map.json").write_text(
         json.dumps(link_map, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
 
     for old in books_dir.glob("*.md"):
         old.unlink()
@@ -162,16 +182,13 @@ def main(root_str: str, user_id: int = 345497) -> int:
 
     # p3-references is a PROJECTION of the notes (importance in frontmatter,
     # thesis = the book's own LiveLib review title, LOCAL link targets) plus the
-    # collapsed shelf lists — regenerated on every build, never hand-edited.
-    # The curated bullets of the CURRENT page (prefix labels, grouping) are the
-    # lines input; the renderer keeps their text and re-resolves the targets.
-    p3_path = root / "text" / "p3-references.md"
-    lines = (parse_reference_lines(p3_path.read_text(encoding="utf-8"))
-             if p3_path.exists() else None)
+    # collapsed shelf lists — written FROM SCRATCH on every build: the generator
+    # never parses the page it wrote, so there is nothing to read back.
     p3 = render_p3_references(
         books_dir,
-        json.loads((export_dir / "livelib-reviews-api.json").read_text(encoding="utf-8")),
-        lines=lines,
+        json.loads(
+            (export_dir / "livelib-reviews-api.json").read_text(encoding="utf-8")
+        ),
     )
     for w in p3["warnings"]:
         print("  P3:", w.get("reason"), w.get("slug") or w.get("url"))
@@ -180,11 +197,13 @@ def main(root_str: str, user_id: int = 345497) -> int:
     statuses: dict[str, list[str]] = {}
     for f in sorted(books_dir.glob("*.md")):
         text = f.read_text(encoding="utf-8")
-        m = re.search(r"^status: (\S+)", text, re.M)
+        m = re.search(r"^status: (\S+)", text, re.MULTILINE)
         s = m.group(1) if m else "MISSING"
         statuses.setdefault(s, []).append(f.stem)
-    print("statuses:", {s: len(v) for s, v in
-                        sorted(statuses.items(), key=lambda x: -len(x[1]))})
+    print(
+        "statuses:",
+        {s: len(v) for s, v in sorted(statuses.items(), key=lambda x: -len(x[1]))},
+    )
     # exceptions as urls for manual investigation/fix on livelib
     for slug in statuses.get("none", []):
         note = books_dir / f"{slug}.md"
@@ -195,10 +214,11 @@ def main(root_str: str, user_id: int = 345497) -> int:
     # so a slug renamed by collision handling still resolves and no stale key can
     # paper over a real gap
     link_map = report["link_map"]
-    res = validate_text_links(root / "text", books_dir,
-                             link_mappings_path=link_map)
-    print(f"links: {res['total']} total, {res['resolved']} resolved, "
-          f"{len(res['unresolved'])} unresolved")
+    res = validate_text_links(root / "text", books_dir, link_mappings_path=link_map)
+    print(
+        f"links: {res['total']} total, {res['resolved']} resolved, "
+        f"{len(res['unresolved'])} unresolved"
+    )
     if res["unresolved"]:
         for u in res["unresolved"]:
             print("  UNRESOLVED:", u["url"], f"(cited in {u.get('file', '?')})")
@@ -206,8 +226,9 @@ def main(root_str: str, user_id: int = 345497) -> int:
     # report-only stage that tells the author which lines still need rewriting
     # (apply it with text_forge.wtd_links.rewrite_text_links(root, apply=True))
     outside = res["livelib_outside_books"]
-    print(f"outside-books livelib links: {len(outside)}"
-          + ("" if outside else " (clean)"))
+    print(
+        f"outside-books livelib links: {len(outside)}" + ("" if outside else " (clean)")
+    )
     for u in outside:
         print(f"  OUTSIDE BOOKS: {u['url']} ({u['file']}:{u['line']})")
     # fail-loud ONLY on unresolved links (a lost reference is data loss);
@@ -215,12 +236,16 @@ def main(root_str: str, user_id: int = 345497) -> int:
     # and leftover outside links are reported without failing the build — the
     # rewrite is a separate, opt-in step
     if res["unresolved"]:
-        print("FAIL: unresolved link above — fix on livelib (shelf/review) or in text, then re-run")
+        print(
+            "FAIL: unresolved link above — fix on livelib (shelf/review) or in text, then re-run"
+        )
         return 1
     return 0
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        sys.exit("usage: uv run --project <text-forge> python -m text_forge.wtd_books_build <whattodo_root>")
+        sys.exit(
+            "usage: uv run --project <text-forge> python -m text_forge.wtd_books_build <whattodo_root>"
+        )
     sys.exit(main(sys.argv[1]))

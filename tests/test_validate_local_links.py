@@ -5,7 +5,9 @@ URL: those live only inside text/books/*.md (attribution + frontmatter). The
 check reports every offender so `make books` fails loudly on a regression.
 """
 
+import json
 import pathlib
+import re
 import shutil
 
 import pytest
@@ -18,6 +20,27 @@ def write_text(root, name, body):
     t.mkdir(parents=True, exist_ok=True)
     (t / name).write_text(body, encoding="utf-8")
     return t
+
+
+def corpus_book_ids(repo, limit):
+    """`limit` distinct livelib /book/ URLs, taken from the ids the corpus declares.
+
+    Read from the build's own `_curation/link-map.json` (a file the build writes,
+    so it is a CORPUS fact rather than a generator output) and kept to /book/ and
+    /work/ keys, the only kinds a chapter link may carry. Ids are taken in sorted
+    order so the list is stable across builds, and the count fails loudly if the
+    corpus ever shrinks below what the caller asks for.
+
+    Each id names a note that exists, so the only complaint the link check can
+    raise about such a URL is that it sits OUTSIDE text/books/ — which is exactly
+    what the test counts.
+    """
+    maps = repo / "text" / "books" / "_curation" / "link-map.json"
+    urls = json.loads(maps.read_text(encoding="utf-8"))
+    key = re.compile(r"https?://(?:www\.)?livelib\.ru/(?:book|work)/(\d+)$")
+    ids = sorted({m.group(1) for u in urls if (m := key.match(u))})
+    assert len(ids) >= limit, (len(ids), limit)
+    return ids[:limit]
 
 
 class TestLivelibOutsideBooks:
@@ -144,12 +167,33 @@ class TestBuildReportsIt:
         assert code == 0, out
 
     def test_chapters_full_of_livelib_links_are_counted(self, tmp_path, monkeypatch, capsys):
-        # the un-rewritten corpus: every chapter link is an outside link, and the
-        # count the build prints must equal what the validator finds
-        root = self.corpus_copy(tmp_path, "См. https://www.livelib.ru/book/1001616054\n")
+        """A chapter full of outside links: the build prints exactly what it finds.
+
+        The real corpus no longer IS that corpus — its chapters were rewritten to
+        local `/books/` pages, and the generator's bibliography carries no livelib
+        URL either (a rebuild writes the last one away) — so a `>= 200` against
+        whatever the corpus happens to hold today would assert a fact the corpus
+        no longer has. The links are injected instead, which lets the count be
+        pinned EXACTLY instead of floored: 240 distinct livelib URLs, chosen from
+        ids the note-books declare (so `links:` stays clean and does not fail the
+        build), all of them must come back as outside links — no double count, no
+        miss. The p3 page the build regenerates adds nothing: with the local
+        targets written back, the corpus contributes zero outside links.
+        """
+        ids = corpus_book_ids(self.REPO, 240)
+        body = "".join(f"См. https://www.livelib.ru/book/{i}\n" for i in ids)
+        root = self.corpus_copy(tmp_path, body)
         code, out = self.run_main(root, monkeypatch, capsys)
         printed = [l for l in out.splitlines() if l.startswith("outside-books livelib links:")]
         assert len(printed) == 1, out
         n = int(printed[0].rsplit(":", 1)[1])
-        assert n >= 200, n                       # the real corpus carries hundreds
+        # the count is the injected set exactly: nothing counted twice, nothing missed
+        assert n == len(ids), (n, len(ids), out)
+        # and the per-link report names exactly the injected set, once each
+        # (the print is `  OUTSIDE BOOKS: <url> (<file>:<line>)`)
+        prefix = "  OUTSIDE BOOKS: "
+        reported = [l[len(prefix):].split(" (")[0]
+                    for l in out.splitlines() if l.startswith(prefix)]
+        assert len(reported) == len(ids), (len(reported), len(ids))
+        assert set(reported) == {f"https://www.livelib.ru/book/{i}" for i in ids}
         assert code == 0, out

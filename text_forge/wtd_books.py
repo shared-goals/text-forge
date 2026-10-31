@@ -1170,28 +1170,23 @@ def validate_text_links(text_dir, books_dir, link_mappings_path=None) -> dict:
 
 # ------------------------------------------------------------------ p3-references
 #
-# The whole p3-references generator (template constants, curated line parsing,
-# note projection) lives in `text_forge.wtd_books_p3`. The import sits at the
-# bottom of this module: `wtd_books_p3` needs `_book_id`/`_review_id` (defined
-# above) while `wtd_books` needs the p3 symbols, so the two modules are
-# imported cyclically — safe because each side only reads the other's names at
-# CALL time. Re-exported here for callers that keep importing p3 symbols from
+# The whole p3-references generator (template constants, note projection, shelf
+# lists) lives in `text_forge.wtd_books_p3`. The import sits at the bottom of
+# this module: `wtd_books_p3` needs `_book_id`/`_review_id` (defined above)
+# while `wtd_books` needs the p3 symbols, so the two modules are imported
+# cyclically — safe because each side only reads the other's names at CALL time.
+# Re-exported here for callers that keep importing p3 symbols from
 # `text_forge.wtd_books`.
 #
-# `_link_key` moved to the p3 module (its line parsing is the primary consumer)
-# but `build_books()` and `validate_text_links()` above still call it, so it is
-# re-exported here as well.
+# `_link_key` lives in the p3 module but `build_books()` and
+# `validate_text_links()` above still call it, so it is re-exported here too.
 
 from text_forge.wtd_books_p3 import (  # noqa: F401  (re-export for old import sites)
     P3_FRONTMATTER,
     P3_INTRO,
     P3_TITLE,
-    REF_BULLET,
-    REF_LINK,
-    WORK_ID_TO_SLUG,
     _link_key,
     important_books,
     p3_header,
-    parse_reference_lines,
     render_p3_references,
 )
