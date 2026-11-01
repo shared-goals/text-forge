@@ -45,7 +45,7 @@ def corpus_book_ids(repo, limit):
 
 class TestLivelibOutsideBooks:
     def test_clean_text_reports_nothing(self, tmp_path):
-        write_text(tmp_path, "ch.md", "[Книга](/books/abe/) и текст\n")
+        write_text(tmp_path, "ch.md", "[Книга](books/abe.md) и текст\n")
         assert livelib_outside_books(tmp_path) == []
 
     def test_chapter_link_is_reported(self, tmp_path):
@@ -110,6 +110,87 @@ class TestLivelibOutsideBooks:
         assert found == sorted(found, key=lambda f: (f["file"], f["line"]))
 
 
+class TestLocalLinkForm:
+    """The link check counts the canonical RELATIVE form (`books/<slug>.md`).
+
+    A local target resolves when the note it names exists — the pair is written by
+    this same pipeline, so a rebuild cannot break it in either spelling. What this
+    class pins is that the new form is SEEN at all (a regex that stopped matching
+    `books/<slug>.md` would silently drop hundreds of links from the total) and
+    that a target naming no note is reported.
+    """
+
+    @staticmethod
+    def note(book_id, slug):
+        return (f'---\ntitle: "{slug}"\nstatus: read\n'
+                f'livelib_book: "https://www.livelib.ru/book/{book_id}"\n---\n\n'
+                "> Цитата ^quote_1\n\n— [LiveLib](https://www.livelib.ru/quote/9)\n")
+
+    @staticmethod
+    def books(tmp_path, *slugs):
+        d = tmp_path / "books"
+        d.mkdir()
+        for slug in slugs:
+            (d / f"{slug}.md").write_text(TestLocalLinkForm.note("1", slug),
+                                         encoding="utf-8")
+        return d
+
+    def test_relative_link_resolves_by_slug(self, tmp_path):
+        text_dir = write_text(tmp_path, "ch.md", "[Книга](books/abe.md)\n")
+        books = self.books(tmp_path, "abe")
+        res = validate_text_links(text_dir, books)
+        assert res["total"] == 1
+        assert res["resolved"] == 1
+        assert res["unresolved"] == []
+
+    def test_relative_form_resolves_through_the_mappings_file(self, tmp_path):
+        """A note naming its subject by an id it does not print still resolves:
+        the mapping's VALUE is the new relative target, verbatim."""
+        text_dir = write_text(tmp_path, "ch.md", "[x](books/ghost.md)\n")
+        books = tmp_path / "books"
+        books.mkdir()
+        res = validate_text_links(
+            text_dir, books,
+            link_mappings_path={"https://www.livelib.ru/book/5": "books/ghost.md"})
+        assert res["resolved"] == 1
+
+    def test_relative_link_with_anchor_resolves(self, tmp_path):
+        text_dir = write_text(tmp_path, "ch.md", "[ц](books/abe.md#quote_1)\n")
+        books = self.books(tmp_path, "abe")
+        res = validate_text_links(text_dir, books)
+        assert res["resolved"] == 1
+        assert res["unresolved"] == []
+
+    def test_relative_link_to_missing_note_is_unresolved(self, tmp_path):
+        """A relative target naming a note that is NOT on disk is a broken link.
+
+        The pair a build writes always resolves (see the other tests in this
+        class); what this pins is the failure a human must see: a chapter pointing
+        at a slug no note owns — a renamed or deleted note.
+        """
+        text_dir = write_text(tmp_path, "ch.md", "[нет](books/ghost.md)\n")
+        books = self.books(tmp_path, "abe")
+        res = validate_text_links(text_dir, books)
+        assert res["total"] == 1
+        assert res["resolved"] == 0
+        assert len(res["unresolved"]) == 1
+        assert res["unresolved"][0]["url"] == "books/ghost.md"
+
+    def test_local_link_to_a_note_is_resolved_whatever_its_form(self, tmp_path):
+        """A local link whose note EXISTS resolves in both spellings, so no build
+        is broken by the form it wrote — the form itself is pinned by the
+        generator/rewriter tests, not here.
+        """
+        text_dir = write_text(tmp_path, "ch.md",
+                             "[новая](books/abe.md#quote_1) "
+                             "[старая](/books/abe/)\n")
+        books = self.books(tmp_path, "abe")
+        res = validate_text_links(text_dir, books)
+        assert res["total"] == 2
+        assert res["resolved"] == 2
+        assert res["unresolved"] == []
+
+
 class TestValidationFlow:
     def test_validate_text_links_carries_the_new_key(self, tmp_path):
         text_dir = write_text(tmp_path, "ch.md",
@@ -119,7 +200,7 @@ class TestValidationFlow:
         assert len(res["livelib_outside_books"]) == 1
 
     def test_clean_text_dir_reports_empty(self, tmp_path):
-        text_dir = write_text(tmp_path, "ch.md", "[Книга](/books/abe/)\n")
+        text_dir = write_text(tmp_path, "ch.md", "[Книга](books/abe.md)\n")
         res = validate_text_links(text_dir, tmp_path / "books")
         assert res["livelib_outside_books"] == []
 
@@ -170,7 +251,7 @@ class TestBuildReportsIt:
         """A chapter full of outside links: the build prints exactly what it finds.
 
         The real corpus no longer IS that corpus — its chapters were rewritten to
-        local `/books/` pages, and the generator's bibliography carries no livelib
+        local `books/*.md` pages, and the generator's bibliography carries no livelib
         URL either (a rebuild writes the last one away) — so a `>= 200` against
         whatever the corpus happens to hold today would assert a fact the corpus
         no longer has. The links are injected instead, which lets the count be

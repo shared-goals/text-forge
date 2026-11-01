@@ -7,7 +7,7 @@ never reads the page it wrote. One data flow —
       -> one bullet per important book, ordered by weight
       -> plus the collapsed shelf lists (`/// details`) below
 
-Bullet contract: `- {thesis}: [{note title}](/books/{slug}/)` where thesis is
+Bullet contract: `- {thesis}: [{note title}](books/{slug}.md)` where thesis is
 the book's OWN review title from the export, link text is the note's
 frontmatter title, and the target is the note's own local page. A review with
 no title (or no review at all) emits the bullet WITHOUT the thesis prefix and
@@ -16,6 +16,10 @@ stranger's review: a review the export attributes to another work is not used
 (reported 'foreign-review'). Because the page is written from scratch, it also
 cannot carry a line about a book that is not on disk — the whole read-back
 machinery (curated-line parsing, link resolution, verbatim fallbacks) is gone.
+
+A shelf line names the author beside the title when the note declares one
+(`- [{title} — {author}](books/{slug}.md)`), so a shelf reads like a
+bibliography; sorting stays by TITLE — the author is display, not order.
 
 Import shape: this module needs `_book_id`/`_review_id` from `wtd_books`, which
 re-exports this module's symbols at its bottom — a cycle. So nothing is
@@ -28,13 +32,18 @@ import json
 import pathlib
 import re
 
+# The local-target producer lives in `text_forge.wtd_links` and is fetched at
+# CALL time (see `_local_target`): `wtd_links` imports `_link_key` from this
+# module, so a module-level import in both directions is a hard cycle that dies
+# on whichever of the two gets imported first.
+
 # ------------------------------------------------------------------ p3-references
 #
 # text/p3-references.md is a PROJECTION, not a source:
 #   importance   -> book frontmatter (`important: true` + `weight: <n>`)
 #   thesis       -> title of the book's own LiveLib review
 #   link text    -> the book note's frontmatter title
-#   link target  -> that very note's local page, `/books/<slug>/`
+#   link target  -> that very note's own page, `books/<slug>.md`
 #
 # The page's own words (frontmatter, title, intro) belong to THIS template, not
 # to a legacy file: a caller that hands in a `header=` carved out of the old
@@ -96,6 +105,34 @@ def _review_id(url: str) -> str:
     return _impl(url)
 
 
+def _local_target(entry: dict) -> str:
+    """The canonical relative target (`books/<slug>.md`) for one note.
+
+    `text_forge.wtd_links.local_target` is the ONE producer of that shape, so the
+    bullets, the shelf lines and the id->page map this module emits cannot drift
+    from what the rewriter writes. Fetched at CALL time rather than imported at
+    module level, for the reason named at the top of this file.
+
+    An entry carrying an `anchor` (a quote-level key) yields `…#quote_N`.
+    """
+    from text_forge.wtd_links import local_target as _impl
+
+    return _impl(entry)
+
+
+def _author_valid(author: str) -> bool:
+    """True when the author string holds a surname-like token.
+
+    The very check the note builder uses for its `author:` frontmatter, so a
+    rating sitting in the author field ('4,6') or a run of initials ('А. Ф.') is
+    no name here either. Fetched from `wtd_books` at CALL time for the same
+    reason as `_book_id`/`_review_id` (the two modules import cyclically).
+    """
+    from text_forge.wtd_books import _author_valid as _impl
+
+    return _impl(author)
+
+
 def _read_note(note: pathlib.Path) -> dict | None:
     """One note-book's frontmatter -> the record the projection/shelves need.
 
@@ -112,9 +149,18 @@ def _read_note(note: pathlib.Path) -> dict | None:
     book_url = _fm_scalar(fm, "livelib_book") or ""
     review_url = _fm_scalar(fm, "livelib_review") or ""
     weight = _fm_scalar(fm, "weight")
+    author = (_fm_scalar(fm, "author") or "").strip()
     return {
         "slug": note.stem,
         "title": _fm_scalar(fm, "title") or note.stem,
+        # the note's own page, computed ONCE by the canonical producer: bullets,
+        # shelf lines and the id->page map all read this field, so the shapes
+        # cannot drift apart inside one build
+        "page": _local_target({"slug": note.stem, "anchor": None}),
+        # the author the note DECLARES (the build already reduced a multi-author
+        # export record to the one the note is named after): a shelf line prints
+        # it beside the title, and no valid name means no author segment
+        "author": author if _author_valid(author) else "",
         "status": raw_status.lower() if raw_status else None,
         "important": (_fm_scalar(fm, "important") or "").lower() in ("true", "yes"),
         # no weight => the note matters but was never placed in the list
@@ -179,7 +225,7 @@ def render_status_sections(books_dir) -> tuple[str, list[dict]]:
     Titles sort alphabetically, case-folded and with punctuation pushed aside:
     Cyrillic order must read like a dictionary, not like byte order.
     """
-    shelves: dict[str, list[tuple[str, str]]] = {
+    shelves: dict[str, list[tuple[str, str, str]]] = {
         status: [] for _, status in STATUS_SECTIONS
     }
     warnings: list[dict] = []
@@ -204,18 +250,21 @@ def render_status_sections(books_dir) -> tuple[str, list[dict]]:
                 }
             )
             continue
-        shelves[status].append((b["title"], f"/books/{b['slug']}/"))
+        shelves[status].append((b["title"], b["author"], b["page"]))
 
     blocks: list[str] = []
     for heading, status in STATUS_SECTIONS:
         entries = shelves[status]
         if not entries:
             continue
+        # sort on the TITLE only (index 0): the author is display, not order
         entries.sort(key=lambda t: _sort_key(t[0]))
         blocks.append(
             "\n".join(
                 [f"/// details | {heading} ({len(entries)})"]
-                + [f"- [{title}]({target})" for title, target in entries]
+                + [f"- [{title} — {author}]({target})" if author
+                   else f"- [{title}]({target})"
+                   for title, author, target in entries]
                 + ["///"]
             )
         )
@@ -229,7 +278,7 @@ def render_p3_references(books_dir, reviews: list[dict]) -> dict:
 
     One bullet per important book, in the notes' weight order: thesis = the
     title of the book's OWN review in the export, link text = the note's
-    frontmatter title, target = the note's own page `/books/<slug>/`. A review
+    frontmatter title, target = the note's own page `books/<slug>.md`. A review
     with no title (or no review at all) emits the bullet WITHOUT the thesis
     prefix and warns 'untitled-review'; a review the export attributes to
     another work is not used for the thesis ('foreign-review') — the generator
@@ -286,10 +335,12 @@ def render_p3_references(books_dir, reviews: list[dict]) -> dict:
                     "url": None,
                 }
             )
+        # the bullet's link text stays the TITLE: the author belongs to the
+        # shelf lists, not to the bibliography line
         items.append(
-            f"- {thesis}: [{b['title']}](/books/{b['slug']}/)"
+            f"- {thesis}: [{b['title']}]({b['page']})"
             if thesis
-            else f"- [{b['title']}](/books/{b['slug']}/)"
+            else f"- [{b['title']}]({b['page']})"
         )
 
     text = p3_header()
@@ -305,11 +356,12 @@ def render_p3_references(books_dir, reviews: list[dict]) -> dict:
 
     # the caller's id -> page map, so the rewriter/validator need no second read
     # of the notes: a page is reached by the livelib ids its note declares (the
-    # shape link-map.json carries). Not used by the renderer itself — its targets
-    # are the very notes it just read.
+    # shape link-map.json carries). Values are `local_target`'s canonical relative
+    # form, so the bullets above, this map and the rewriter name one address.
+    # Not used by the renderer itself — its targets are the very notes it read.
     link_map: dict[str, str] = {}
     for b in notes:
-        target = f"/books/{b['slug']}/"
+        target = b["page"]
         if b["book_id"].isdigit():
             link_map.setdefault(f"book/{b['book_id']}", target)
         if b["review_id"].isdigit():

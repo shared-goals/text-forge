@@ -286,9 +286,17 @@ class TestRenderNote:
         i2, i1 = md.find("^quote_1"), md.find("^quote_2")
         assert 0 < i2 < i1
 
-    def test_no_quotes_header(self):
-        """No empty section header: quotes are self-evident blockquotes."""
+    def test_quotes_header_when_quotes_exist(self):
+        """`## Цитаты` opens the quote section, on its own line, blank after."""
         md = render_note(self.make_entry())
+        assert "## Цитаты\n\n> " in md
+        assert md.count("## Цитаты") == 1
+
+    def test_no_quotes_header_without_quotes(self):
+        """No quotes, no header: an empty section is never written."""
+        entry = copy.deepcopy(self.make_entry())
+        entry["quotes"] = []
+        md = render_note(entry)
         assert "## Цитаты" not in md
 
     def test_invalid_author_omitted_from_frontmatter(self):
@@ -542,19 +550,214 @@ class TestRenderNote:
         assert "quote/101-" not in md
 
     def test_quote_without_url_still_renders_nothing(self):
-        """Quotes lacking quote.url keep having no source line at all."""
+        """Quotes lacking quote.url keep having no source line at all.
+
+        "Nothing" means nothing EXTRA under the blockquote: the page's own byline
+        names the note's book page (a different line, with a /book/ url), which is
+        not a quote source. What must stay absent is a /quote/ attribution for a
+        quote that carries no url.
+        """
         entry, _, _ = group_export(
             books=[BOOK_ZONA], quotes=[dict(Q2, quote=None)], reviews=[]
         )
         md = render_note(entry[0])
         assert "^quote_1" in md
-        assert "LiveLib" not in md
+        assert "livelib.ru/quote/" not in md
         assert "livelib:" not in md
 
     def test_html_stripped_from_quote_text(self):
         md = render_note(self.make_entry())
         assert "<p>" not in md
 
+
+class TestNoteByline:
+    """The byline: one line under the frontmatter naming author, LiveLib, status.
+
+    Author/status/livelib used to be frontmatter-only, invisible on the rendered
+    page. Segments join with ` — `, each is omitted when its data is absent, and
+    when nothing is present the line is not written at all (no empty line to
+    puzzle over). The frontmatter itself is untouched: the byline is a RENDERING
+    of data the note already declares, not new state.
+    """
+
+    @staticmethod
+    def entry(author="Анатолий Рыбаков", status="read", book="1000443129",
+              review=None, quotes=()):
+        return {
+            "book": {
+                "book_url": f"https://www.livelib.ru/book/{book}",
+                "title": "Тяжёлый песок",
+                "author": author,
+                "status": status,
+                "my_mark": None,
+            },
+            "slug": "rybakov-tyazhelyy-pesok",
+            "quotes": list(quotes),
+            "review": review,
+        }
+
+    @staticmethod
+    def quote(qid=101):
+        return {
+            "id": qid,
+            "text": "<p>Текст цитаты</p>",
+            "created_at": "2024-01-01T00:00:00",
+            "quote": {"quote_id": qid, "url": f"/quote/{qid}"},
+            "art_edition": {"id": "1000443129", "url": "/book/1000443129",
+                            "title": "Тяжёлый песок",
+                            "authors": [{"full_name": "Анатолий Рыбаков"}]},
+        }
+
+    @staticmethod
+    def review(rid=900):
+        return {
+            "id": rid,
+            "url": f"/review/{rid}",
+            "text": "<p>Отличный роман.</p>",
+            "created_at": "2023-02-01T00:00:00",
+            "art_edition": {"id": "1000443129", "url": "/book/1000443129",
+                            "title": "Тяжёлый песок",
+                            "authors": [{"full_name": "Анатолий Рыбаков"}]},
+        }
+
+    # -------------------------------------------------------------- all segments
+
+    def test_all_three_segments_in_order(self):
+        """author — LiveLib — status, exactly the documented shape.
+
+        The byline is built on a REAL entry (via `group_export`, the same source
+        as `render_note`'s own tests): its frontmatter `livelib_book` is the id
+        the note declares, which is the id its LiveLib segment names.
+        """
+        entry = group_export(
+            books=[{"book_url": "https://www.livelib.ru/book/1000443129",
+                   "title": "Тяжёлый песок", "author": "Анатолий Рыбаков",
+                   "my_mark": None, "status": "read"}],
+            quotes=[], reviews=[])[0][0]
+        md = render_note(entry)
+        line = next(l for l in md.split("\n") if "LiveLib" in l and "book/" in l)
+        assert line == ("**Анатолий Рыбаков** — "
+                       "[LiveLib](https://www.livelib.ru/book/1000443129) — прочитано")
+        # the frontmatter still carries the same value: the byline is a rendering
+        assert 'livelib_book: "https://www.livelib.ru/book/1000443129"' in md
+
+    def test_byline_sits_right_after_frontmatter(self):
+        md = render_note(self.entry())
+        lines = md.split("\n")
+        close = lines.index("---", 1)
+        assert lines[close + 2].startswith("**Анатолий Рыбаков**")
+
+    def test_byline_is_one_line_only(self):
+        md = render_note(self.entry())
+        # exactly one byline line, and it is not glued to the frontmatter fence
+        lines = md.split("\n")
+        close = lines.index("---", 1)
+        assert lines[close + 1] == ""
+        assert lines[close + 2].startswith("**")
+        assert lines[close + 3] == ""
+        bylines = [l for l in lines if l.startswith("**")]
+        assert len(bylines) == 1
+        assert bylines[0].count("\u2014") == 2
+
+    def test_frontmatter_still_carries_the_same_fields(self):
+        """The byline adds nothing to the frontmatter — rendering only."""
+        md = render_note(self.entry())
+        fm = md.split("---")[1]
+        assert 'title: "Тяжёлый песок"' in fm
+        assert "author: Анатолий Рыбаков" in fm
+        assert "status: read" in fm
+        assert 'livelib_book: "https://www.livelib.ru/book/1000443129"' in fm
+        assert "LiveLib" not in fm
+
+    # ------------------------------------------------------------- status labels
+
+    def test_status_labels_are_russian(self):
+        got = {}
+        for status in ("read", "unread", "wish", "reading"):
+            md = render_note(self.entry(status=status))
+            got[status] = next(l for l in md.split("\n") if "**" in l)
+        assert got["read"].endswith("— прочитано")
+        assert got["unread"].endswith("— недочитано")
+        assert got["wish"].endswith("— хочу прочитать")
+        assert got["reading"].endswith("— читаю")
+
+    def test_unknown_status_drops_the_segment_but_keeps_the_rest(self):
+        """A status outside the label map is no segment: no label, no trailing dash.
+        The frontmatter keeps declaring what the export said — the byline only
+        renders what a reader can use.
+        """
+        md = render_note(self.entry(status="вручно"))
+        line = next(l for l in md.split("\n") if l.startswith("**"))
+        assert line == ("**Анатолий Рыбаков** — "
+                       "[LiveLib](https://www.livelib.ru/book/1000443129)")
+        assert "вручно" not in line
+
+    def test_none_status_drops_the_segment(self):
+        md = render_note(self.entry(status=None))
+        line = next(l for l in md.split("\n") if "**" in l)
+        assert not line.endswith("прочитано")
+
+    # ------------------------------------------------------------- other segments
+
+    def test_invalid_author_drops_the_author_segment(self):
+        """A rating in the author field is no name — the byline must not lie."""
+        md = render_note(self.entry(author="4,6"))
+        byline = next(l for l in md.split("\n")
+                     if "[LiveLib](https://www.livelib.ru/book/" in l)
+        assert "**" not in byline
+        assert byline.startswith("[LiveLib]")
+
+    def test_no_livelib_book_drops_the_link_segment(self):
+        """A note whose url carries no numeric id has no page to link to.
+
+        The entry names an author and a shelf, so those two segments stay and no
+        dangling third one is padded in.
+        """
+        entry = self.entry()
+        entry["book"]["book_url"] = "no-id-here"
+        md = render_note(entry)
+        line = next(l for l in md.split("\n") if l.startswith("**"))
+        assert line == "**Анатолий Рыбаков** — прочитано"
+        assert "[LiveLib]" not in md.split("## ")[0].split("---")[2]
+
+    def test_all_segments_absent_writes_no_byline(self):
+        """No author, no id, no status: the page opens with its content.
+
+        `status: none` means "on no shelf", so it is no label; a rating is no
+        name; a url with no id is no page — nothing survives, nothing is printed.
+        """
+        entry = self.entry(author="4,6", status="none", book="no-id-here")
+        md = render_note(entry)
+        lines = md.rstrip("\n").split("\n")
+        close = lines.index("---", 1)
+        # what follows the closed frontmatter is content (or nothing), never a byline
+        assert "**" not in md
+        assert "\u2014 [LiveLib]" not in md[md.index("---\n", 1):]
+        assert lines[close] == "---"
+        assert all(not l.startswith("**") for l in lines[close:])
+
+    # ------------------------------------------------------------------- order
+
+    def test_order_byline_review_quotes(self):
+        md = render_note(self.entry(review=self.review(),
+                                   quotes=[self.quote(101)]))
+        lines = [l for l in md.split("\n") if l.strip()]
+        i_byline = next(i for i, l in enumerate(lines) if l.startswith("**"))
+        i_review = lines.index("## Рецензия")
+        i_quotes = lines.index("## Цитаты")
+        assert i_byline < i_review < i_quotes
+
+    def test_order_byline_quotes_without_review(self):
+        md = render_note(self.entry(quotes=[self.quote(101)]))
+        lines = [l for l in md.split("\n") if l.strip()]
+        assert lines.index("## Цитаты") > next(i for i, l in enumerate(lines)
+                                              if l.startswith("**"))
+        assert "## Рецензия" not in md
+
+    def test_page_order_survives_two_renders(self):
+        """Byte stability: the byline is deterministic, not dict-order luck."""
+        entry = self.entry(review=self.review(), quotes=[self.quote(101)])
+        assert render_note(entry) == render_note(entry)
 
 class TestValidateTextLinks:
     def make_books_dir(self, tmp_path):
@@ -583,12 +786,13 @@ class TestValidateTextLinks:
             (
                 "[цитата](https://www.livelib.ru/quote/101-zona-sergej-dovlatov) "
                 "[рецензия](https://www.livelib.ru/review/900-zona-sergej-dovlatov) "
-                "[книга](https://www.livelib.ru/book/1000699994)"
+                "[книга](https://www.livelib.ru/book/1000699994) "
+                "[страница](books/dovlatov-zona.md)"
             ),
         )
         report = validate_text_links(text_dir, books_dir)
-        assert report["total"] == 3
-        assert report["resolved"] == 3
+        assert report["total"] == 4
+        assert report["resolved"] == 4
         assert report["unresolved"] == []
 
     def test_unresolved_link_reported(self, tmp_path):
@@ -1711,8 +1915,8 @@ class TestP3FromScratch:
         out = render_p3_references(books, reviews)
         expected = (
             f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n\n"
-            "- Тезис Б: [Б](/books/b/)\n"
-            "- Тезис А: [А](/books/a/)\n"
+            "- Тезис Б: [Б](books/b.md)\n"
+            "- Тезис А: [А](books/a.md)\n"
         )
         assert out["text"].startswith(expected), out["text"]
         # the opening `---` has a closing partner before any prose
@@ -1734,7 +1938,7 @@ class TestP3FromScratch:
         assert (
             bib
             == out["items"]
-            == ["- Тезис Б: [Б](/books/b/)", "- Тезис А: [А](/books/a/)"]
+            == ["- Тезис Б: [Б](books/b.md)", "- Тезис А: [А](books/a.md)"]
         )
         # shelf lists sit BELOW the bullets
         details = [i for i, l in enumerate(lines) if l.startswith("/// details")]
@@ -1763,8 +1967,8 @@ class TestP3FromScratch:
             books, [_review(1, "Тезис А", "1"), _review(2, "Тезис Б", "2")]
         )
         assert out["items"] == [
-            "- Тезис Б: [Б](/books/b/)",
-            "- Тезис А: [А](/books/a/)",
+            "- Тезис Б: [Б](books/b.md)",
+            "- Тезис А: [А](books/a.md)",
         ]
         assert [(x["slug"], x["weight"]) for x in important_books(books)] == [
             ("b", 1),
@@ -1798,7 +2002,7 @@ class TestP3FromScratch:
         assert out["items"] == [
             (
                 "- Про Счастье и Цифру: [Модель количественной оценки "
-                "уровня счастья](/books/a/)"
+                "уровня счастья](books/a.md)"
             )
         ]
         assert out["warnings"] == []
@@ -1810,7 +2014,7 @@ class TestP3FromScratch:
             a=_note("Икс", "1005497029", review="777", important=True, weight=1),
         )
         out = render_p3_references(books, [_review(777, "Свой тезис", "1005497029")])
-        assert out["items"] == ["- Свой тезис: [Икс](/books/a/)"]
+        assert out["items"] == ["- Свой тезис: [Икс](books/a.md)"]
         assert "livelib.ru" not in out["text"].split("///")[0]
 
     def test_untitled_review_drops_the_prefix_and_warns(self, tmp_path):
@@ -1819,7 +2023,7 @@ class TestP3FromScratch:
             tmp_path, a=_note("А", "1", review="1", important=True, weight=1)
         )
         out = render_p3_references(books, [_review(1, None, "1")])
-        assert out["items"] == ["- [А](/books/a/)"]
+        assert out["items"] == ["- [А](books/a.md)"]
         w = _about(out, "untitled-review", "a")
         assert len(w) == 1 and w[0]["weight"] == 1 and w[0]["review_id"] == "1"
 
@@ -1834,7 +2038,7 @@ class TestP3FromScratch:
             tmp_path, a=_note("Книга", "1005497029", important=True, weight=1)
         )
         out = render_p3_references(books, [])
-        assert out["items"] == ["- [Книга](/books/a/)"]
+        assert out["items"] == ["- [Книга](books/a.md)"]
         assert out["warnings"] == []
 
     def test_foreign_review_supplies_no_thesis_and_is_reported(self, tmp_path):
@@ -1844,7 +2048,7 @@ class TestP3FromScratch:
             x=_note("Икс", "1005497029", review="777", important=True, weight=1),
         )
         out = render_p3_references(books, [_review(777, "Чужой тезис", "999")])
-        assert out["items"] == ["- [Икс](/books/x/)"]
+        assert out["items"] == ["- [Икс](books/x.md)"]
         assert "Чужой тезис" not in out["text"]
         assert [w["reason"] for w in out["warnings"]] == ["foreign-review"]
 
@@ -1868,7 +2072,7 @@ class TestP3FromScratch:
                 }
             ],
         )
-        assert out["items"] == ["- Тезис обзора: [Работа](/books/rabota/)"]
+        assert out["items"] == ["- Тезис обзора: [Работа](books/rabota.md)"]
         assert out["warnings"] == []
 
     def test_empty_corpus_still_emits_a_valid_page(self, tmp_path):
@@ -1883,14 +2087,14 @@ class TestP3FromScratch:
         assert out["items"] == []
         assert out["warnings"] == []
         assert out["text"] == self.FM
-        assert out["link_map"] == {"book/1": "/books/a/"}
+        assert out["link_map"] == {"book/1": "books/a.md"}
 
     def test_missing_export_file_behaves_as_empty_reviews(self, tmp_path):
         books = _write_books(tmp_path, a=_note("Книга", "1", important=True, weight=1))
         missing = tmp_path / "livelib-reviews-api.json"
         assert not missing.exists()
         out = render_p3_references(books, json.loads("[]"))
-        assert out["items"] == ["- [Книга](/books/a/)"]
+        assert out["items"] == ["- [Книга](books/a.md)"]
         assert out["warnings"] == []
 
     def test_two_runs_are_byte_identical(self, tmp_path):
@@ -1938,7 +2142,7 @@ class TestP3FromScratch:
             ("y", 1),
             ("x", None),
         ]
-        assert out["items"] == ["- Тезис: [Игрек](/books/y/)", "- [Икс](/books/x/)"]
+        assert out["items"] == ["- Тезис: [Игрек](books/y.md)", "- [Икс](books/x.md)"]
 
 
 class TestP3ShelfSections:
@@ -1994,9 +2198,9 @@ class TestP3ShelfSections:
         )[1]
         got = [l for l in body.splitlines() if l.startswith("- [")]
         assert got == [
-            "- [Антоновка](/books/aa/)",
-            "- [Яблоко](/books/ya/)",
-            "- [Ярмо](/books/ya2/)",
+            "- [Антоновка](books/aa.md)",
+            "- [Яблоко](books/ya.md)",
+            "- [Ярмо](books/ya2.md)",
         ]
 
     def test_each_section_is_closed(self, tmp_path):
@@ -2042,7 +2246,7 @@ class TestP3ShelfSections:
             a=_note("А", "1", review="1", status="none", important=True, weight=1),
         )
         out = render_p3_references(books, [_review(1, "Тезис А", "1")])
-        assert out["items"] == ["- Тезис А: [А](/books/a/)"]
+        assert out["items"] == ["- Тезис А: [А](books/a.md)"]
         assert "///" not in out["text"]
         assert out["warnings"] == []
 
@@ -2053,8 +2257,8 @@ class TestP3ShelfSections:
             a=_note("А", "1", review="1", status="read", important=True, weight=1),
         )
         text = render_p3_references(books, [_review(1, "Тезис А", "1")])["text"]
-        assert "- Тезис А: [А](/books/a/)" in text
-        assert "/// details | Прочтённые (1)\n- [А](/books/a/)\n///" in text
+        assert "- Тезис А: [А](books/a.md)" in text
+        assert "/// details | Прочтённые (1)\n- [А](books/a.md)\n///" in text
 
     def test_warning_reasons_are_known(self, tmp_path):
         """The reason vocabulary is closed: a new reason must be named above."""
@@ -2098,7 +2302,7 @@ class TestP3RealCorpus:
         items = out["items"]
         assert len(items) == len(books)
         for b, item in zip(books, items):
-            slug = re.search(r"/books/(.+?)/\)$", item).group(1)
+            slug = re.search(r"books/(.+?)\.md\)$", item).group(1)
             assert slug == b["slug"], item
             assert "livelib.ru" not in item
 
@@ -2108,7 +2312,7 @@ class TestP3RealCorpus:
         # link_map keys EVERY note by its own ids — not just important ones
         lm = out["link_map"]
         for n in _all_notes(self.REPO / "text" / "books"):
-            assert lm.get(f"book/{n['book_id']}") == f"/books/{n['slug']}/", n["slug"]
+            assert lm.get(f"book/{n['book_id']}") == f"books/{n['slug']}.md", n["slug"]
 
 
 class TestBuildExport:

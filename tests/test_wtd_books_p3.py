@@ -143,7 +143,7 @@ def test_important_note_without_thesis_warns(tmp_path: pathlib.Path):
         ],
     )
     # the bullet targets the note's own page; the missing thesis is reported
-    assert out["items"] == ["- [Важная книга](/books/important-note/)"]
+    assert out["items"] == ["- [Важная книга](books/important-note.md)"]
     assert {w["reason"] for w in out["warnings"]} == {"untitled-review", "no status"}
     thesis_warnings = _about(out, "untitled-review")
     assert len(thesis_warnings) == 1

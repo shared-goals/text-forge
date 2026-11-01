@@ -26,9 +26,16 @@ may appear in several notes. That is not an error: the FIRST note wins and the
 later ones are recorded under the `dupes` key for the report.
 
 `rewrite_text_links(root, apply=)` walks text/*.md — excluding text/books/ and
-any `_curation` directory — and swaps livelib URLs for the local path. It
+any `_curation` directory — and swaps livelib URLs for the relative page path. It
 defaults to a dry run: report only, no writes. Rewriting the URL only, never the
 link text: what the author wrote stays what the reader reads.
+
+A chapter may also still carry the OLD site-absolute form (`/books/<slug>/`, the
+shape this pipeline wrote before targets went relative). Those lines are candidates
+too, resolved through the SAME link_map — so a slug no note declares is reported
+as unresolved instead of being blindly text-substituted — and the link the pass
+produces is no candidate on the next run, which makes the whole migration
+idempotent. `LOCAL_TARGET` is the one regex both forms share.
 """
 
 import pathlib
@@ -47,6 +54,16 @@ FRONTMATTER = re.compile(r"\A---\n(.*?)\n---", re.DOTALL)
 BLOCK_ID = re.compile(r"[ \t]+\^([A-Za-z0-9][A-Za-z0-9_-]*)[ \t]*$")
 ATTRIBUTION = re.compile(r"^—\s*\[")
 DUPES_KEY = "dupes"
+
+# a local target this pipeline writes, in either form:
+#   new      `books/<slug>.md`   — the canonical shape (group 1 absent)
+#   legacy   `/books/<slug>/`    — site-absolute, corpora predating the move
+# `local_target()` below is the generator of the canonical one; this regex only
+# RECOGNISES the shapes. The two alternatives cannot match the same text (a leading
+# `/` versus a trailing `.md`), so an already-canonical target matches with group 1
+# unset and the caller skips it: idempotence by target, not by luck.
+# The optional `#anchor` is what the reader asked for and is carried over.
+LOCAL_TARGET = re.compile(r"(/)?books/([A-Za-z0-9][A-Za-z0-9_-]*)(?:/|\.md)(?:#([A-Za-z0-9_-]+))?")
 
 
 def _entries(text: str) -> list[tuple[str, str, str]]:
@@ -129,9 +146,32 @@ def _key_of(url: str) -> str | None:
 
 
 def local_target(entry: dict) -> str:
-    """The site-root path a map entry points at (`/books/<slug>[#anchor]`)."""
+    """The RELATIVE page path a map entry points at (`books/<slug>.md`).
+
+    The ONE producer of the canonical local-link form: bullets, shelf lines,
+    link-map values and the rewriter's replacements all come through here, so the
+    three consumers of a target cannot drift apart in shape.
+
+    `entry["anchor"]` is the anchor THIS entry supplies — the block id of the
+    quote the key names, or None for a page-level key. It is appended as
+    `#<anchor>`; an entry without an anchor yields the bare page. An anchor is
+    never carried in from anywhere else: a key that names no block must not send
+    the reader to some other block on the page.
+    """
     anchor = entry.get("anchor")
-    return f"/books/{entry['slug']}/" + (f"#{anchor}" if anchor else "")
+    return f"books/{entry['slug']}.md" + (f"#{anchor}" if anchor else "")
+
+
+def local_slugs(link_map: dict) -> set:
+    """The slugs a legacy `/books/<slug>/` link may legitimately name.
+
+    Derived from the map's own entries rather than from a second index: a legacy
+    link is a statement about a note we already key by id, so the legal slug set
+    is the map's slugs — and `/books/ghost/` is unresolved, exactly as a livelib
+    URL with no note is.
+    """
+    return {entry["slug"] for entry in link_map.values()
+            if isinstance(entry, dict) and entry.get("slug")}
 
 
 def rewrite_text_links(root, apply: bool = False,
@@ -140,6 +180,10 @@ def rewrite_text_links(root, apply: bool = False,
 
     root — the content repo root (holds `text/`). apply=False (default) writes
     nothing: dry run. apply=True rewrites the files in place.
+
+    Two candidate shapes are resolved in one pass: a livelib URL (through the
+    `<kind>/<id>` map) and a legacy site-absolute local link `/books/<slug>/`
+    (through the slugs the notes declare). Both feed the same report fields.
 
     Returns {"files", "replacements", "candidates", "candidates_local",
     "replacements_list", "unresolved", "dupes", "link_map", "applied"} where
@@ -164,6 +208,9 @@ def rewrite_text_links(root, apply: bool = False,
     candidates_local = 0
     replaced: list[dict] = []
     unresolved: list[dict] = []
+    # the legacy pass resolves a `/books/<slug>/` link against the slugs the notes
+    # actually declare, so a stale link is reported rather than rewritten blindly
+    valid_slugs = local_slugs(link_map)
 
     for chapter in sorted(text_dir.glob("*.md")) if text_dir.is_dir() else []:
         text = chapter.read_text(encoding="utf-8")
@@ -183,6 +230,31 @@ def rewrite_text_links(root, apply: bool = False,
                     continue
                 candidates_local += 1
                 target = local_target(entry)
+                file_replacements += 1
+                replaced.append({"file": chapter.name, "line": lineno,
+                               "old": url, "new": target})
+                new_text = new_text.replace(url, target)
+            # the legacy pass: the same resolution, keyed by SLUG instead of by a
+            # livelib id. The target already in the canonical form is no
+            # candidate at all — that is what makes a second run silent.
+            # The anchor a legacy link carries is what the READER asked for, so it
+            # is kept verbatim; the resolution only decides whether the PAGE is
+            # one we hold, and an unanchorable page is never invented.
+            for m in LOCAL_TARGET.finditer(line):
+                url = m.group(0)
+                if not url.startswith("/"):          # already `books/<slug>.md`
+                    continue
+                candidates += 1
+                anchor = m.group(3)
+                slug = m.group(2)
+                if slug not in valid_slugs:
+                    unresolved.append({"url": url, "file": chapter.name,
+                                     "line": lineno})
+                    continue
+                # the page is produced by local_target; the anchor the legacy link
+                # already carries is grafted on, since it names a block inside it
+                target = local_target({"slug": slug}) + (f"#{anchor}" if anchor else "")
+                candidates_local += 1
                 file_replacements += 1
                 replaced.append({"file": chapter.name, "line": lineno,
                                "old": url, "new": target})

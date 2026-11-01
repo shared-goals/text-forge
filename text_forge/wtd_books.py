@@ -531,9 +531,46 @@ def _author_valid(author: str) -> bool:
     return bool(_surname(author))
 
 
+# the Russian label a byline prints for a frontmatter `status:` value. A status
+# outside this map (`none`, a hand-written value, an export marker) has no label:
+# the segment is omitted rather than printed raw — the byline is for a reader, and
+# `none` in a rendered line says nothing a reader can use.
+STATUS_LABELS = {
+    "read": "прочитано",
+    "unread": "недочитано",
+    "wish": "хочу прочитать",
+    "reading": "читаю",
+}
+
+
+def _byline(book: dict, book_page: str) -> str:
+    """The note's byline line: author — LiveLib — status, ` — `-joined.
+
+    Every segment comes from data the note already declares — nothing is invented:
+    the author only when `_author_valid` accepts it, the LiveLib link only when the
+    note has an id to point at, the label only for a status in STATUS_LABELS.
+    Returns '' when no segment survives, and the caller then writes no line at all.
+    """
+    segments: list[str] = []
+    author = (book.get("author") or "").strip()
+    if _author_valid(author):
+        segments.append(f"**{author}**")
+    if book_page:
+        segments.append(f"[LiveLib](https://www.livelib.ru/book/{book_page})")
+    label = STATUS_LABELS.get((book.get("status") or "").lower())
+    if label:
+        segments.append(label)
+    return " \u2014 ".join(segments)
+
+
 def render_note(entry: dict) -> str:
     book = entry["book"]
     slug_url = book["book_url"]
+    # the page the frontmatter will declare this note's own: the id the url
+    # carries (the decorative slug tail is stripped, so it cannot leak into the
+    # byline either). '' when the url names no numeric id at all.
+    book_page = _book_id(slug_url)
+    book_page = book_page if book_page.isdigit() else ""
     fm = [
         "---",
         # always double-quoted: bare scalars with ':' break Obsidian Bases YAML
@@ -570,6 +607,15 @@ def render_note(entry: dict) -> str:
             fm.append(f'livelib_review: "https://www.livelib.ru/review/{rid}"')
     body = ["\n".join(fm), "---", ""]
 
+    # the byline: one line naming what the frontmatter says but cannot show — the
+    # author, the source page, the shelf the book sits on. A segment is omitted
+    # when its data is absent, and when nothing is left the line is not written:
+    # an empty byline would be noise on a page that has nothing to say.
+    byline = _byline(book, book_page)
+    if byline:
+        body.append(byline)
+        body.append("")
+
     if entry["review"]:
         body += [
             "## Рецензия",
@@ -577,6 +623,12 @@ def render_note(entry: dict) -> str:
             _strip_html(entry["review"]["text"]),
             "",
         ]
+
+    if entry["quotes"]:
+        # the quotes open under their own heading, so the page reads
+        # byline / Рецензия / Цитаты instead of dropping the reader into a
+        # blockquote with no label
+        body += ["## Цитаты", ""]
 
     for n, q in enumerate(entry["quotes"], start=1):
         meta = q.get("quote") or {}
@@ -1071,6 +1123,21 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
     }
 
 
+def _note_slug_of(target: str) -> str:
+    """The note SLUG a local link or mapping value names, whatever it spells.
+
+    Accepts `abe`, `/books/abe/`, `books/abe.md`, and any of them with an
+    `#anchor`: the slug is the identity of the note, while the shape around it is
+    only how the writer chose to address it. '' when nothing is there.
+    """
+    slug = (target or "").split("#")[0].strip()
+    slug = slug.removeprefix("/")
+    slug = slug.removeprefix("books/")
+    slug = slug.removesuffix("/")
+    slug = slug.removesuffix(".md")
+    return slug
+
+
 def _note_index(books_dir) -> dict:
     """Map every livelib id mentioned in note-books -> note path."""
     import re as _re
@@ -1129,18 +1196,36 @@ def livelib_outside_books(root) -> list[dict]:
 
 
 def validate_text_links(text_dir, books_dir, link_mappings_path=None) -> dict:
-    """Report-only: resolve every livelib link in text/*.md against note-books.
+    """Report-only: resolve every link in text/*.md against the note-books.
 
-    A link resolves when its numeric id appears in any note (book/review attr,
-    an edition line, or a quote url). link_mappings_path — the mapping
-    build_books emits — maps URLs to note slugs for the cases a note names its
+    A LIVELIB link resolves when its numeric id appears in any note (book/review
+    attr, an edition line, or a quote url). link_mappings_path — the mapping
+    build_books emits — maps URLs to note targets for the cases a note names its
     subject by an id the note file does not print. Returns
     {total, resolved, unresolved: [{url, file}], livelib_outside_books}.
+
+    A LOCAL target (`books/<slug>.md`, or the legacy `/books/<slug>/`, either with
+    an optional `#anchor`) resolves against the SLUGs of the notes on disk, in
+    either spelling: the pair is written by this same pipeline, so the link is
+    good as long as the note it names exists — true before a rebuild (the chapters
+    were written against the corpus that is on disk) and after it (the renderer
+    wrote the page the link names). Which FORM a chapter must write is pinned by
+    the generator/rewriter tests, not here; this check only catches a local link
+    naming a note that is gone (a renamed or deleted slug).
 
     `livelib_outside_books` is the post-rewrite cleanliness check: chapters must
     carry no livelib URL at all once their targets are local pages.
     """
-    import re as _re
+    from text_forge.wtd_links import LOCAL_TARGET
+
+    # the livelib reference with kind and id readable: the module-level
+    # LIVELIB_URL_RE drops both behind non-capturing groups, and this check has to
+    # know WHICH work a url names, not only that a url is there. One host shape
+    # only (https + www), as before: an http/without-www url is not a reference a
+    # reader follows and not a note's own attribution either.
+    livelib_ref = re.compile(
+        r"https://www\.livelib\.ru/(book|work|review|quote)/(\d+)[^)\s\"']*")
+
     index = _note_index(books_dir)
     mappings = _curation_section(link_mappings_path, "links") or {}
     # keyed two ways so the written form of a url does not matter: by the url as
@@ -1148,22 +1233,44 @@ def validate_text_links(text_dir, books_dir, link_mappings_path=None) -> dict:
     # short /book/<id> and the slug-suffixed /book/<id>-<title>-<author> form, so
     # a text and a note may name the same work differently.
     norm_url, norm_key = {}, {}
-    for url, slug in mappings.items():
-        norm_url[url] = slug
+    # a mapping's value names a NOTE, and the shape it spells is not what decides
+    # the match: build_books emits a bare slug, the p3 renderer a whole relative
+    # target, so both are reduced to the slug the note is filed under
+    mapped_slugs = set()
+    for url, target in mappings.items():
+        norm_url[url] = target
+        mapped_slugs.add(_note_slug_of(target))
         key = _link_key(url)
         if key:
-            norm_key[key] = slug
+            norm_key[key] = target
+    # the slugs the notes actually are: a local target names its note by slug, so
+    # the note-file set IS that resolution (no second index of the corpus needed)
+    slugs = {note.stem for note in pathlib.Path(books_dir).glob("*.md")} \
+        if pathlib.Path(books_dir).is_dir() else set()
+
     total, resolved, unresolved = 0, 0, []
     for chapter in sorted(pathlib.Path(text_dir).glob("*.md")):
-        for m in _re.finditer(r"https://www\.livelib\.ru/(?:book|work|review|quote)/(\d+)[^)\s\"']*",
-                              chapter.read_text(encoding="utf-8")):
+        body = chapter.read_text(encoding="utf-8")
+        for m in livelib_ref.finditer(body):
+            # only a full www url is a reference a reader can follow out to
+            # livelib; the short `/quote/<id>` form belongs to a note's own line
+            if not m.group(0).startswith("https://www.livelib.ru"):
+                continue
             total += 1
             url = m.group(0).rstrip(".,;")
-            key = (m.group(0).split("/")[3], m.group(1))  # (kind, id)
-            if m.group(1) in index or url in norm_url or key in norm_key:
+            kind, rid = m.group(1), m.group(2)          # (kind, id)
+            if rid in index or url in norm_url or (kind, rid) in norm_key:
                 resolved += 1
             else:
                 unresolved.append({"url": url, "file": chapter.name})
+        # local targets, either spelling: an anchor is a place INSIDE a page, so
+        # only the slug part has to name a note that exists
+        for m in LOCAL_TARGET.finditer(body):
+            total += 1
+            if m.group(2) in slugs or m.group(2) in mapped_slugs:
+                resolved += 1
+            else:
+                unresolved.append({"url": m.group(0), "file": chapter.name})
     return {"total": total, "resolved": resolved, "unresolved": unresolved,
             "livelib_outside_books": livelib_outside_books(text_dir)}
 

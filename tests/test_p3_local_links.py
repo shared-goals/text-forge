@@ -1,6 +1,6 @@
 """Tests for the p3 projection's LOCAL link targets and status lists.
 
-Every bibliography bullet targets the site's own book page (`/books/<slug>/`) —
+Every bibliography bullet targets the site's own book page (`books/<slug>.md`) —
 the target is the note the generator just read, so there is no resolution step
 and no livelib URL left on the page. Collapsed status lists below the bullets
 come from the notes' frontmatter `status:`; a note that names no shelf is
@@ -22,8 +22,11 @@ from text_forge.wtd_books_p3 import (
 STATUS_ORDER = ["Читаю", "Прочтённые", "Недочитанные", "Хочу прочитать"]
 
 
-def note(title, book_id, *, review=None, status=None, important=None, weight=None):
+def note(title, book_id, *, review=None, status=None, important=None, weight=None,
+         author=None):
     fm = ["---", f'title: "{title}"', "tags:", "  - book"]
+    if author:
+        fm.append(f'author: {author}')
     if status:
         fm.append(f"status: {status}")
     if important:
@@ -109,7 +112,7 @@ class TestLocalTargets:
             ),
         )
         out = render_p3_references(books, [REVIEW_1])
-        assert "- Тезис А: [Четвертый ледниковый период](/books/abe/)" in out["text"]
+        assert "- Тезис А: [Четвертый ледниковый период](books/abe.md)" in out["text"]
         assert "livelib.ru" not in out["text"].split("///")[0]
 
     def test_book_without_review_links_local_page(self, tmp_path):
@@ -117,7 +120,7 @@ class TestLocalTargets:
             tmp_path, abe=note("Икс", "1005497029", important=True, weight=1)
         )
         out = render_p3_references(books, [])
-        assert "- [Икс](/books/abe/)" in out["text"]
+        assert "- [Икс](books/abe.md)" in out["text"]
 
     def test_a_note_that_is_not_important_is_not_cited(self, tmp_path):
         """Importance decides the bibliography — and nothing else can add a line.
@@ -149,7 +152,7 @@ class TestLocalTargets:
         assert "livelib.ru/review/4002646" not in out["text"]
         # the page still exists and the shelf still lists it
         assert out["text"].startswith(f"{P3_FRONTMATTER}\n# {P3_TITLE}\n\n{P3_INTRO}\n")
-        assert "- [Мастер и Маргарита](/books/master/)" in out["text"]
+        assert "- [Мастер и Маргарита](books/master.md)" in out["text"]
 
     def test_foreign_review_is_not_cited_and_leaves_no_url(self, tmp_path):
         """A review belonging to another work is neither thesis nor target."""
@@ -158,7 +161,7 @@ class TestLocalTargets:
             a=note("А", "1", review="9999999", status="none", important=True, weight=1),
         )
         out = render_p3_references(books, [REVIEW_FOREIGN])
-        assert out["items"] == ["- [А](/books/a/)"]
+        assert out["items"] == ["- [А](books/a.md)"]
         assert "livelib.ru" not in out["text"]
         assert [w["reason"] for w in out["warnings"]] == ["foreign-review"]
 
@@ -223,9 +226,9 @@ class TestStatusSections:
         body = out["text"].split("/// details | Прочтённые (3)")[1]
         got = [l for l in body.splitlines() if l.startswith("- [")]
         assert got == [
-            "- [Антоновка](/books/aa/)",
-            "- [Яблоко](/books/ya/)",
-            "- [Ярмо](/books/ya2/)",
+            "- [Антоновка](books/aa.md)",
+            "- [Яблоко](books/ya.md)",
+            "- [Ярмо](books/ya2.md)",
         ]
 
     def test_closing_marker_after_each_section(self, tmp_path):
@@ -271,7 +274,7 @@ class TestStatusSections:
             a=note("А", "100", review="1", status="none", important=True, weight=1),
         )
         out = render_p3_references(books, [REVIEW_1])
-        assert "- Тезис А: [А](/books/a/)" in out["text"]
+        assert "- Тезис А: [А](books/a.md)" in out["text"]
         assert "///" not in out["text"]
 
     def test_empty_corpus_emits_no_sections(self, tmp_path):
@@ -292,3 +295,110 @@ class TestByteStability:
         second = render_p3_references(books, [REVIEW_1, REVIEW_2])
         assert first["text"] == second["text"]
         assert first["warnings"] == second["warnings"]
+
+
+class TestLinkMapValues:
+    """The `<kind>/<id>` -> target map the build hands to the rewriter/validator.
+
+    VALUES are the canonical relative targets (`local_target`'s shape), so the
+    three consumers — bullets, the validator and the rewriter — all name the same
+    address. KEYS are unchanged: an id is an id whatever the target's shape.
+    """
+
+    def test_book_id_maps_to_relative_target(self, tmp_path):
+        books = write_books(tmp_path, a=note("А", "1", status="read"))
+        assert render_p3_references(books, [])["link_map"] == {"book/1": "books/a.md"}
+
+    def test_review_and_edition_ids_map_to_the_same_target(self, tmp_path):
+        md = ('---\ntitle: "Работа"\nstatus: read\n'
+              'livelib_book: "https://www.livelib.ru/book/777"\n'
+              'livelib_editions:\n  - "https://www.livelib.ru/book/999"\n'
+              'livelib_review: "https://www.livelib.ru/review/4242"\n---\nbody\n')
+        lm = render_p3_references(write_books(tmp_path, rabota=md), [])["link_map"]
+        assert lm == {"book/777": "books/rabota.md",
+                     "book/999": "books/rabota.md",
+                     "review/4242": "books/rabota.md"}
+
+    def test_local_target_and_bullet_target_agree(self, tmp_path):
+        """One producer: the map value is exactly `local_target` of the note."""
+        from text_forge.wtd_links import local_target
+
+        books = write_books(tmp_path, abe=note("Абе", "1", status="read"))
+        lm = render_p3_references(books, [])["link_map"]
+        entry = {"slug": "abe", "anchor": None}
+        assert lm["book/1"] == local_target(entry)
+        assert "- [Абе](" + local_target(entry) + ")" in render_p3_references(
+            books, [])["text"]
+
+
+class TestShelfAuthor:
+    """A shelf line names the author beside the title, so the list reads like a
+    bibliography instead of a pile of titles. No valid author -> no ` — ` tail."""
+
+    def test_shelf_line_carries_title_and_author(self, tmp_path):
+        books = write_books(tmp_path,
+                           rybakov=note("Тяжёлый песок", "1", status="read",
+                                       author="Анатолий Рыбаков"))
+        text = render_p3_references(books, [])["text"]
+        assert "/// details | Прочтённые (1)\n" \
+               "- [Тяжёлый песок — Анатолий Рыбаков](books/rybakov.md)\n///" in text
+
+    def test_authorless_note_has_no_em_dash_tail(self, tmp_path):
+        books = write_books(tmp_path, x=note("Икс", "1", status="read"))
+        assert "- [Икс](books/x.md)" in render_p3_references(
+            books, [])["text"]
+
+    def test_digit_only_author_is_not_an_author(self, tmp_path):
+        """A rating sitting in the author field ('4,6') is no name: bare title."""
+        books = write_books(tmp_path, x=note("Лунная пыль", "1", status="read",
+                                            author="4,6"))
+        assert "- [Лунная пыль](books/x.md)" in render_p3_references(
+            books, [])["text"]
+
+    def test_initials_only_author_is_not_an_author(self, tmp_path):
+        books = write_books(tmp_path, x=note("Икс", "1", status="read",
+                                            author="А. Ф."))
+        assert "- [Икс](books/x.md)" in render_p3_references(
+            books, [])["text"]
+
+    def test_shelf_still_sorts_by_title_not_author(self, tmp_path):
+        """The sort key stays the TITLE: an author-driven order would reshuffle
+        every shelf in the corpus without anyone asking for it."""
+        books = write_books(
+            tmp_path,
+            ya=note("Яблоко", "1", status="read", author="Чехов Антон"),
+            aa=note("Антоновка", "2", status="read", author="Борис Акунин"),
+        )
+        body = render_p3_references(books, [])["text"].split(
+            "/// details | Прочтённые (2)")[1]
+        got = [l for l in body.splitlines() if l.startswith("- [")]
+        assert got == [
+            "- [Антоновка — Борис Акунин](books/aa.md)",
+            "- [Яблоко — Чехов Антон](books/ya.md)",
+        ]
+
+    def test_author_text_is_the_note_value_verbatim(self, tmp_path):
+        """The shelf prints what the note DECLARES: no name-order repair here
+        (the note's own slug already went through `_surname`)."""
+        books = write_books(tmp_path,
+                           chekhov=note("Попрыгунья", "1", status="read",
+                                       author="Чехов Антон"))
+        assert "- [Попрыгунья — Чехов Антон](books/chekhov.md)" in \
+            render_p3_references(books, [])["text"]
+
+    def test_author_of_two_authors_is_the_first_one(self, tmp_path):
+        """The note declares one author (the build already took the first); the
+        shelf prints that value verbatim."""
+        books = write_books(tmp_path, x=note("Икс", "1", status="read",
+                                            author="Сергей Довлатов"))
+        assert "- [Икс — Сергей Довлатов](books/x.md)" in render_p3_references(
+            books, [])["text"]
+
+    def test_bibliography_bullet_link_text_stays_the_title(self, tmp_path):
+        """The author belongs to the shelves only: a bullet is thesis + title."""
+        books = write_books(tmp_path,
+                           a=note("А", "100", review="1", status="read",
+                                 important=True, weight=1,
+                                 author="Анатолий Рыбаков"))
+        out = render_p3_references(books, [REVIEW_1])
+        assert out["items"] == ["- Тезис А: [А](books/a.md)"]
