@@ -6,10 +6,10 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
-    {name = "Bongiozzo", email = "sergey.polyakov@hotmail.com"},
+    {name = "Shared Goals contributors"},
 ]
 maintainers = [
-    {name = "Bongiozzo", email = "sergey.polyakov@hotmail.com"},
+    {name = "Shared Goals contributors"},
 ]
 keywords = ["mkdocs", "mkdocs-plugin", "epub", "markdown", "publishing", "documentation"]
 classifiers = [
