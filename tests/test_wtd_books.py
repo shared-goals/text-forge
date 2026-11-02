@@ -20,7 +20,7 @@ from text_forge.wtd_books import (
     render_p3_references,
     validate_text_links,
 )
-from text_forge.wtd_books_p3 import _all_notes
+from text_forge.wtd_books_p3 import _all_notes, render_status_sections
 
 Q1 = {
     "id": 1,
@@ -1855,10 +1855,13 @@ def _about(out, reason, slug=None):
     ]
 
 
-def _note(title, book_id, *, review=None, status="read", important=None, weight=None):
+def _note(title, book_id, *, review=None, status="read", important=None,
+          weight=None, author=None):
     """A note-book spelled out as frontmatter; `status=None` omits the key —
     a note that names no shelf, which the shelf check must report."""
     fm = ["---", f'title: "{title}"', "tags:", "  - book"]
+    if author:
+        fm.append(f"author: {author}")
     if status:
         fm.append(f"status: {status}")
     if important:
@@ -2149,6 +2152,21 @@ class TestP3ShelfSections:
     """The collapsed shelf lists the renderer appends below the bibliography."""
 
     STATUS_ORDER = ("Читаю", "Прочтённые", "Недочитанные", "Хочу прочитать")
+
+    def test_shelf_lines_sort_by_slug_so_authors_group(self, tmp_path):
+        """Shelves order by SLUG, not title: the slug starts with the author's
+        surname, so one author's books sit together — even where title order
+        and slug order disagree (Абрамов's «Яя» vs Яблонев's «Аа»)."""
+        books = _write_books(
+            tmp_path,
+            yab=_note("Аа", "1", author="Яблонев", status="read"),
+            abr=_note("Яя", "2", author="Абрамов", status="read"),
+        )
+        out = render_status_sections(books)
+        assert out[0].splitlines()[1:3] == [
+            "- [Яя — Абрамов](books/abr.md)",
+            "- [Аа — Яблонев](books/yab.md)",
+        ]
 
     def test_section_titles_and_counts(self, tmp_path):
         books = _write_books(

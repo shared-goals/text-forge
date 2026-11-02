@@ -74,6 +74,7 @@ def test_p3_module_dropped_the_read_back_surface():
         "LOCAL_LINK",
         "ANY_LINK",
         "DETAILS_MARKER",
+        "_sort_key",  # shelf lines order by slug now; the title key is dead
     ):
         assert not hasattr(p3, name), f"read-back symbol survived: p3.{name}"
         assert not hasattr(wb, name), f"read-back symbol re-exported: wtd_books.{name}"

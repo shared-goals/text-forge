@@ -18,8 +18,8 @@ cannot carry a line about a book that is not on disk — the whole read-back
 machinery (curated-line parsing, link resolution, verbatim fallbacks) is gone.
 
 A shelf line names the author beside the title when the note declares one
-(`- [{title} — {author}](books/{slug}.md)`), so a shelf reads like a
-bibliography; sorting stays by TITLE — the author is display, not order.
+(`- [{title} — {author}](books/{slug}.md)`), and shelf lines order by SLUG —
+the slug starts with the author's surname, so a shelf reads grouped by author.
 
 Import shape: this module needs `_book_id`/`_review_id` from `wtd_books`, which
 re-exports this module's symbols at its bottom — a cycle. So nothing is
@@ -207,23 +207,14 @@ STATUS_SECTIONS = (
 )
 
 
-def _sort_key(title: str) -> list:
-    """Alphabetical key: case-folded, letters and digits only.
-
-    `"Яблоко"` vs `"Ярмо"` must order by their letters, so a space or a quote
-    sitting between them cannot decide the comparison.
-    """
-    return [c for c in title.casefold() if c.isalnum()]
-
-
 def render_status_sections(books_dir) -> tuple[str, list[dict]]:
     """Collapsed per-shelf lists of the note-books, from frontmatter `status:`.
 
     Returns (text, warnings). A book with `status: none` or no `status:` at all
     belongs to no shelf and is NOT rendered — and is reported once per book, so
     an unread shelf that lost a book is visible instead of silently shorter.
-    Titles sort alphabetically, case-folded and with punctuation pushed aside:
-    Cyrillic order must read like a dictionary, not like byte order.
+    Lines order by slug (the page target `books/<slug>.md`), so an author's
+    books sit together: the slug starts with the surname.
     """
     shelves: dict[str, list[tuple[str, str, str]]] = {
         status: [] for _, status in STATUS_SECTIONS
@@ -257,8 +248,9 @@ def render_status_sections(books_dir) -> tuple[str, list[dict]]:
         entries = shelves[status]
         if not entries:
             continue
-        # sort on the TITLE only (index 0): the author is display, not order
-        entries.sort(key=lambda t: _sort_key(t[0]))
+        # sort by the PAGE (books/<slug>.md ≡ slug order): the slug starts with
+        # the author's surname, so a shelf reads grouped by author
+        entries.sort(key=lambda t: t[2])
         blocks.append(
             "\n".join(
                 [f"/// details | {heading} ({len(entries)})"]
@@ -302,10 +294,7 @@ def render_p3_references(books_dir, reviews: list[dict]) -> dict:
 
     items: list[str] = []
     warnings: list[dict] = []
-    for b in sorted(
-        (n for n in notes if n["important"]),
-        key=lambda n: (n["weight"] is None, n["weight"] or 0, n["slug"]),
-    ):
+    for b in important_books(books_dir):
         review = review_by_id.get(b["review_id"]) if b["review_id"] else None
         if review is not None:
             # a review belongs to one edition: if the export says it is about
