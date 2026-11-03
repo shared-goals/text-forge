@@ -25,14 +25,5 @@
       ],
       "key": "L"
     }
-  ],
-  "templater-obsidian:obsidian/templates/insert_quote.md": [
-    {
-      "modifiers": [
-        "Mod",
-        "Shift"
-      ],
-      "key": "Q"
-    }
   ]
 }
