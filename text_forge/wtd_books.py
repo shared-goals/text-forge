@@ -510,7 +510,15 @@ def group_export(books: list[dict], quotes: list[dict], reviews: list[dict],
 
 
 def _strip_html(text: str) -> str:
-    """HTML from trisolaris -> plain text paragraphs separated by blank lines."""
+    """HTML from trisolaris -> plain text paragraphs separated by blank lines.
+
+    `<a href>` is content, not formatting: an anchor becomes a markdown link
+    before the tag strip — a review's outgoing link must survive the import
+    (real case: review 6413194 links back to a WTD chapter).
+    """
+    text = re.sub(
+        r'<a [^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', r"[\2](\1)", text
+    )
     text = re.sub(r"<br\s*/?>", "\n\n", text)
     text = re.sub(r"</p>\s*<p[^>]*>", "\n\n", text)
     text = re.sub(r"<[^>]+>", "", text)

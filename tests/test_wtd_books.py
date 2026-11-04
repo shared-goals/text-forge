@@ -279,6 +279,23 @@ class TestRenderNote:
         # attribute is the short stable form; the section anchor links stay full
         assert 'livelib_review: "https://www.livelib.ru/review/900"' in md
 
+    def test_review_links_become_markdown(self):
+        """`<a href>` inside a review is content, not formatting: the anchor
+        survives as a markdown link (real case: review 6413194 links back to
+        a WTD chapter)."""
+        e = copy.deepcopy(self.make_entry())
+        e["review"]["text"] = (
+            "<p>Поделился "
+            '<a href="https://text.sharedgoals.ru/p2-180-sharedgoals/#ai_tool">'
+            "собственными соображениями</a> и услышал вопрос:</p>"
+        )
+        md = render_note(e)
+        assert (
+            "Поделился [собственными соображениями]"
+            "(https://text.sharedgoals.ru/p2-180-sharedgoals/#ai_tool)"
+            " и услышал вопрос:"
+        ) in md
+
     def test_quotes_anchored_in_order(self):
         md = render_note(self.make_entry())
         assert md.count("^quote_") == 2
