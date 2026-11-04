@@ -137,13 +137,14 @@ function _frontmatter(content, key) {
 }
 
 // группы блокцитат `> …`, чья последняя строка кончается блок-id `^quote_N`;
+// абзацы внутри одной цитаты разделяет «голый» `>` — он часть группы;
 // id становится анкором ссылки — в вставляемый текст он НЕ попадает
 function _quotes(content) {
   const quotes = [];
   let lines = [];
   for (const line of content.split('\n')) {
-    if (line.startsWith('> ')) {
-      lines.push(line.slice(2));
+    if (line.startsWith('>')) {
+      lines.push(line.replace(/^>\s?/, ''));
     } else if (lines.length) {
       _collect(lines, quotes);
       lines = [];
