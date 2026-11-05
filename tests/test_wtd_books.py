@@ -958,11 +958,10 @@ class TestBuildBooks:
         books_p, quotes_p, reviews_p = self.write_inputs(
             tmp_path, books=[e], quotes=[q_own]
         )
-        cur = tmp_path / "Curation.md"
+        cur = tmp_path / "books_curation.yml"
         cur.write_text(
-            "# Curation\n\n"
-            "## 1000284779 — Зона — Сергей Довлатов\n- status: read\n\n"
-            "## 1009172287 — Моя жизнь — Генри Форд\n- status: stop\n",
+            '"1000284779":   # Зона — Сергей Довлатов\n  status: read\n\n'
+            '"1009172287":   # Моя жизнь — Генри Форд\n  status: stop\n',
             encoding="utf-8",
         )
         out = tmp_path / "books"
@@ -980,9 +979,8 @@ class TestBuildBooks:
         note, and it survives a rebuild without a file of its own."""
         e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
         books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e])
-        cur = tmp_path / "Curation.md"
-        cur.write_text("# Curation\n\n"
-                      "## 1000699994 — Зона — Сергей Довлатов\n- weight: 7\n",
+        cur = tmp_path / "books_curation.yml"
+        cur.write_text('"1000699994":   # Зона — Сергей Довлатов\n  weight: 7\n',
                       encoding="utf-8")
         out = tmp_path / "books"
         build_books(books_p, quotes_p, reviews_p, out, curation_path=cur)
@@ -1316,11 +1314,9 @@ class TestBuildBooks:
             author="Петр Вайль",
         )
         books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e1])
-        cur = tmp_path / "Curation.md"
+        cur = tmp_path / "books_curation.yml"
         cur.write_text(
-            "# Curation\n\n"
-            "## 1000699994 — Родная речь — Петр Вайль\n"
-            "- merges: 1001474484\n",
+            '"1000699994":   # Родная речь — Петр Вайль\n  merges: [1001474484]\n',
             encoding="utf-8",
         )
         out = tmp_path / "books"

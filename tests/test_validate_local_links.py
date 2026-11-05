@@ -22,23 +22,23 @@ def write_text(root, name, body):
     return t
 
 
-def corpus_book_ids(repo, limit):
-    """`limit` distinct livelib /book/ URLs, taken from the ids the corpus declares.
+def corpus_book_ids(export_dir, limit):
+    """`limit` distinct livelib /book/ URLs, taken from the ids the corpus holds.
 
-    Read from the build's own `_curation/link-map.json` (a file the build writes,
-    so it is a CORPUS fact rather than a generator output) and kept to /book/ and
-    /work/ keys, the only kinds a chapter link may carry. Ids are taken in sorted
-    order so the list is stable across builds, and the count fails loudly if the
-    corpus ever shrinks below what the caller asks for.
+    Read from the export's shelf records (`livelib-books.json`) and kept to
+    /book/ ids, the kind a chapter link may carry. Ids are taken in sorted order
+    so the list is stable across runs, and the count fails loudly if the corpus
+    ever shrinks below what the caller asks for.
 
-    Each id names a note that exists, so the only complaint the link check can
-    raise about such a URL is that it sits OUTSIDE text/books/ — which is exactly
-    what the test counts.
+    A shelf id names a note the build writes, so the only complaint the link
+    check can raise about such a URL is that it sits OUTSIDE text/books/ — which
+    is exactly what the test counts. (The curation file cannot be the source: it
+    holds 55 entries, fewer than any caller here asks for.)
     """
-    maps = repo / "text" / "books" / "_curation" / "link-map.json"
-    urls = json.loads(maps.read_text(encoding="utf-8"))
-    key = re.compile(r"https?://(?:www\.)?livelib\.ru/(?:book|work)/(\d+)$")
-    ids = sorted({m.group(1) for u in urls if (m := key.match(u))})
+    records = json.loads((export_dir / "livelib-books.json").read_text(encoding="utf-8"))
+    key = re.compile(r"https?://(?:www\.)?livelib\.ru/book/(\d+)")
+    ids = sorted({m.group(1) for r in records
+                  for m in [key.match(r.get("book_url") or "")] if m})
     assert len(ids) >= limit, (len(ids), limit)
     return ids[:limit]
 
@@ -226,19 +226,18 @@ class TestBuildReportsIt:
         root = tmp_path / "repo"
         shutil.copytree(self.REPO / "livelib-export", root / "livelib-export")
         shutil.copytree(self.REPO / "text", root / "text")
+        # .cache is not copied: it holds only build output from previous runs, and
+        # a run creates its own. The copy starts without it, so the link map the
+        # tests read is one this run wrote.
         (root / "text" / "chapter.md").write_text(chapter_body, encoding="utf-8")
-        # the curation file now lives at <root>/Curation.md, while the corpus
-        # copy still carries the old text/books/_curation/curation.jsonc (the
-        # real migration is the controller's step). Hand-migrate it into the new
-        # place so `main()` builds the SAME corpus the baseline built: with an
-        # empty curation the curated ids lose their note links, and this class
-        # would be measuring link loss it invented instead of reporting real ones.
-        from text_forge.migrate_curation import migrate_file
-        old = self.REPO / "text" / "books" / "_curation" / "curation.jsonc"
-        if old.exists():
-            migrate_file(old, root / "Curation.md")
-        else:
-            (root / "Curation.md").write_text("# Curation\n", encoding="utf-8")
+        # the corpus carries its curation as <root>/books_curation.yml, so the
+        # fixture copies that file as it stands — no migration step. Without it
+        # the curated ids would lose their note links and this class would be
+        # measuring link loss it invented instead of reporting real ones.
+        real = self.REPO / "books_curation.yml"
+        if not real.exists():
+            pytest.skip(f"corpus curation file not available: {real}")
+        shutil.copy2(real, root / "books_curation.yml")
         return root
 
     def run_main(self, root, monkeypatch, capsys):
@@ -273,7 +272,7 @@ class TestBuildReportsIt:
         miss. The p3 page the build regenerates adds nothing: with the local
         targets written back, the corpus contributes zero outside links.
         """
-        ids = corpus_book_ids(self.REPO, 240)
+        ids = corpus_book_ids(self.REPO / "livelib-export", 240)
         body = "".join(f"См. https://www.livelib.ru/book/{i}\n" for i in ids)
         root = self.corpus_copy(tmp_path, body)
         code, out = self.run_main(root, monkeypatch, capsys)

@@ -7,11 +7,14 @@ Single entry point for the `make books` target (whattodo/Makefile):
 Steps:
 1. Export fresh data (shelves incl. statuses, quotes, reviews) into
    <root>/livelib-export/ — anonymous API + SSR, no credentials needed.
-2. build_books() with the ONE curation file <root>/Curation.md — markdown
-   sections, one per livelib edition id — and the texts themselves passed
-   as `text_dir` so a work a chapter cites but no shelf holds still gets its
-   note (title/author from the edition card JSON).
+2. build_books() with the ONE curation file <root>/books_curation.yml — a flat
+   map of livelib edition ids to fields — and the texts themselves passed as
+   `text_dir` so a work a chapter cites but no shelf holds still gets its note
+   (title/author from the edition card JSON).
 3. Replace <root>/text/books/*.md with the generated set (_curation/ untouched).
+   The id -> note map the run produces lands in <root>/.cache/link-map.json: a
+   same-run temp artifact, consumed by step 4, so it sits in the gitignored
+   cache dir rather than beside the notes it describes.
 4. Validate: frontmatter contract + text links; print the status distribution.
 
 Titles/authors of cited-but-unshelved editions come from the LiveLib edition
@@ -115,16 +118,17 @@ def main(root_str: str, user_id: int = 345497) -> int:
     root = Path(root_str).resolve()
     export_dir = root / "livelib-export"
     books_dir = root / "text" / "books"
-    cur = books_dir / "_curation"
+    cache = root / ".cache"
 
     counts = export(user_id, export_dir)
     print("export:", counts)
 
     tmp = Path(tempfile.mkdtemp(prefix="wtd-books-"))
-    # ONE curation file, at the corpus root: markdown sections, one per livelib
-    # edition id. (It used to sit beside the notes as
-    # text/books/_curation/curation.jsonc; the link map below still does.)
-    curation = root / "Curation.md"
+    # ONE curation file, at the corpus root: a flat YAML map, one entry per
+    # livelib edition id. (It used to sit beside the notes as
+    # text/books/_curation/curation.jsonc, then at the root as Curation.md; both
+    # are gone, and load_curation refuses either if one is left in place.)
+    curation = root / "books_curation.yml"
     if not curation.exists():
         print(f"FAIL: curation file not found: {curation}")
         return 1
@@ -168,11 +172,12 @@ def main(root_str: str, user_id: int = 345497) -> int:
             f"https://www.livelib.ru/book/{bid}"
         )
 
-    # the mapping the notes declare, written beside the curation file: the link
-    # validator and the bibliography generator consume it, and keeping it makes a
-    # rebuild's id->note decisions auditable
+    # the mapping the notes declare, written to the cache dir: the link
+    # validator consumes it a few lines below, and keeping it makes a rebuild's
+    # id->note decisions auditable. The dir is the build's own to create.
     link_map = report["link_map"]
-    (cur / "link-map.json").write_text(
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "link-map.json").write_text(
         json.dumps(link_map, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
         encoding="utf-8",
     )

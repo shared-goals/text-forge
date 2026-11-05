@@ -11,6 +11,8 @@ import json
 import pathlib
 import re
 
+import yaml
+
 from .livelib import LivelibClient
 
 TRANSLIT = {
@@ -100,130 +102,202 @@ def _edition_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
-#: the curation keys a section may carry, and how each value reads
+#: the curation keys an entry may carry, and how each value reads
 CURATION_INT_KEYS = ("weight",)
 CURATION_TEXT_KEYS = ("author", "status")
 CURATION_ID_LIST_KEYS = ("merges",)
 CURATION_KEYS = CURATION_INT_KEYS + CURATION_TEXT_KEYS + CURATION_ID_LIST_KEYS
 
-# a `## ` heading: a hash pair on its own or followed by the section's text —
-# but NOT a deeper `###`/`####` heading, and NOT a closing Setext underline
-# (`#####` under a title, which is prose). Whatever precedes the em dash is the
-# id; whatever follows it is for the eye only.
-CURATION_HEADING_RE = re.compile(r"^##(?=[\s\u2014-]|$)(.*?)\s*$")
-# a bullet: a list marker at (or within) the section's indentation
-CURATION_BULLET_RE = re.compile(r"^\s*[-*+]\s+(\S.*)$")
-
 
 class CurationError(ValueError):
     """A curation file the build refuses to guess at.
 
-    Every message names the edition id it tripped on, plus the line it sits on:
-    a silently dropped entry would still build a plausible-looking corpus, and
-    that is the failure this format is not allowed to have.
+    Every message names the edition id it tripped on, or the key inside that
+    entry: a silently dropped entry would still build a plausible-looking
+    corpus, and that is the failure this format is not allowed to have.
     """
 
 
-def _curation_error(lineno: int, entry_id: str, why: str, line: str) -> CurationError:
-    where = f"line {lineno}"
-    # "- " is the shape every accepted bullet has, so a rejected one reads back
-    # in the same shape: what the eye wrote is what the message shows
-    who = f" (entry {entry_id})" if entry_id else " (no `## <id>` section above)"
+def _curation_error(entry_id: str, why: str, field: str = "") -> CurationError:
+    """A rejection naming the edition it concerns, and the field or key inside
+    it when one is known.
+
+    A YAML payload carries no line of its own once constructed, and the only
+    line the loader can offer — the START of the document — would point every
+    error at line 1 and mislead more than help. The edition id and the offending
+    key are the addressable facts, and those are what the message carries.
+    """
+    who = f" (entry {entry_id})" if entry_id else ""
+    what = f" {field!r}" if field else ""
     return CurationError(
-        f"curation: {where}{who}: {why}\n  {line}\n"
-        "A curation section is `## <edition id> — <title for the eye>` followed "
-        "by `- key: value` bullets, keys: " + ", ".join(CURATION_KEYS) + "."
+        f"curation:{who}: {why}{what}\n"
+        "A curation file is books_curation.yml: a map of quoted edition ids to "
+        "fields, keys: " + ", ".join(CURATION_KEYS) + "."
     )
 
 
-def _curation_int(lineno: int, entry_id: str, key: str, raw: str, line: str) -> int:
-    if not raw.isdigit():
-        raise _curation_error(lineno, entry_id, f"{key} must be a whole number, got {raw!r}", line)
-    return int(raw)
+class _CurationLoader(yaml.SafeLoader):
+    """SafeLoader with one hook, on mapping construction.
+
+    The hook refuses a repeated key: stock YAML lets the last one win, so a
+    second entry for one edition id would erase the first, or a second `weight`
+    erase the first, with nothing said. This is the standard no-duplicates
+    recipe, done on the node's own key text (`key_node.value` is the raw text of
+    a plain or quoted scalar, so it needs no construction and cannot re-enter the
+    hook — which is why the check reads nodes rather than the built dict, whose
+    duplicate key is already gone by the time the hook returns).
+    """
+
+    def construct_mapping(self, node, deep=False):
+        mapping = super().construct_mapping(node, deep=deep)
+        seen: set = set()
+        for key_node, _ in node.value:
+            if not isinstance(key_node, yaml.ScalarNode):
+                continue                     # a map/list key is no id; validation
+            key = str(key_node.value)      # rejects it anyway
+            if key in seen:
+                raise CurationError(
+                    f"curation: line {key_node.start_mark.line + 1}: duplicate key "
+                    f"{key!r} in one mapping — one key gets one value, merge them; "
+                    f"keys of a curation entry: {', '.join(CURATION_KEYS)}")
+            seen.add(key)
+        return mapping
 
 
-def _curation_ids(lineno: int, entry_id: str, key: str, raw: str, line: str) -> list[int]:
+def _curation_entry_id(key) -> str:
+    """The mapping key as an edition id: quoted or bare both read the same, and
+    anything that is not digits is a hard error."""
+    entry_id = str(key)
+    if not entry_id.isdigit():
+        raise CurationError(
+            f"curation: entry id must be digits, got {entry_id!r}\n"
+            "Keys of books_curation.yml are quoted livelib edition ids."
+        )
+    return entry_id
+
+
+def _curation_int(entry_id: str, key: str, value) -> int:
+    # bool is an int subclass, so `weight: true` passes a bare int check and
+    # would land in the frontmatter as a weight of 1
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _curation_error(entry_id, f"{key} must be a whole number, got", key)
+    if value < 0:
+        raise _curation_error(entry_id, f"{key} must not be negative, got", key)
+    return value
+
+
+def _curation_ids(entry_id: str, key: str, value) -> list[int]:
+    if not isinstance(value, list):
+        raise _curation_error(
+            entry_id, f"{key} must be a list of edition ids, got", key)
     ids = []
-    for part in raw.split(","):
-        part = part.strip()
+    for member in value:
+        # a quoted id arrives as str, a bare one as int; both are ids
+        if isinstance(member, bool) or not isinstance(member, (int, str)):
+            raise _curation_error(
+                entry_id, f"{key} must hold edition ids, got", key)
+        part = str(member).strip()
         if not part.isdigit():
             raise _curation_error(
-                lineno, entry_id, f"{key} must be comma-separated edition ids, got {part!r}", line)
+                entry_id, f"{key} must hold edition ids, got", key)
         ids.append(int(part))
     if not ids:
-        raise _curation_error(lineno, entry_id, f"{key} names no id", line)
+        raise _curation_error(entry_id, f"{key} names no id", key)
     return ids
 
 
 def load_curation(path) -> dict:
-    """Parse a Curation.md file: one `## <id>` section per livelib edition.
+    """Parse books_curation.yml: one map entry per livelib edition.
 
-    The heading's digits ARE the entry key; everything after the em dash (and
-    any prose line) is for the eye only, the same property the old jsonc `//`
-    comments had. A section carries `- key: value` bullets, any subset of
-    `weight`/`author`/`status`/`merges`, and reads back the mapping build_books
-    consumed before: {"books": {id: {weight: int, merges: [int], ...}}}.
+    The file is a flat map with no top-level wrapper, `"<edition id>":` with the
+    title as a `#` comment beside the key and the entry's fields indented under
+    it::
 
-    Malformed input raises CurationError naming the id and the line; a line that
-    is neither a heading, a bullet, nor blank is the old JSONC shape and raises
-    too — the previous format is gone, and it must not be read by accident.
+        "1003047920":   # Моменты счастья — Алекс Дубас
+          weight: 10
+
+    The key's digits ARE the entry key; the comment is for the eye only, the
+    same property the jsonc `//` comments had. Keys arrive str (quoted) or int
+    (bare) and are str()d, so both spellings are one id. The map is returned
+    WRAPPED the way build_books has always consumed it:
+    {"books": {id: {weight: int, merges: [int], ...}}}.
+
+    Malformed input raises CurationError naming the entry id. A payload that is
+    not a mapping at all — None (which is what the old markdown-sections file
+    reads as, every line a comment), a string (which is what a JSONC file reads
+    as), or a list — raises too and names books_curation.yml as the expected
+    format: the previous formats are gone, and neither may be read by accident
+    into a silently uncurated build.
     """
     text = pathlib.Path(path).read_text(encoding="utf-8")
+    # SafeLoader takes the text directly (it accepts a str as well as a stream);
+    # the subclass adds the duplicate-key refusal
+    payload = _CurationLoader(text).get_single_data()
 
-    # tombstone for the previous format: braces mean JSON/JSONC, and that file
-    # needs migrating (text_forge.migrate_curation), not guessing. Without this
-    # check such a file would read as ZERO entries and drop every curation
-    # decision while still building a plausible corpus.
-    if re.search(r"^\s*[{}\[\]]\s*$", text, re.MULTILINE):
+    # tombstone for the two dead formats. The markdown file is ALL COMMENTS to
+    # YAML (None) and the jsonc file is one scalar string: both would otherwise
+    # read as zero entries or garbage, dropping every curation decision while
+    # still building a plausible corpus.
+    if payload is None:
+        # a corpus may curate nothing at all, and that is written as a file with
+        # nothing in it (or only comments). A file that DOES hold lines and still
+        # yields no entries is the dead markdown format, every line of which YAML
+        # reads as a comment — so the two are told apart by content
+        if text.strip():
+            raise CurationError(
+                f"curation: {path} holds no entries — it looks like the old markdown "
+                "sections format (Curation.md), which is gone\n"
+                "Expected books_curation.yml: a map of quoted edition ids to fields."
+            )
+        return {"books": {}}
+    if not isinstance(payload, dict):
         raise CurationError(
-            f"curation: {path} is the old JSONC format, not markdown sections — "
-            "run `python -m text_forge.migrate_curation <in.jsonc> <out.md>`"
+            f"curation: {path} holds no entries — it is a "
+            f"{type(payload).__name__}, not a map of edition ids\n"
+            "Expected books_curation.yml: a map of quoted edition ids to fields."
         )
 
     entries: dict = {}
-    entry_id = ""
-    for lineno, line in enumerate(text.splitlines(), 1):
-        heading = CURATION_HEADING_RE.match(line)
-        if heading:
-            # the heading's id keys the entry; the text after the em dash is
-            # eye-only, so a wrong title can never steer the build
-            entry_id = heading.group(1).lstrip("#").split("\u2014")[0].strip()
-            if not entry_id.isdigit():
-                raise _curation_error(lineno, "", f"section id must be digits, got {entry_id!r}", line)
-            if entry_id in entries:
-                raise _curation_error(lineno, entry_id, "duplicate section for this edition id", line)
+    for key, fields in payload.items():
+        if str(key) == "books":
+            # the shape the old curation.jsonc had — `{"books": {...}}` — parses
+            # as valid YAML (braces are flow syntax), so it has to be refused by
+            # name rather than left to the digit check below
+            raise CurationError(
+                "curation: `books` is not an edition id — this is the old JSONC "
+                "format (curation.jsonc), whose entries sat under a `books` key\n"
+                "Expected books_curation.yml: a flat map of quoted edition ids."
+            )
+        entry_id = _curation_entry_id(key)
+        if entry_id in entries:
+            # unreachable in practice: the loader refuses a repeated key before
+            # a dict can hold one. Kept as the guard the format's contract asks
+            # for, so no future loader change silently drops an entry
+            raise _curation_error(entry_id, "duplicate entry for this edition id")
+        if fields is None:
+            # an id with nothing under it: a curated entry carrying no fields,
+            # which is legitimate — the id itself says it is curated
             entries[entry_id] = {}
             continue
-
-        bullet = CURATION_BULLET_RE.match(line)
-        if not bullet:
-            # nothing else in the file carries data: blank lines, the doc block's
-            # prose, and any other heading are for the eye
-            continue
-
-        key, sep, raw = bullet.group(1).partition(":")
-        if not sep:
-            raise _curation_error(lineno, entry_id, "bullet needs `key: value`", line)
-        key = key.strip()
-        raw = raw.strip()
-        if key not in CURATION_KEYS:
-            raise _curation_error(lineno, entry_id, f"unknown key {key!r}", line)
-        if not entry_id:
-            raise _curation_error(lineno, "", "bullet outside a `## <id>` section", line)
-        if key in entries[entry_id]:
-            raise _curation_error(lineno, entry_id, f"key {key!r} given twice", line)
-        if key in CURATION_INT_KEYS:
-            value = _curation_int(lineno, entry_id, key, raw, line)
-        elif key in CURATION_ID_LIST_KEYS:
-            value = _curation_ids(lineno, entry_id, key, raw, line)
-        else:
-            if not raw:
-                raise _curation_error(lineno, entry_id, f"{key} is empty", line)
-            value = raw
-        entries[entry_id][key] = value
+        if not isinstance(fields, dict):
+            raise _curation_error(entry_id, "entry must be a map of fields, got")
+        entry: dict = {}
+        for field, value in fields.items():
+            field = str(field)
+            if field not in CURATION_KEYS:
+                raise _curation_error(entry_id, "unknown key", field)
+            if field in CURATION_INT_KEYS:
+                entry[field] = _curation_int(entry_id, field, value)
+            elif field in CURATION_ID_LIST_KEYS:
+                entry[field] = _curation_ids(entry_id, field, value)
+            else:
+                if not isinstance(value, str) or not value.strip():
+                    raise _curation_error(
+                        entry_id, f"{field} must be non-empty text", field)
+                entry[field] = value
+        entries[entry_id] = entry
 
     return {"books": entries}
-
 
 
 def _work_key(title: str, author: str) -> str:
@@ -928,10 +1002,10 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
                 work_id_by_edition=None, fetch=None) -> dict:
     """Build books/<slug>.md notes from LiveLib export JSON files.
 
-    curation_path — the ONE curation file (Curation.md by default, or a mapping
-    already built): sections keyed by livelib edition id, read back as {"books":
-    {id: ...}}, each entry carrying weight?/status?/author?/merges?. Anything
-    livelib can tell us is not stored.
+    curation_path — the ONE curation file (books_curation.yml by default, or a
+    mapping already built): a flat map keyed by livelib edition id, read back as
+    {"books": {id: ...}}, each entry carrying weight?/status?/author?/merges?.
+    Anything livelib can tell us is not stored.
 
     Reference books need no section of their own: pass `text_dir` and the build
     scans the texts for livelib edition ids no note would declare, resolving
@@ -1243,8 +1317,8 @@ def _note_index(books_dir) -> dict:
 
 def _curation_section(path_or_map, section):
     """Read one section from a curation source given as a path to a consolidated
-    file (Curation.md, or a json side-car the build writes) or as the mapping
-    itself (the form build_books emits, e.g. its `link_map`)."""
+    file (books_curation.yml, or the json side-car the build writes) or as the
+    mapping itself (the form build_books emits, e.g. its `link_map`)."""
     if path_or_map is None:
         return None
     if isinstance(path_or_map, (dict, list)):
