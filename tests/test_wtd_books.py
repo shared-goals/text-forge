@@ -2077,7 +2077,7 @@ class TestP3FromScratch:
         assert "/// details | Прочтённые (1)" in out["text"]
         assert "/// details | Хочу прочитать (1)" in out["text"]
 
-    def test_frontmatter_field_order_is_comments_created_published_description(
+    def test_frontmatter_field_order_is_comments_created_published_description_search(
         self, tmp_path
     ):
         books = _write_books(tmp_path, a=_note("А", "1", important=True, weight=1))
@@ -2086,7 +2086,7 @@ class TestP3FromScratch:
             for l in render_p3_references(books, [])["text"].split("\n")[1:]
             if re.match(r"^[a-z_]+:", l)
         ]
-        assert keys == ["comments", "created", "published", "description"]
+        assert keys == ["comments", "created", "published", "description", "search"]
 
     def test_one_bullet_per_important_book_in_weight_order(self, tmp_path):
         a = _note("А", "1", review="1", important=True, weight=2)

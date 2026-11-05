@@ -52,6 +52,9 @@ def test_p3_module_exports_expected_symbols():
     assert header.endswith("\n")
     # frontmatter is closed on its own
     assert P3_FRONTMATTER.count("---") == 2
+    # bibliography is search noise: the page stays on the site but the site
+    # search index must skip it (mirrors books/.meta.yml for book pages)
+    assert "\nsearch:\n  exclude: true\n" in P3_FRONTMATTER
 
 
 def test_p3_module_dropped_the_read_back_surface():
