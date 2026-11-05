@@ -227,6 +227,18 @@ class TestBuildReportsIt:
         shutil.copytree(self.REPO / "livelib-export", root / "livelib-export")
         shutil.copytree(self.REPO / "text", root / "text")
         (root / "text" / "chapter.md").write_text(chapter_body, encoding="utf-8")
+        # the curation file now lives at <root>/Curation.md, while the corpus
+        # copy still carries the old text/books/_curation/curation.jsonc (the
+        # real migration is the controller's step). Hand-migrate it into the new
+        # place so `main()` builds the SAME corpus the baseline built: with an
+        # empty curation the curated ids lose their note links, and this class
+        # would be measuring link loss it invented instead of reporting real ones.
+        from text_forge.migrate_curation import migrate_file
+        old = self.REPO / "text" / "books" / "_curation" / "curation.jsonc"
+        if old.exists():
+            migrate_file(old, root / "Curation.md")
+        else:
+            (root / "Curation.md").write_text("# Curation\n", encoding="utf-8")
         return root
 
     def run_main(self, root, monkeypatch, capsys):

@@ -100,46 +100,129 @@ def _edition_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
-def load_curation(path) -> dict:
-    """Parse a .jsonc curation file: JSON with // line and /* */ block comments.
+#: the curation keys a section may carry, and how each value reads
+CURATION_INT_KEYS = ("weight",)
+CURATION_TEXT_KEYS = ("author", "status")
+CURATION_ID_LIST_KEYS = ("merges",)
+CURATION_KEYS = CURATION_INT_KEYS + CURATION_TEXT_KEYS + CURATION_ID_LIST_KEYS
 
-    Comment markers inside string literals are data, not comments: a title like
-    "Письма о Сезанне https://..." must survive intact. Scanning character by
-    character (rather than regexing the text) is what makes that true, and it
-    also keeps `\"` from pretending to close a string.
+# a `## ` heading: a hash pair on its own or followed by the section's text —
+# but NOT a deeper `###`/`####` heading, and NOT a closing Setext underline
+# (`#####` under a title, which is prose). Whatever precedes the em dash is the
+# id; whatever follows it is for the eye only.
+CURATION_HEADING_RE = re.compile(r"^##(?=[\s\u2014-]|$)(.*?)\s*$")
+# a bullet: a list marker at (or within) the section's indentation
+CURATION_BULLET_RE = re.compile(r"^\s*[-*+]\s+(\S.*)$")
+
+
+class CurationError(ValueError):
+    """A curation file the build refuses to guess at.
+
+    Every message names the edition id it tripped on, plus the line it sits on:
+    a silently dropped entry would still build a plausible-looking corpus, and
+    that is the failure this format is not allowed to have.
+    """
+
+
+def _curation_error(lineno: int, entry_id: str, why: str, line: str) -> CurationError:
+    where = f"line {lineno}"
+    # "- " is the shape every accepted bullet has, so a rejected one reads back
+    # in the same shape: what the eye wrote is what the message shows
+    who = f" (entry {entry_id})" if entry_id else " (no `## <id>` section above)"
+    return CurationError(
+        f"curation: {where}{who}: {why}\n  {line}\n"
+        "A curation section is `## <edition id> — <title for the eye>` followed "
+        "by `- key: value` bullets, keys: " + ", ".join(CURATION_KEYS) + "."
+    )
+
+
+def _curation_int(lineno: int, entry_id: str, key: str, raw: str, line: str) -> int:
+    if not raw.isdigit():
+        raise _curation_error(lineno, entry_id, f"{key} must be a whole number, got {raw!r}", line)
+    return int(raw)
+
+
+def _curation_ids(lineno: int, entry_id: str, key: str, raw: str, line: str) -> list[int]:
+    ids = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part.isdigit():
+            raise _curation_error(
+                lineno, entry_id, f"{key} must be comma-separated edition ids, got {part!r}", line)
+        ids.append(int(part))
+    if not ids:
+        raise _curation_error(lineno, entry_id, f"{key} names no id", line)
+    return ids
+
+
+def load_curation(path) -> dict:
+    """Parse a Curation.md file: one `## <id>` section per livelib edition.
+
+    The heading's digits ARE the entry key; everything after the em dash (and
+    any prose line) is for the eye only, the same property the old jsonc `//`
+    comments had. A section carries `- key: value` bullets, any subset of
+    `weight`/`author`/`status`/`merges`, and reads back the mapping build_books
+    consumed before: {"books": {id: {weight: int, merges: [int], ...}}}.
+
+    Malformed input raises CurationError naming the id and the line; a line that
+    is neither a heading, a bullet, nor blank is the old JSONC shape and raises
+    too — the previous format is gone, and it must not be read by accident.
     """
     text = pathlib.Path(path).read_text(encoding="utf-8")
-    out = []
-    i, n = 0, len(text)
-    in_string = False
-    while i < n:
-        ch = text[i]
-        if in_string:
-            if ch == "\\":
-                out.append(text[i:i + 2])
-                i += 2
-                continue
-            if ch == '"':
-                in_string = False
-            out.append(ch)
-            i += 1
+
+    # tombstone for the previous format: braces mean JSON/JSONC, and that file
+    # needs migrating (text_forge.migrate_curation), not guessing. Without this
+    # check such a file would read as ZERO entries and drop every curation
+    # decision while still building a plausible corpus.
+    if re.search(r"^\s*[{}\[\]]\s*$", text, re.MULTILINE):
+        raise CurationError(
+            f"curation: {path} is the old JSONC format, not markdown sections — "
+            "run `python -m text_forge.migrate_curation <in.jsonc> <out.md>`"
+        )
+
+    entries: dict = {}
+    entry_id = ""
+    for lineno, line in enumerate(text.splitlines(), 1):
+        heading = CURATION_HEADING_RE.match(line)
+        if heading:
+            # the heading's id keys the entry; the text after the em dash is
+            # eye-only, so a wrong title can never steer the build
+            entry_id = heading.group(1).lstrip("#").split("\u2014")[0].strip()
+            if not entry_id.isdigit():
+                raise _curation_error(lineno, "", f"section id must be digits, got {entry_id!r}", line)
+            if entry_id in entries:
+                raise _curation_error(lineno, entry_id, "duplicate section for this edition id", line)
+            entries[entry_id] = {}
             continue
-        if ch == '"':
-            in_string = True
-            out.append(ch)
-            i += 1
+
+        bullet = CURATION_BULLET_RE.match(line)
+        if not bullet:
+            # nothing else in the file carries data: blank lines, the doc block's
+            # prose, and any other heading are for the eye
             continue
-        if ch == "/" and i + 1 < n and text[i + 1] == "/":
-            while i < n and text[i] != "\n":
-                i += 1
-            continue
-        if ch == "/" and i + 1 < n and text[i + 1] == "*":
-            end = text.find("*/", i + 2)
-            i = n if end == -1 else end + 2
-            continue
-        out.append(ch)
-        i += 1
-    return json.loads("".join(out))
+
+        key, sep, raw = bullet.group(1).partition(":")
+        if not sep:
+            raise _curation_error(lineno, entry_id, "bullet needs `key: value`", line)
+        key = key.strip()
+        raw = raw.strip()
+        if key not in CURATION_KEYS:
+            raise _curation_error(lineno, entry_id, f"unknown key {key!r}", line)
+        if not entry_id:
+            raise _curation_error(lineno, "", "bullet outside a `## <id>` section", line)
+        if key in entries[entry_id]:
+            raise _curation_error(lineno, entry_id, f"key {key!r} given twice", line)
+        if key in CURATION_INT_KEYS:
+            value = _curation_int(lineno, entry_id, key, raw, line)
+        elif key in CURATION_ID_LIST_KEYS:
+            value = _curation_ids(lineno, entry_id, key, raw, line)
+        else:
+            if not raw:
+                raise _curation_error(lineno, entry_id, f"{key} is empty", line)
+            value = raw
+        entries[entry_id][key] = value
+
+    return {"books": entries}
 
 
 
@@ -845,9 +928,10 @@ def build_books(books_path, quotes_path, reviews_path, out_dir, *, curation_path
                 work_id_by_edition=None, fetch=None) -> dict:
     """Build books/<slug>.md notes from LiveLib export JSON files.
 
-    curation_path — ONE curation.jsonc in normal form: one entry per livelib
-    edition id under `books`, each carrying weight?/status?/my_mark?/author?/
-    merges?. Anything livelib can tell us is not stored.
+    curation_path — the ONE curation file (Curation.md by default, or a mapping
+    already built): sections keyed by livelib edition id, read back as {"books":
+    {id: ...}}, each entry carrying weight?/status?/author?/merges?. Anything
+    livelib can tell us is not stored.
 
     Reference books need no section of their own: pass `text_dir` and the build
     scans the texts for livelib edition ids no note would declare, resolving
@@ -1159,8 +1243,8 @@ def _note_index(books_dir) -> dict:
 
 def _curation_section(path_or_map, section):
     """Read one section from a curation source given as a path to a consolidated
-    .jsonc or as the mapping itself (the form build_books emits, e.g. its
-    `link_map`)."""
+    file (Curation.md, or a json side-car the build writes) or as the mapping
+    itself (the form build_books emits, e.g. its `link_map`)."""
     if path_or_map is None:
         return None
     if isinstance(path_or_map, (dict, list)):

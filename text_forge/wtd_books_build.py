@@ -7,8 +7,8 @@ Single entry point for the `make books` target (whattodo/Makefile):
 Steps:
 1. Export fresh data (shelves incl. statuses, quotes, reviews) into
    <root>/livelib-export/ — anonymous API + SSR, no credentials needed.
-2. build_books() with the ONE curation file
-   <root>/text/books/_curation/curation.jsonc, and the texts themselves passed
+2. build_books() with the ONE curation file <root>/Curation.md — markdown
+   sections, one per livelib edition id — and the texts themselves passed
    as `text_dir` so a work a chapter cites but no shelf holds still gets its
    note (title/author from the edition card JSON).
 3. Replace <root>/text/books/*.md with the generated set (_curation/ untouched).
@@ -121,8 +121,10 @@ def main(root_str: str, user_id: int = 345497) -> int:
     print("export:", counts)
 
     tmp = Path(tempfile.mkdtemp(prefix="wtd-books-"))
-    # one curation file, normal form: one entry per livelib edition id
-    curation = cur / "curation.jsonc"
+    # ONE curation file, at the corpus root: markdown sections, one per livelib
+    # edition id. (It used to sit beside the notes as
+    # text/books/_curation/curation.jsonc; the link map below still does.)
+    curation = root / "Curation.md"
     if not curation.exists():
         print(f"FAIL: curation file not found: {curation}")
         return 1

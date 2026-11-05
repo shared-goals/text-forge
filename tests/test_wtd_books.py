@@ -958,10 +958,11 @@ class TestBuildBooks:
         books_p, quotes_p, reviews_p = self.write_inputs(
             tmp_path, books=[e], quotes=[q_own]
         )
-        cur = tmp_path / "curation.jsonc"
+        cur = tmp_path / "Curation.md"
         cur.write_text(
-            '{"books": {"1000284779": {"status": "read"},\n'
-            '              "1009172287": {"status": "stop"}}}',
+            "# Curation\n\n"
+            "## 1000284779 — Зона — Сергей Довлатов\n- status: read\n\n"
+            "## 1009172287 — Моя жизнь — Генри Форд\n- status: stop\n",
             encoding="utf-8",
         )
         out = tmp_path / "books"
@@ -979,8 +980,10 @@ class TestBuildBooks:
         note, and it survives a rebuild without a file of its own."""
         e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
         books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e])
-        cur = tmp_path / "curation.jsonc"
-        cur.write_text('{"books": {"1000699994": {"weight": 7}}}', encoding="utf-8")
+        cur = tmp_path / "Curation.md"
+        cur.write_text("# Curation\n\n"
+                      "## 1000699994 — Зона — Сергей Довлатов\n- weight: 7\n",
+                      encoding="utf-8")
         out = tmp_path / "books"
         build_books(books_p, quotes_p, reviews_p, out, curation_path=cur)
         md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
@@ -1313,11 +1316,11 @@ class TestBuildBooks:
             author="Петр Вайль",
         )
         books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e1])
-        cur = tmp_path / "curation.jsonc"
+        cur = tmp_path / "Curation.md"
         cur.write_text(
-            "{\n  // Родная речь\n"
-            "  // @url:`https://www.livelib.ru/book/1000699994`\n"
-            '  "books": {"1000699994": {"merges": [1001474484]}}\n}\n',
+            "# Curation\n\n"
+            "## 1000699994 — Родная речь — Петр Вайль\n"
+            "- merges: 1001474484\n",
             encoding="utf-8",
         )
         out = tmp_path / "books"
