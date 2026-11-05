@@ -696,36 +696,42 @@ def _author_valid(author: str) -> bool:
     return bool(_surname(author))
 
 
-# the Russian label a byline prints for a frontmatter `status:` value. A status
-# outside this map (`none`, a hand-written value, an export marker) has no label:
-# the segment is omitted rather than printed raw — the byline is for a reader, and
-# `none` in a rendered line says nothing a reader can use.
-STATUS_LABELS = {
-    "read": "прочитано",
-    "unread": "недочитано",
-    "wish": "хочу прочитать",
-    "reading": "читаю",
-}
+# The shelf a note sits on, spelled as the LiveLib shelf NAME. The mapping is
+# DERIVED from the p3 generator's STATUS_SECTIONS — the same pairs that name the
+# collapsed shelf lists — so a book page and the bibliography can never disagree
+# about what a shelf is called. A status outside the pairs (`none`, a
+# hand-written value, an export marker) names no shelf: the line is omitted
+# rather than printed raw, because `none` on a page says nothing a reader can use.
+# The import sits here, next to its only consumer: `wtd_books_p3` needs this
+# module's id parsers, so the two are imported cyclically and this side reads
+# the other's names at CALL time — which a mid-file import states outright.
+from text_forge.wtd_books_p3 import STATUS_SECTIONS as _STATUS_SECTIONS
+
+SHELF_NAMES = {status: name for name, status in _STATUS_SECTIONS}
 
 
-def _byline(book: dict, book_page: str) -> str:
-    """The note's byline line: author — LiveLib — status, ` — `-joined.
+def _property_block(book: dict, book_page: str) -> list[str]:
+    """The note's property lines: author, shelf, source link.
 
-    Every segment comes from data the note already declares — nothing is invented:
-    the author only when `_author_valid` accepts it, the LiveLib link only when the
-    note has an id to point at, the label only for a status in STATUS_LABELS.
-    Returns '' when no segment survives, and the caller then writes no line at all.
+    Three short paragraphs, one per property, that spell out what the
+    frontmatter declares but cannot show on the rendered page. Every line comes
+    from data the note already carries — nothing is invented: the author only
+    when `_author_valid` accepts it, the shelf only for a status in
+    SHELF_NAMES, the link only when the note has a numeric book id. The link's
+    text IS the url, so the reader sees the address and still clicks it.
+    Returns [] when no line survives, and the caller then writes no block.
     """
-    segments: list[str] = []
+    lines: list[str] = []
     author = (book.get("author") or "").strip()
     if _author_valid(author):
-        segments.append(f"**{author}**")
+        lines.append(f"Автор: {author}")
+    shelf = SHELF_NAMES.get((book.get("status") or "").lower())
+    if shelf:
+        lines.append(f"Полка: {shelf}")
     if book_page:
-        segments.append(f"[LiveLib](https://www.livelib.ru/book/{book_page})")
-    label = STATUS_LABELS.get((book.get("status") or "").lower())
-    if label:
-        segments.append(label)
-    return " \u2014 ".join(segments)
+        url = f"https://www.livelib.ru/book/{book_page}"
+        lines.append(f"Ссылка: [{url}]({url})")
+    return lines
 
 
 def render_note(entry: dict) -> str:
@@ -772,14 +778,13 @@ def render_note(entry: dict) -> str:
             fm.append(f'livelib_review: "https://www.livelib.ru/review/{rid}"')
     body = ["\n".join(fm), "---", ""]
 
-    # the byline: one line naming what the frontmatter says but cannot show — the
-    # author, the source page, the shelf the book sits on. A segment is omitted
-    # when its data is absent, and when nothing is left the line is not written:
-    # an empty byline would be noise on a page that has nothing to say.
-    byline = _byline(book, book_page)
-    if byline:
-        body.append(byline)
-        body.append("")
+    # the property block: the lines naming what the frontmatter says but cannot
+    # show — the author, the shelf the book sits on, the source page. A line is
+    # omitted when its data is absent, and when nothing is left the block is not
+    # written: an empty block would be noise on a page that has nothing to say.
+    props = _property_block(book, book_page)
+    if props:
+        body += ["\n\n".join(props), ""]
 
     if entry["review"]:
         body += [
@@ -791,7 +796,7 @@ def render_note(entry: dict) -> str:
 
     if entry["quotes"]:
         # the quotes open under their own heading, so the page reads
-        # byline / Рецензия / Цитаты instead of dropping the reader into a
+        # properties / Рецензия / Цитаты instead of dropping the reader into a
         # blockquote with no label
         body += ["## Цитаты", ""]
 

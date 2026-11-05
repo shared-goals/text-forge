@@ -198,12 +198,14 @@ def important_books(books_dir) -> list[dict]:
 
 
 # the collapsed shelf lists under the bibliography: LiveLib shelf name -> the
-# frontmatter `status:` value, in the order the sections are rendered
+# frontmatter `status:` value, in the order the sections are rendered. The
+# shelf NAME is the same wording a book page prints under `Полка:`, so
+# this tuple is the single source of truth for both renderings.
 STATUS_SECTIONS = (
     ("Читаю", "reading"),
+    ("Хочу прочитать", "wish"),
     ("Прочтённые", "read"),
     ("Недочитанные", "unread"),
-    ("Хочу прочитать", "wish"),
 )
 
 
@@ -214,7 +216,9 @@ def render_status_sections(books_dir) -> tuple[str, list[dict]]:
     belongs to no shelf and is NOT rendered — and is reported once per book, so
     an unread shelf that lost a book is visible instead of silently shorter.
     Lines order by slug (the page target `books/<slug>.md`), so an author's
-    books sit together: the slug starts with the surname.
+    books sit together: the slug starts with the surname. A line prints that
+    author FIRST (`- [Author — Title](target)`), so a shelf reads by name; a
+    note with no valid author prints its title alone, never a dangling dash.
     """
     shelves: dict[str, list[tuple[str, str, str]]] = {
         status: [] for _, status in STATUS_SECTIONS
@@ -254,7 +258,7 @@ def render_status_sections(books_dir) -> tuple[str, list[dict]]:
         blocks.append(
             "\n".join(
                 [f"/// details | {heading} ({len(entries)})"]
-                + [f"- [{title} — {author}]({target})" if author
+                + [f"- [{author} — {title}]({target})" if author
                    else f"- [{title}]({target})"
                    for title, author, target in entries]
                 + ["///"]

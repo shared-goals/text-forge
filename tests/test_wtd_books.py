@@ -587,15 +587,35 @@ class TestRenderNote:
         assert "<p>" not in md
 
 
-class TestNoteByline:
-    """The byline: one line under the frontmatter naming author, LiveLib, status.
+class TestNoteProperties:
+    """The property block: three short paragraphs under the frontmatter.
 
-    Author/status/livelib used to be frontmatter-only, invisible on the rendered
-    page. Segments join with ` — `, each is omitted when its data is absent, and
-    when nothing is present the line is not written at all (no empty line to
-    puzzle over). The frontmatter itself is untouched: the byline is a RENDERING
-    of data the note already declares, not new state.
+    The byline used to crowd author, source and shelf into ONE line joined by
+    ` — `, which read badly in both Obsidian and mkdocs. The block spells them
+    out instead — `Автор:` / `Полка:` / `Ссылка:` — each on its own paragraph,
+    so every property is its own line wherever the page is rendered.
+
+    Same provenance rule as the byline had: every line comes from data the note
+    already declares, a line is omitted when its data is absent, and when no
+    line survives the block is not written at all (no empty paragraphs to
+    puzzle over). The frontmatter itself is untouched — this is a RENDERING.
+    «Полка» carries the SHELF NAME (the same wording the p3 shelf lists use),
+    not a verb form, and «Ссылка» is a markdown link whose text IS the url.
     """
+
+    URL = "https://www.livelib.ru/book/1000443129"
+
+    @staticmethod
+    def _body(md):
+        """Everything after the frontmatter block, up to the first heading.
+
+        Cutting at the fence (not at a `---` line) keeps a frontmatter value
+        that names a livelib url out of what a body check looks at.
+        """
+        rest = md.split("---\n", 2)[2] if md.startswith("---\n") else md
+        cut = min([rest.index(x) for x in ("## ", "^quote_") if x in rest],
+                 default=len(rest))
+        return rest[:cut]
 
     @staticmethod
     def entry(author="Анатолий Рыбаков", status="read", book="1000443129",
@@ -637,144 +657,236 @@ class TestNoteByline:
                             "authors": [{"full_name": "Анатолий Рыбаков"}]},
         }
 
-    # -------------------------------------------------------------- all segments
+    @staticmethod
+    def props(md):
+        """The body right after the closed frontmatter, up to the first heading.
 
-    def test_all_three_segments_in_order(self):
-        """author — LiveLib — status, exactly the documented shape.
-
-        The byline is built on a REAL entry (via `group_export`, the same source
-        as `render_note`'s own tests): its frontmatter `livelib_book` is the id
-        the note declares, which is the id its LiveLib segment names.
+        Returns only the non-blank lines, so a test reads the property lines
+        themselves and this helper decides nothing about their count.
         """
-        entry = group_export(
-            books=[{"book_url": "https://www.livelib.ru/book/1000443129",
-                   "title": "Тяжёлый песок", "author": "Анатолий Рыбаков",
-                   "my_mark": None, "status": "read"}],
-            quotes=[], reviews=[])[0][0]
-        md = render_note(entry)
-        line = next(l for l in md.split("\n") if "LiveLib" in l and "book/" in l)
-        assert line == ("**Анатолий Рыбаков** — "
-                       "[LiveLib](https://www.livelib.ru/book/1000443129) — прочитано")
-        # the frontmatter still carries the same value: the byline is a rendering
-        assert 'livelib_book: "https://www.livelib.ru/book/1000443129"' in md
-
-    def test_byline_sits_right_after_frontmatter(self):
-        md = render_note(self.entry())
         lines = md.split("\n")
         close = lines.index("---", 1)
-        assert lines[close + 2].startswith("**Анатолий Рыбаков**")
+        rest = lines[close + 1:]
+        out = []
+        for l in rest:
+            if l.startswith("## "):
+                break
+            if l.strip():
+                out.append(l)
+        return out
 
-    def test_byline_is_one_line_only(self):
+    # ------------------------------------------------------------- full block
+
+    def test_full_block_is_three_paragraphs(self):
+        """Author, shelf, link — the exact text, in that order, blank between.
+
+        Built on a REAL entry (via `group_export`, the same source as the other
+        `render_note` tests): its frontmatter `livelib_book` is the id the note
+        declares, which is the id the «Ссылка» paragraph names.
+        """
+        entry = group_export(
+            books=[{"book_url": self.URL, "title": "Тяжёлый песок",
+                   "author": "Анатолий Рыбаков", "my_mark": None,
+                   "status": "read"}],
+            quotes=[], reviews=[])[0][0]
+        md = render_note(entry)
+        lines = md.split("\n")
+        close = lines.index("---", 1)
+        assert lines[close] == "---"
+        # one blank line after the fence, then the three paragraphs, each on its
+        # own line and separated from the next by a blank line. Cut before any
+        # content below: a quote source line shares the ` — ` shape.
+        tail = "\n".join(lines[close + 1:])
+        cut = min([tail.index(x) for x in ("## ", "^quote_") if x in tail],
+                 default=len(tail))
+        assert tail[:cut] == (
+            "\n"
+            "Автор: Анатолий Рыбаков\n"
+            "\n"
+            "Полка: Прочтённые\n"
+            "\n"
+            f"Ссылка: [{self.URL}]({self.URL})\n"
+        )
+        # the frontmatter still carries the same values: the block is rendering
+        assert f'livelib_book: "{self.URL}"' in md
+
+    def test_block_sits_right_after_frontmatter(self):
         md = render_note(self.entry())
-        # exactly one byline line, and it is not glued to the frontmatter fence
         lines = md.split("\n")
         close = lines.index("---", 1)
         assert lines[close + 1] == ""
-        assert lines[close + 2].startswith("**")
-        assert lines[close + 3] == ""
-        bylines = [l for l in lines if l.startswith("**")]
-        assert len(bylines) == 1
-        assert bylines[0].count("\u2014") == 2
+        assert lines[close + 2] == "Автор: Анатолий Рыбаков"
+
+    def test_no_line_is_bold_and_no_label_word_survives(self):
+        """The old byline shape is gone: no `**author**`, no `LiveLib` label,
+        no ` — ` join, and no `@url:` notation."""
+        md = render_note(self.entry())
+        body = "\n".join(self.props(md))
+        for forbidden in ("**", "LiveLib", "\u2014", "@"):
+            assert forbidden not in body, forbidden
+
+    def test_link_text_is_the_url_itself(self):
+        """Visible and clickable: the text IS the url, not a friendly label."""
+        md = render_note(self.entry())
+        link = next(l for l in md.split("\n") if l.startswith("Ссылка: "))
+        text = link[len("Ссылка: "):]
+        assert text == f"[{self.URL}]({self.URL})"
+        # and what the reader sees is exactly the target
+        m = re.fullmatch(r"\[(https?://\S+)\]\((\S+)\)", text)
+        assert m, text
+        assert m.group(1) == m.group(2) == self.URL
 
     def test_frontmatter_still_carries_the_same_fields(self):
-        """The byline adds nothing to the frontmatter — rendering only."""
+        """The block adds nothing to the frontmatter — rendering only."""
         md = render_note(self.entry())
         fm = md.split("---")[1]
         assert 'title: "Тяжёлый песок"' in fm
         assert "author: Анатолий Рыбаков" in fm
         assert "status: read" in fm
-        assert 'livelib_book: "https://www.livelib.ru/book/1000443129"' in fm
-        assert "LiveLib" not in fm
+        assert f'livelib_book: "{self.URL}"' in fm
+        # no byline remnant got written into the frontmatter (`livelib` as a
+        # bare key, a visible label, a stray scalar): only the key lines the
+        # renderer has always written are there, in order
+        keys = [m.group(1) for m in re.finditer(r"^([a-z_]+):", fm, re.MULTILINE)]
+        assert keys == ["title", "author", "tags", "status", "livelib_book"]
+        # the block's labels stay out of the frontmatter: it carries raw fields,
+        # the Russian property names are a rendering only
+        for label in ("Автор:", "Полка:", "Ссылка:"):
+            assert label not in fm
+        # the body carries no leftover source line: the block occupies it whole,
+        # and the only livelib url in it is the one the «Ссылка» paragraph links
+        body = self._body(md)
+        lines = [l for l in body.split("\n") if l.strip()]
+        assert lines == self.props(md)
+        assert "LiveLib" not in body
+        # the url shows twice only because ONE line carries it twice — the text
+        # and the target of the same markdown link
+        link = self.props(md)[-1]
+        assert link == f"Ссылка: [{self.URL}]({self.URL})"
+        assert body.count(self.URL) == 2
 
-    # ------------------------------------------------------------- status labels
+    # ------------------------------------------------- shelf name single source
 
-    def test_status_labels_are_russian(self):
-        got = {}
-        for status in ("read", "unread", "wish", "reading"):
+    def test_polkawording_is_the_shelf_name_from_p3(self):
+        """«Полка» prints the STATUS_SECTIONS name — derived, never duplicated.
+
+        Every status the p3 generator knows gets its shelf name verbatim; a
+        status outside that pair list gets no line at all.
+        """
+        from text_forge.wtd_books_p3 import STATUS_SECTIONS
+
+        name_by_status = {status: name for name, status in STATUS_SECTIONS}
+        assert len(name_by_status) == len(STATUS_SECTIONS)
+        for status, shelf in name_by_status.items():
             md = render_note(self.entry(status=status))
-            got[status] = next(l for l in md.split("\n") if "**" in l)
-        assert got["read"].endswith("— прочитано")
-        assert got["unread"].endswith("— недочитано")
-        assert got["wish"].endswith("— хочу прочитать")
-        assert got["reading"].endswith("— читаю")
-
-    def test_unknown_status_drops_the_segment_but_keeps_the_rest(self):
-        """A status outside the label map is no segment: no label, no trailing dash.
-        The frontmatter keeps declaring what the export said — the byline only
-        renders what a reader can use.
-        """
+            assert f"Полка: {shelf}" in self.props(md), (status, shelf)
+        # the reading shelf really is «Читаю» — the shape a reader sees
+        assert "Полка: Читаю" in self.props(render_note(self.entry(status="reading")))
+        # an unknown status is no shelf: no line, and no raw value leaked into
+        # the block (the frontmatter keeping what the export said is fine — it
+        # is the raw source, not the rendering)
         md = render_note(self.entry(status="вручно"))
-        line = next(l for l in md.split("\n") if l.startswith("**"))
-        assert line == ("**Анатолий Рыбаков** — "
-                       "[LiveLib](https://www.livelib.ru/book/1000443129)")
-        assert "вручно" not in line
+        assert not any(l.startswith("Полка:") for l in self.props(md))
+        assert "вручно" not in self._body(md)
 
-    def test_none_status_drops_the_segment(self):
-        md = render_note(self.entry(status=None))
-        line = next(l for l in md.split("\n") if "**" in l)
-        assert not line.endswith("прочитано")
+    # ------------------------------------------------------------- line omission
 
-    # ------------------------------------------------------------- other segments
-
-    def test_invalid_author_drops_the_author_segment(self):
-        """A rating in the author field is no name — the byline must not lie."""
+    def test_invalid_author_drops_the_author_line_only(self):
+        """A rating in the author field is no name — the block must not lie."""
         md = render_note(self.entry(author="4,6"))
-        byline = next(l for l in md.split("\n")
-                     if "[LiveLib](https://www.livelib.ru/book/" in l)
-        assert "**" not in byline
-        assert byline.startswith("[LiveLib]")
+        assert self.props(md) == [
+            "Полка: Прочтённые",
+            f"Ссылка: [{self.URL}]({self.URL})",
+        ]
 
-    def test_no_livelib_book_drops_the_link_segment(self):
-        """A note whose url carries no numeric id has no page to link to.
+    def test_initials_only_author_drops_the_author_line(self):
+        md = render_note(self.entry(author="А. Ф."))
+        assert not any(l.startswith("Автор:") for l in self.props(md))
 
-        The entry names an author and a shelf, so those two segments stay and no
-        dangling third one is padded in.
-        """
+    def test_none_status_drops_the_shelf_line_only(self):
+        """`status: none` says "on no shelf" — so no «Полка», but the rest stays."""
+        md = render_note(self.entry(status=None))
+        assert self.props(md) == [
+            "Автор: Анатолий Рыбаков",
+            f"Ссылка: [{self.URL}]({self.URL})",
+        ]
+
+    def test_no_numeric_id_drops_the_link_line_only(self):
+        """A url with no numeric id has no page to point at: two lines stay and
+        no dangling third one is padded in."""
         entry = self.entry()
         entry["book"]["book_url"] = "no-id-here"
         md = render_note(entry)
-        line = next(l for l in md.split("\n") if l.startswith("**"))
-        assert line == "**Анатолий Рыбаков** — прочитано"
-        assert "[LiveLib]" not in md.split("## ")[0].split("---")[2]
+        assert self.props(md) == [
+            "Автор: Анатолий Рыбаков",
+            "Полка: Прочтённые",
+        ]
+        assert not any("livelib.ru" in l for l in self.props(md))
 
-    def test_all_segments_absent_writes_no_byline(self):
-        """No author, no id, no status: the page opens with its content.
+    def test_all_lines_absent_writes_no_block(self):
+        """No author, no shelf, no id: the page opens with its content.
 
-        `status: none` means "on no shelf", so it is no label; a rating is no
-        name; a url with no id is no page — nothing survives, nothing is printed.
+        A rating is no name, `status: none` is no shelf, a url with no id is no
+        page — nothing survives, so nothing is printed and no blank paragraph is
+        left behind the frontmatter.
         """
         entry = self.entry(author="4,6", status="none", book="no-id-here")
         md = render_note(entry)
         lines = md.rstrip("\n").split("\n")
         close = lines.index("---", 1)
-        # what follows the closed frontmatter is content (or nothing), never a byline
-        assert "**" not in md
-        assert "\u2014 [LiveLib]" not in md[md.index("---\n", 1):]
         assert lines[close] == "---"
-        assert all(not l.startswith("**") for l in lines[close:])
+        assert self.props(md) == []
+        for label in ("Автор:", "Полка:", "Ссылка:"):
+            assert label not in self._body(md)
+        # the frontmatter fence is not glued to prose, and no run of blank
+        # lines was inserted where the block would have been
+        if len(lines) > close + 1:
+            assert lines[close + 1] == ""
+            assert lines[close + 2].startswith(">") or lines[
+                close + 2].startswith("## ")
+        assert "\n\n\n" not in md
+
+    def test_author_value_is_the_note_value_verbatim(self):
+        """The block prints what the note DECLARES: no name-order repair here."""
+        md = render_note(self.entry(author="Чехов Антон"))
+        assert "Автор: Чехов Антон" in self.props(md)
 
     # ------------------------------------------------------------------- order
 
-    def test_order_byline_review_quotes(self):
+    def test_order_block_review_quotes(self):
         md = render_note(self.entry(review=self.review(),
                                    quotes=[self.quote(101)]))
         lines = [l for l in md.split("\n") if l.strip()]
-        i_byline = next(i for i, l in enumerate(lines) if l.startswith("**"))
+        i_block = lines.index("Автор: Анатолий Рыбаков")
         i_review = lines.index("## Рецензия")
         i_quotes = lines.index("## Цитаты")
-        assert i_byline < i_review < i_quotes
+        assert i_block < i_review < i_quotes
 
-    def test_order_byline_quotes_without_review(self):
+    def test_order_block_quotes_without_review(self):
         md = render_note(self.entry(quotes=[self.quote(101)]))
         lines = [l for l in md.split("\n") if l.strip()]
-        assert lines.index("## Цитаты") > next(i for i, l in enumerate(lines)
-                                              if l.startswith("**"))
+        assert lines.index("## Цитаты") > lines.index("Полка: Прочтённые")
         assert "## Рецензия" not in md
 
     def test_page_order_survives_two_renders(self):
-        """Byte stability: the byline is deterministic, not dict-order luck."""
+        """Byte stability: the block is deterministic, not dict-order luck."""
         entry = self.entry(review=self.review(), quotes=[self.quote(101)])
         assert render_note(entry) == render_note(entry)
+
+
+def test_removed_byline_symbols_are_gone():
+    """Tombstone: the byline and its label map are DELETED, not left dormant.
+
+    A leftover `_byline`/`STATUS_LABELS` would let an old call site keep
+    rendering the one-line shape while the tests only looked at the block.
+    Checked on the module object, so a stray definition cannot hide in a
+    function body.
+    """
+    import text_forge.wtd_books as wb
+
+    for name in ("_byline", "STATUS_LABELS"):
+        assert not hasattr(wb, name), f"removed symbol survived: wtd_books.{name}"
+
 
 class TestValidateTextLinks:
     def make_books_dir(self, tmp_path):
@@ -2167,7 +2279,7 @@ class TestP3FromScratch:
 class TestP3ShelfSections:
     """The collapsed shelf lists the renderer appends below the bibliography."""
 
-    STATUS_ORDER = ("Читаю", "Прочтённые", "Недочитанные", "Хочу прочитать")
+    STATUS_ORDER = ("Читаю", "Хочу прочитать", "Прочтённые", "Недочитанные")
 
     def test_shelf_lines_sort_by_slug_so_authors_group(self, tmp_path):
         """Shelves order by SLUG, not title: the slug starts with the author's
@@ -2179,31 +2291,44 @@ class TestP3ShelfSections:
             abr=_note("Яя", "2", author="Абрамов", status="read"),
         )
         out = render_status_sections(books)
+        # the order is the SLUG/page target (abr before yab), the printed text is
+        # `author — title`: the shelf reads grouped by author, name first
         assert out[0].splitlines()[1:3] == [
-            "- [Яя — Абрамов](books/abr.md)",
-            "- [Аа — Яблонев](books/yab.md)",
+            "- [Абрамов — Яя](books/abr.md)",
+            "- [Яблонев — Аа](books/yab.md)",
         ]
 
     def test_section_titles_and_counts(self, tmp_path):
         books = _write_books(
             tmp_path,
-            r1=_note("Читаю-книга", "1", status="reading"),
-            x1=_note("ПрочТ", "2", status="read"),
+            r1=_note("Читаю-книга", "1", status="reading", author="Иванов"),
+            x1=_note("ПрочТ", "2", status="read", author="Иванов"),
             x2=_note("яндекс", "3", status="read"),
-            u1=_note("Унижение", "4", status="unread"),
-            w1=_note("Хочу", "5", status="wish"),
+            u1=_note("Унижение", "4", status="unread", author="Петров"),
+            w1=_note("Хочу", "5", status="wish", author="Петров"),
             w2=_note("Хочу ثانية", "6", status="wish"),
         )
         text = render_p3_references(books, [])["text"]
         for expected in (
             "/// details | Читаю (1)",
+            "/// details | Хочу прочитать (2)",
             "/// details | Прочтённые (2)",
             "/// details | Недочитанные (1)",
-            "/// details | Хочу прочитать (2)",
+        ):
+            assert expected in text, expected
+        # the line shape, kept per shelf: an author leads, a missing author
+        # leaves the title alone (it is never padded with a dangling dash)
+        for expected in (
+            "- [Иванов — Читаю-книга](books/r1.md)",
+            "- [Иванов — ПрочТ](books/x1.md)",
+            "- [яндекс](books/x2.md)",
+            "- [Петров — Унижение](books/u1.md)",
+            "- [Петров — Хочу](books/w1.md)",
+            "- [Хочу ثانية](books/w2.md)",
         ):
             assert expected in text, expected
 
-    def test_section_order_is_reading_read_unread_wish(self, tmp_path):
+    def test_section_order_is_reading_wish_read_unread(self, tmp_path):
         books = _write_books(
             tmp_path,
             r=_note("Читаю-книга", "1", status="reading"),

@@ -19,7 +19,7 @@ from text_forge.wtd_books_p3 import (
     render_p3_references,
 )
 
-STATUS_ORDER = ["Читаю", "Прочтённые", "Недочитанные", "Хочу прочитать"]
+STATUS_ORDER = ["Читаю", "Хочу прочитать", "Прочтённые", "Недочитанные"]
 
 
 def note(title, book_id, *, review=None, status=None, important=None, weight=None,
@@ -184,23 +184,34 @@ class TestStatusSections:
     def test_section_titles_and_counts(self, tmp_path):
         books = write_books(
             tmp_path,
-            r1=note("Читаю-книга", "1", status="reading"),
-            x1=note("ПрочТ", "2", status="read"),
+            r1=note("Читаю-книга", "1", status="reading", author="Иванов"),
+            x1=note("ПрочТ", "2", status="read", author="Иванов"),
             x2=note("яндекс", "3", status="read"),
-            u1=note("Унижение", "4", status="unread"),
-            w1=note("Хочу", "5", status="wish"),
+            u1=note("Унижение", "4", status="unread", author="Петров"),
+            w1=note("Хочу", "5", status="wish", author="Петров"),
             w2=note("Хочу ثانية", "6", status="wish"),
         )
         out = render_p3_references(books, [])
         for expected in (
             "/// details | Читаю (1)",
+            "/// details | Хочу прочитать (2)",
             "/// details | Прочтённые (2)",
             "/// details | Недочитанные (1)",
-            "/// details | Хочу прочитать (2)",
+        ):
+            assert expected in out["text"], expected
+        # and the line shape on each shelf: the author leads, and a note with
+        # no valid author prints its title alone (no dangling dash)
+        for expected in (
+            "- [Иванов — Читаю-книга](books/r1.md)",
+            "- [Иванов — ПрочТ](books/x1.md)",
+            "- [яндекс](books/x2.md)",
+            "- [Петров — Унижение](books/u1.md)",
+            "- [Петров — Хочу](books/w1.md)",
+            "- [Хочу ثانية](books/w2.md)",
         ):
             assert expected in out["text"], expected
 
-    def test_section_order_is_reading_read_unread_wish(self, tmp_path):
+    def test_section_order_is_reading_wish_read_unread(self, tmp_path):
         books = write_books(
             tmp_path,
             r=note("Читаю-книга", "1", status="reading"),
@@ -332,16 +343,18 @@ class TestLinkMapValues:
 
 
 class TestShelfAuthor:
-    """A shelf line names the author beside the title, so the list reads like a
-    bibliography instead of a pile of titles. No valid author -> no ` — ` tail."""
+    """A shelf line names the author FIRST, so the list reads like a
+    bibliography instead of a pile of titles. No valid author -> no author
+    segment and no ` — ` at all."""
 
-    def test_shelf_line_carries_title_and_author(self, tmp_path):
+    def test_shelf_line_carries_author_and_title(self, tmp_path):
+        """Author first, title after the em-dash — the shelf reads by name."""
         books = write_books(tmp_path,
                            rybakov=note("Тяжёлый песок", "1", status="read",
                                        author="Анатолий Рыбаков"))
         text = render_p3_references(books, [])["text"]
         assert "/// details | Прочтённые (1)\n" \
-               "- [Тяжёлый песок — Анатолий Рыбаков](books/rybakov.md)\n///" in text
+               "- [Анатолий Рыбаков — Тяжёлый песок](books/rybakov.md)\n///" in text
 
     def test_authorless_note_has_no_em_dash_tail(self, tmp_path):
         books = write_books(tmp_path, x=note("Икс", "1", status="read"))
@@ -361,9 +374,10 @@ class TestShelfAuthor:
         assert "- [Икс](books/x.md)" in render_p3_references(
             books, [])["text"]
 
-    def test_shelf_still_sorts_by_title_not_author(self, tmp_path):
-        """The sort key stays the TITLE: an author-driven order would reshuffle
-        every shelf in the corpus without anyone asking for it."""
+    def test_shelf_still_sorts_by_page_target(self, tmp_path):
+        """The sort key stays the PAGE (`books/<slug>.md`): flipping only the
+        printed text must not reshuffle a shelf — and because the slug starts
+        with the surname, author-first lines read in ascending order too."""
         books = write_books(
             tmp_path,
             ya=note("Яблоко", "1", status="read", author="Чехов Антон"),
@@ -373,8 +387,8 @@ class TestShelfAuthor:
             "/// details | Прочтённые (2)")[1]
         got = [l for l in body.splitlines() if l.startswith("- [")]
         assert got == [
-            "- [Антоновка — Борис Акунин](books/aa.md)",
-            "- [Яблоко — Чехов Антон](books/ya.md)",
+            "- [Борис Акунин — Антоновка](books/aa.md)",
+            "- [Чехов Антон — Яблоко](books/ya.md)",
         ]
 
     def test_author_text_is_the_note_value_verbatim(self, tmp_path):
@@ -383,7 +397,7 @@ class TestShelfAuthor:
         books = write_books(tmp_path,
                            chekhov=note("Попрыгунья", "1", status="read",
                                        author="Чехов Антон"))
-        assert "- [Попрыгунья — Чехов Антон](books/chekhov.md)" in \
+        assert "- [Чехов Антон — Попрыгунья](books/chekhov.md)" in \
             render_p3_references(books, [])["text"]
 
     def test_author_of_two_authors_is_the_first_one(self, tmp_path):
@@ -391,7 +405,7 @@ class TestShelfAuthor:
         shelf prints that value verbatim."""
         books = write_books(tmp_path, x=note("Икс", "1", status="read",
                                             author="Сергей Довлатов"))
-        assert "- [Икс — Сергей Довлатов](books/x.md)" in render_p3_references(
+        assert "- [Сергей Довлатов — Икс](books/x.md)" in render_p3_references(
             books, [])["text"]
 
     def test_bibliography_bullet_link_text_stays_the_title(self, tmp_path):
