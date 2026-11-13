@@ -41,6 +41,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from text_forge import console
 from text_forge.grammar import (
     DROP_REASONS,
     AddedLine,
@@ -121,71 +122,65 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _summary(payload: dict[str, Any]) -> str:
-    """One line of facts: kept, dropped per reason, files, typography per kind."""
+def _report(
+    payload: dict[str, Any], json_path: Path, md_path: Path, note: str
+) -> None:
+    """What was kept, what was dropped and where the artifacts went."""
     files = payload["files"]
     kept = sum(len(rows) for rows in files.values())
     dropped = payload["dropped"]
-    typo = Counter(item["kind"] for item in payload["typography"])
-    dropped_bits = ", ".join(
-        f"{reason}={dropped.get(reason, 0)}" for reason in DROP_REASONS
-    )
-    parts = [
-        f"scope={payload['scope']}",
-        f"base={payload['base']}",
-        f"head={payload['head'][:9]}",
-        f"kept {kept}",
-        f"in {len(files)} file(s)",
-        f"dropped: {dropped_bits}",
-    ]
-    if payload["typography"]:
-        kinds = ", ".join(f"{kind}={typo[kind]}" for kind in sorted(typo))
-        parts.append(f"typography: {kinds}")
+    typography = Counter(item["kind"] for item in payload["typography"])
+    console.title("grammar input", note=note)
+    console.detail("kept", f"{kept} lines · {len(files)} file(s)")
+    console.counts("dropped", [(r, dropped.get(r, 0)) for r in DROP_REASONS])
+    if typography:
+        console.counts("typography", sorted(typography.items()))
     else:
-        parts.append("typography: 0")
-    return "; ".join(parts)
+        console.detail("typography", "none")
+    console.detail("json", console.rel(json_path))
+    console.detail("md", console.rel(md_path))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     root = Path(args.root).resolve()
     if not root.is_dir():
-        print(f"Not a directory: {root}", file=sys.stderr)
+        console.fail(f"not a directory: {root}")
         return EXIT_BAD_REF
     if args.only and args.since:
-        print("--only and --since are mutually exclusive", file=sys.stderr)
+        console.fail("--only and --since are mutually exclusive")
         return EXIT_NOTHING
 
     if args.only:
         try:
             payload = build_file_payload(root, args.only, with_typography=args.typo)
         except FileNotFoundError as exc:
-            print(f"{exc}", file=sys.stderr)
+            console.fail(str(exc))
             return EXIT_BAD_REF
         except GitError as exc:
-            print(f"git failed: {exc}", file=sys.stderr)
+            console.fail(f"git failed: {exc}")
             return EXIT_BAD_REF
+        note = f"file {args.only}"
     else:
         base_ref = args.since if args.since else "HEAD"
         if not resolve_ref(root, base_ref):
-            print(f"Cannot resolve --since ref: {args.since}", file=sys.stderr)
+            console.fail(f"cannot resolve --since ref: {args.since}")
             return EXIT_BAD_REF
         try:
             payload = build_payload(
                 root, base_ref, args.scope, with_typography=args.typo
             )
         except GitError as exc:
-            print(f"git failed: {exc}", file=sys.stderr)
+            console.fail(f"git failed: {exc}")
             return EXIT_BAD_REF
+        note = f"{args.scope} · {payload['base'][:9]}..{payload['head'][:9]}"
 
     if not payload["files"]:
-        print("No added lines to check.")
+        console.warn("no added lines to check — nothing written")
         return EXIT_NOTHING
 
     json_path, md_path = _write_artifacts(root, args, payload)
-    print(_summary(payload))
-    print(f"json: {json_path}")
-    print(f"md:   {md_path}")
+    _report(payload, json_path, md_path, note)
     return EXIT_OK
 
 

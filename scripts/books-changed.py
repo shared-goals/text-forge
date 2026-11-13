@@ -40,6 +40,7 @@ if str(REPO) not in sys.path:
 
 import argparse
 
+from text_forge import console
 from text_forge.books_changed import (
     BookChange,
     GitError,
@@ -90,43 +91,45 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _summary(changes: Sequence[BookChange], base_ref: str) -> str:
-    """One line of facts for the console: range, totals per kind, shelves."""
+def _report(changes: Sequence[BookChange], base_ref: str, md_path: Path) -> None:
+    """Range, totals per change kind, shelves touched, artifact path."""
     kinds = Counter(c.change for c in changes)
-    shelves = Counter(c.shelf or "без полки" for c in changes)
-    per_kind = " ".join(f"{k}={kinds[k]}" for k in ("added", "modified", "removed"))
-    per_shelf = " ".join(f"{name}={n}" for name, n in shelves.items())
-    return (
-        f"base={base_ref[:9]} total={len(changes)} ({per_kind}) "
-        f"shelves: {per_shelf or '-'}"
-    )
+    shelves = Counter(c.shelf or "no shelf" for c in changes)
+    console.title("books changed", note=f"{base_ref[:9]}..HEAD")
+    console.detail("total", f"{len(changes)} book(s)")
+    per_kind = [(k, kinds.get(k, 0)) for k in ("added", "modified", "removed")]
+    console.counts("kind", per_kind)
+    console.counts("shelf", sorted(shelves.items()))
+    console.detail("md", console.rel(md_path))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     root = Path(args.root).resolve()
     if not root.is_dir():
-        print(f"--root is not a directory: {root}", file=sys.stderr)
+        console.fail(f"--root is not a directory: {root}")
         return EXIT_USAGE
     if not is_git_repo(root):
-        print(f"Not a git repository: {root}", file=sys.stderr)
+        console.fail(f"not a git repository: {root}")
         return EXIT_USAGE
 
     if not resolve_ref(root, args.since):
-        print(f"Cannot resolve --since ref: {args.since}", file=sys.stderr)
+        console.fail(f"cannot resolve --since ref: {args.since}")
         return EXIT_BAD_REF
 
     try:
         changes = changed_books(root, args.since)
     except GitError as exc:
-        print(f"git failed: {exc}", file=sys.stderr)
+        console.fail(f"git failed: {exc}")
         return EXIT_BAD_REF
 
     md_path = _md_path(root, args)
     _write(md_path, render_books_markdown(changes, args.since))
     if changes:
-        print(_summary(changes, args.since))
-    print(f"md:   {md_path}")
+        _report(changes, args.since, md_path)
+    else:
+        console.warn("no book changed since the ref — empty list written")
+        console.detail("md", console.rel(md_path))
     return EXIT_OK
 
 

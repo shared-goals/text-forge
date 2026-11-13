@@ -292,7 +292,7 @@ class TestCli:
         root, _base, head = repo
         proc = run_cli(root, "--since", head)
         assert proc.returncode == 2
-        assert "No added lines to check." in proc.stdout
+        assert "no added lines to check" in proc.stderr
 
     def test_working_tree_diff_is_the_default_base(self, repo):
         root, _committed, _tip = repo
@@ -332,12 +332,13 @@ class TestCli:
     def test_prints_counts_of_kept_and_dropped(self, repo):
         root, base, _ = repo
         proc = run_cli(root, "--since", base, "--typo")
-        out = proc.stdout
-        assert "kept 2" in out
-        assert "link_only=1" in out
-        assert "structural=0" in out
-        assert "quote=0" in out  # a zero still prints: silence must be visible
-        assert re.search(r"typography: \S*=1", out)
+        out = proc.stderr  # human output goes to stderr, stdout stays empty
+        assert re.search(r"kept\s+2 lines", out)
+        assert "link_only 1" in out
+        assert "structural 0" in out
+        assert "quote 0" in out  # a zero still prints: silence must be visible
+        assert re.search(r"typography\s+\S+ 1", out)
+        assert proc.stdout == ""  # artifacts and pipes must not see cosmetics
 
     def test_not_a_git_repo_exits_1(self, tmp_path):
         plain = tmp_path / "nope"
@@ -413,7 +414,7 @@ class TestContractFacts:
         )
         proc = run_cli(root, "--since", base, "--scope", "wtd")
         assert proc.returncode == 2
-        assert "No added lines to check." in proc.stdout
+        assert "no added lines to check" in proc.stderr
         assert not (root / "build" / "grammar-input.json").exists()
 
     def test_generated_p3_page_is_outside_wtd(self, tmp_path):

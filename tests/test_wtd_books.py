@@ -179,7 +179,7 @@ class TestGroupExport:
                 "authors": [{"full_name": "Сергей Довлатов"}],
             },
         }
-        entries, _own, note_editions = group_export(
+        _entries, _own, note_editions = group_export(
             books=[e1, e2, e3], quotes=[q], reviews=[r]
         )
         groups = sorted(tuple(sorted(v)) for v in note_editions.values())
@@ -1243,7 +1243,7 @@ class TestBuildBooks:
         report = build_books(books_p, quotes_p, reviews_p, out)
         files = list(out.glob("*.md"))
         assert len(files) == 2  # zona + one own note
-        own = [f for f in files if f.name != "dovlatov-zona.md"][0]
+        own = next(f for f in files if f.name != "dovlatov-zona.md")
         assert own.read_text(encoding="utf-8").count("^quote_") == 2
         assert report["own_notes"] == 1
 

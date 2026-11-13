@@ -35,6 +35,9 @@ dependencies = [
     "livereload>=2.7.1",
     # mkdocs.yml uses !ENV tags
     "pyyaml>=6.0.3",
+    # Console output of the scripts: panels, live progress, colour (same stack
+    # as the shared-goals scripts, so the terminal look is consistent)
+    "rich>=13.7",
     # LiveLib reads go through the livelib-mcp client (PyPI; the LOCKED
     # version in uv.lock is what builds install — refresh it with
     # `uv lock --upgrade-package livelib-mcp`); text-forge keeps only pipeline logic

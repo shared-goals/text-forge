@@ -42,6 +42,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from text_forge import console
 from text_forge.prompts import UnknownPrompt, load_prompt
 
 EXIT_OK = 0
@@ -148,14 +149,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.footer,
         )
     except JobError as exc:
-        print(str(exc), file=sys.stderr)
+        console.fail(str(exc))
         return EXIT_BAD_INPUT
 
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding="utf-8")
-        print(f"job: {out} ({text.count(chr(10))} lines)")
+        console.done(f"job {console.rel(out)} · {text.count(chr(10))} lines")
     else:
         sys.stdout.write(text)
     return EXIT_OK
