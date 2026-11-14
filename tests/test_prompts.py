@@ -23,7 +23,7 @@ PROMPTS_DIR = pathlib.Path(__file__).resolve().parents[1] / "text_forge" / "prom
 
 class TestPromptNames:
     def test_the_library_holds_exactly_the_migrated_prompts(self):
-        assert prompt_names() == ["changelog", "grammar", "summarize"]
+        assert prompt_names() == ["grammar", "summarize"]
 
     def test_names_have_no_md_suffix(self):
         assert all(not name.endswith(".md") for name in prompt_names())
@@ -42,7 +42,6 @@ class TestLoadPrompt:
         with pytest.raises(UnknownPrompt) as excinfo:
             load_prompt("no-such-prompt")
         message = str(excinfo.value)
-        assert "changelog" in message
         assert "grammar" in message
         assert "summarize" in message
 
@@ -116,25 +115,10 @@ class TestLoadPrompt:
             assert not body.lstrip("\n").startswith("---")
             assert "agent: agent" not in body.splitlines()
 
-    def test_ambiguous_duplicated_close_fence_is_left_alone(self):
-        # changelog.md really does end with two ` ``` ` lines: its own example
-        # fence, then the wrapper fence.  Only one close is eaten — guessing which
-        # one the file author meant would rewrite the prompt.
-        body = load_prompt("changelog")
-        assert body.endswith("```\n")
-
-    def test_shipped_changelog_uses_the_fence_form(self):
-        # changelog.md opens with the whole-file fence and carries no frontmatter
-        # below it, so its body starts straight at the title line
-        body = load_prompt("changelog")
-        assert body.startswith("\n# Changelog Summary in Russian\n")
-
     def test_body_is_returned_verbatim_after_the_leading_blank_line(self):
         # the seam the model reads: blank line, then the prompt's own first line
-        # untouched — grammar.md and changelog.md open with a heading, summarize.md
-        # with prose
+        # untouched — grammar.md opens with a heading, summarize.md with prose
         assert load_prompt("grammar").startswith("\n# ")
-        assert load_prompt("changelog").startswith("\n# ")
         assert load_prompt("summarize").startswith("\nRead whole ")
 
     def test_body_is_padded_with_exactly_one_blank_line(self):

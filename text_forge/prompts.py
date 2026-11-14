@@ -7,8 +7,8 @@ package data, so a content repo cannot fall behind on a prompt change.
 
 A prompt file carries the wrappers an editor expects — an optional ```prompt
 fence and an optional YAML frontmatter — in whichever order the editor wrote them
-(`grammar.md` and `summarize.md` open with frontmatter, `changelog.md` opens with
-the fence and then frontmatter).  Both forms resolve to the instruction body, and
+(both shipped prompts open with frontmatter, a file may also open with the
+fence).  Both forms resolve to the instruction body, and
 the body's own fences and `---` rules are kept: they are examples the model reads,
 not wrappers.
 

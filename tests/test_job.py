@@ -55,8 +55,8 @@ class TestRender:
 
     def test_prompt_body_then_input(self, tmp_path):
         inp = write(tmp_path / "in.md", "# Input\n\nLine one.\n")
-        body = job.load_body("changelog")
-        out = job.build_job("changelog", inputs=[inp], sections=[], footer=None)
+        body = job.load_body("summarize")
+        out = job.build_job("summarize", inputs=[inp], sections=[], footer=None)
         assert out.startswith(body)
         assert out.endswith("\n# Input\n\nLine one.\n")
 
@@ -77,7 +77,7 @@ class TestRender:
     def test_diff_section_is_fenced(self, tmp_path):
         sec = write(tmp_path / "changes.diff", "diff --git a/x.md b/x.md\n+new\n")
         out = job.build_job(
-            "changelog", inputs=[], sections=[("Diff", sec)], footer=None
+            "summarize", inputs=[], sections=[("Diff", sec)], footer=None
         )
         assert (
             "\n---\n\n## Diff\n\n```diff\ndiff --git a/x.md b/x.md\n+new\n```\n" in out
@@ -86,7 +86,7 @@ class TestRender:
     def test_patch_section_is_fenced_too(self, tmp_path):
         sec = write(tmp_path / "changes.patch", "+new\n")
         out = job.build_job(
-            "changelog", inputs=[], sections=[("Patch", sec)], footer=None
+            "summarize", inputs=[], sections=[("Patch", sec)], footer=None
         )
         assert "\n## Patch\n\n```diff\n+new\n```\n" in out
 
@@ -96,12 +96,12 @@ class TestRender:
         assert out.endswith("\nno newline at eof\n")
 
     def test_empty_section_is_rendered_as_silence(self, tmp_path):
-        # books-changed.py may fail (the Makefile tolerates it with `|| true`), so
-        # an empty file is a normal input; a fence around nothing or a fabricated
-        # "No book changes." line both change what the model reads
+        # a tool that found nothing writes an empty file, so an empty section is a
+        # normal input; a fence around nothing or a fabricated "No book changes."
+        # line both change what the model reads
         sec = write(tmp_path / "empty.md", "")
         out = job.build_job(
-            "changelog", inputs=[], sections=[("Books", sec)], footer=None
+            "summarize", inputs=[], sections=[("Books", sec)], footer=None
         )
         assert out.endswith("\n## Books\n\n")
         assert "No book changes." not in out
@@ -133,7 +133,7 @@ class TestRender:
         a = write(tmp_path / "a.md", "AAA\n")
         b = write(tmp_path / "b.md", "BBB\n")
         out = job.build_job(
-            "changelog", inputs=[], sections=[("One", a), ("Two", b)], footer=None
+            "summarize", inputs=[], sections=[("One", a), ("Two", b)], footer=None
         )
         block = out[out.index("\n---\n\n## One\n\n") :]
         assert block == "\n---\n\n## One\n\nAAA\n\n## Two\n\nBBB\n"
@@ -165,7 +165,7 @@ class TestRender:
         a = write(tmp_path / "a.md", "AAA\n")
         b = write(tmp_path / "b.diff", "+BBB\n")
         out = job.build_job(
-            "changelog",
+            "summarize",
             inputs=[],
             sections=[("First", a), ("Second", b)],
             footer=None,
@@ -179,7 +179,7 @@ class TestRender:
         sec = write(tmp_path / "d.diff", "+x\n")
         title = "Diff (text/*.md, 77f44f2..HEAD)"
         out = job.build_job(
-            "changelog", inputs=[], sections=[(title, sec)], footer=None
+            "summarize", inputs=[], sections=[(title, sec)], footer=None
         )
         assert f"\n---\n\n## {title}\n\n```diff\n+x\n```\n" in out
 
@@ -205,7 +205,7 @@ class TestCli:
         d = write(tmp_path / "d.diff", "+x\n")
         proc = run_cli(
             "--prompt",
-            "changelog",
+            "summarize",
             "--input",
             str(a),
             "--section",
