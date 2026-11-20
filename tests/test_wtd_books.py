@@ -613,13 +613,19 @@ class TestNoteProperties:
         that names a livelib url out of what a body check looks at.
         """
         rest = md.split("---\n", 2)[2] if md.startswith("---\n") else md
-        cut = min([rest.index(x) for x in ("## ", "^quote_") if x in rest],
-                 default=len(rest))
+        cut = min(
+            [rest.index(x) for x in ("## ", "^quote_") if x in rest], default=len(rest)
+        )
         return rest[:cut]
 
     @staticmethod
-    def entry(author="Анатолий Рыбаков", status="read", book="1000443129",
-              review=None, quotes=()):
+    def entry(
+        author="Анатолий Рыбаков",
+        status="read",
+        book="1000443129",
+        review=None,
+        quotes=(),
+    ):
         return {
             "book": {
                 "book_url": f"https://www.livelib.ru/book/{book}",
@@ -640,9 +646,12 @@ class TestNoteProperties:
             "text": "<p>Текст цитаты</p>",
             "created_at": "2024-01-01T00:00:00",
             "quote": {"quote_id": qid, "url": f"/quote/{qid}"},
-            "art_edition": {"id": "1000443129", "url": "/book/1000443129",
-                            "title": "Тяжёлый песок",
-                            "authors": [{"full_name": "Анатолий Рыбаков"}]},
+            "art_edition": {
+                "id": "1000443129",
+                "url": "/book/1000443129",
+                "title": "Тяжёлый песок",
+                "authors": [{"full_name": "Анатолий Рыбаков"}],
+            },
         }
 
     @staticmethod
@@ -652,9 +661,12 @@ class TestNoteProperties:
             "url": f"/review/{rid}",
             "text": "<p>Отличный роман.</p>",
             "created_at": "2023-02-01T00:00:00",
-            "art_edition": {"id": "1000443129", "url": "/book/1000443129",
-                            "title": "Тяжёлый песок",
-                            "authors": [{"full_name": "Анатолий Рыбаков"}]},
+            "art_edition": {
+                "id": "1000443129",
+                "url": "/book/1000443129",
+                "title": "Тяжёлый песок",
+                "authors": [{"full_name": "Анатолий Рыбаков"}],
+            },
         }
 
     @staticmethod
@@ -666,7 +678,7 @@ class TestNoteProperties:
         """
         lines = md.split("\n")
         close = lines.index("---", 1)
-        rest = lines[close + 1:]
+        rest = lines[close + 1 :]
         out = []
         for l in rest:
             if l.startswith("## "):
@@ -685,10 +697,18 @@ class TestNoteProperties:
         declares, which is the id the «Ссылка» paragraph names.
         """
         entry = group_export(
-            books=[{"book_url": self.URL, "title": "Тяжёлый песок",
-                   "author": "Анатолий Рыбаков", "my_mark": None,
-                   "status": "read"}],
-            quotes=[], reviews=[])[0][0]
+            books=[
+                {
+                    "book_url": self.URL,
+                    "title": "Тяжёлый песок",
+                    "author": "Анатолий Рыбаков",
+                    "my_mark": None,
+                    "status": "read",
+                }
+            ],
+            quotes=[],
+            reviews=[],
+        )[0][0]
         md = render_note(entry)
         lines = md.split("\n")
         close = lines.index("---", 1)
@@ -696,9 +716,10 @@ class TestNoteProperties:
         # one blank line after the fence, then the three paragraphs, each on its
         # own line and separated from the next by a blank line. Cut before any
         # content below: a quote source line shares the ` — ` shape.
-        tail = "\n".join(lines[close + 1:])
-        cut = min([tail.index(x) for x in ("## ", "^quote_") if x in tail],
-                 default=len(tail))
+        tail = "\n".join(lines[close + 1 :])
+        cut = min(
+            [tail.index(x) for x in ("## ", "^quote_") if x in tail], default=len(tail)
+        )
         assert tail[:cut] == (
             "\n"
             "Автор: Анатолий Рыбаков\n"
@@ -729,7 +750,7 @@ class TestNoteProperties:
         """Visible and clickable: the text IS the url, not a friendly label."""
         md = render_note(self.entry())
         link = next(l for l in md.split("\n") if l.startswith("Ссылка: "))
-        text = link[len("Ссылка: "):]
+        text = link[len("Ссылка: ") :]
         assert text == f"[{self.URL}]({self.URL})"
         # and what the reader sees is exactly the target
         m = re.fullmatch(r"\[(https?://\S+)\]\((\S+)\)", text)
@@ -842,8 +863,9 @@ class TestNoteProperties:
         # lines was inserted where the block would have been
         if len(lines) > close + 1:
             assert lines[close + 1] == ""
-            assert lines[close + 2].startswith(">") or lines[
-                close + 2].startswith("## ")
+            assert lines[close + 2].startswith(">") or lines[close + 2].startswith(
+                "## "
+            )
         assert "\n\n\n" not in md
 
     def test_author_value_is_the_note_value_verbatim(self):
@@ -854,8 +876,7 @@ class TestNoteProperties:
     # ------------------------------------------------------------------- order
 
     def test_order_block_review_quotes(self):
-        md = render_note(self.entry(review=self.review(),
-                                   quotes=[self.quote(101)]))
+        md = render_note(self.entry(review=self.review(), quotes=[self.quote(101)]))
         lines = [l for l in md.split("\n") if l.strip()]
         i_block = lines.index("Автор: Анатолий Рыбаков")
         i_review = lines.index("## Рецензия")
@@ -1092,8 +1113,9 @@ class TestBuildBooks:
         e = dict(BOOK_ZONA, book_url="https://www.livelib.ru/book/1000699994")
         books_p, quotes_p, reviews_p = self.write_inputs(tmp_path, books=[e])
         cur = tmp_path / "books_curation.yml"
-        cur.write_text('"1000699994":   # Зона — Сергей Довлатов\n  weight: 7\n',
-                      encoding="utf-8")
+        cur.write_text(
+            '"1000699994":   # Зона — Сергей Довлатов\n  weight: 7\n', encoding="utf-8"
+        )
         out = tmp_path / "books"
         build_books(books_p, quotes_p, reviews_p, out, curation_path=cur)
         md = (out / "dovlatov-zona.md").read_text(encoding="utf-8")
@@ -1983,8 +2005,16 @@ def _about(out, reason, slug=None):
     ]
 
 
-def _note(title, book_id, *, review=None, status="read", important=None,
-          weight=None, author=None):
+def _note(
+    title,
+    book_id,
+    *,
+    review=None,
+    status="read",
+    important=None,
+    weight=None,
+    author=None,
+):
     """A note-book spelled out as frontmatter; `status=None` omits the key —
     a note that names no shelf, which the shelf check must report."""
     fm = ["---", f'title: "{title}"', "tags:", "  - book"]
@@ -2443,10 +2473,16 @@ class TestP3RealCorpus:
     """
 
     REPO = pathlib.Path(__file__).resolve().parents[2] / "whattodo"
+    # The smoke reads two inputs: the generated page and the LiveLib export.
+    # The export is gitignored, so a fresh checkout has the page and no export --
+    # which used to crash here instead of skipping.
+    EXPORT = REPO / "livelib-export" / "livelib-reviews-api.json"
 
     def setup_method(self):
         if not (self.REPO / "text" / "p3-references.md").exists():
             pytest.skip("whattodo repo data not available")
+        if not self.EXPORT.is_file():
+            pytest.skip(f"LiveLib export not available: {self.EXPORT.name}")
 
     def test_real_corpus_smoke(self):
         reviews = json.loads(
