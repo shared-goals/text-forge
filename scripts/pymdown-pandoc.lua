@@ -192,6 +192,56 @@ local function default_title_for(block_type)
   return titles[block_type]
 end
 
+-- Video markers: `![type:video](url "Title")` is rendered as a player on the site
+-- (text_forge.video). In the book an iframe is useless — EPUB readers ignore it —
+-- and pandoc would otherwise fetch the URL and embed the fetched page as a media
+-- file. So the marker (and any raw iframe left in a text) becomes a plain link.
+local VIDEO_MARKER = 'type:video'
+local VIDEO_LINK_TEXT = 'Watch on YouTube'
+
+local function youtube_watch_url(src)
+  if not src then return nil end
+  local id = src:match('youtube%.com/embed/([%w_%-]+)')
+    or src:match('youtube%-nocookie%.com/embed/([%w_%-]+)')
+    or src:match('youtube%.com/watch%?v=([%w_%-]+)')
+    or src:match('youtu%.be/([%w_%-]+)')
+  if not id then return nil end
+  return 'https://youtu.be/' .. id
+end
+
+local function video_link_inlines(text)
+  return { pandoc.Str('▶'), pandoc.Space(), pandoc.Str(text) }
+end
+
+local function video_link_para(src, title)
+  local text = title
+  if not text or text == '' then text = VIDEO_LINK_TEXT end
+  local href = youtube_watch_url(src) or src or ''
+  return pandoc.Para{ pandoc.Link(video_link_inlines(text), href) }
+end
+
+local function iframe_src(raw)
+  if not raw then return nil end
+  return raw:match('<iframe[^>]-src="([^"]+)"') or raw:match("<iframe[^>]-src='([^']+)'")
+end
+
+local function is_video_marker(img)
+  if not img or not img.caption then return false end
+  return pandoc.utils.stringify(img.caption) == VIDEO_MARKER
+end
+
+-- A marker alone on its line reaches pandoc as an implicit figure (`Figure` with
+-- the alt as caption), not as a paragraph, so the figure is where it is caught.
+function Figure(fig)
+  local body = fig.content
+  if not body or #body ~= 1 then return nil end
+  local plain = body[1]
+  if not plain.c or #plain.c ~= 1 then return nil end
+  local img = plain.c[1]
+  if not img or img.t ~= 'Image' or not is_video_marker(img) then return nil end
+  return video_link_para(img.src, img.title)
+end
+
 -- Process images: extract attributes and keep only width/height
 function Para(para)
   if not para.c or #para.c < 1 or para.c[1].t ~= 'Image' then
@@ -199,6 +249,11 @@ function Para(para)
   end
 
   local img = para.c[1]
+
+  if is_video_marker(img) then
+    return video_link_para(img.src, img.title)
+  end
+
   local attr = img.attr or pandoc.Attr()
 
   -- Extract attributes from following elements
@@ -401,4 +456,24 @@ function Blocks(blocks)
   end
 
   return result
+end
+
+-- Raw HTML players left by texts written before the marker existed. Pandoc splits
+-- one `<iframe …></iframe>` into two raw blocks: the opening tag and the closing
+-- tag. The opening becomes a link, the closing must disappear — a stray closing
+-- tag would reach the EPUB XHTML and break it.
+function RawBlock(block)
+  if block.format ~= 'html' then return nil end
+  local src = iframe_src(block.text)
+  if src then return video_link_para(src, nil) end
+  if block.text:match('^%s*</iframe%s*>%s*$') then return {} end
+  return nil
+end
+
+function RawInline(inline)
+  if inline.format ~= 'html' then return nil end
+  local src = iframe_src(inline.text)
+  if not src then return nil end
+  local href = youtube_watch_url(src) or src
+  return pandoc.Link(video_link_inlines(VIDEO_LINK_TEXT), href)
 end

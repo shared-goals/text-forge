@@ -13,6 +13,8 @@ from mkdocs.config import config_options
 from mkdocs.config.defaults import MkDocsConfig
 from mkdocs.plugins import BasePlugin
 
+from text_forge.video import render_markers
+
 
 def _is_book_page(page) -> bool:
     """True when the page's source lives under `books/` in docs_dir.
@@ -42,6 +44,7 @@ class TextForgePlugin(BasePlugin):
         ("editor_enabled", config_options.Type(bool, default=True)),
         ("nobr_emoticons_enabled", config_options.Type(bool, default=True)),
         ("anchor_block_ids", config_options.Type(bool, default=True)),
+        ("video_embeds", config_options.Type(bool, default=True)),
         ("downloads_enabled", config_options.Type(bool, default=False)),
         ("ai_readable_prompt", config_options.Type(str, default="")),
         (
@@ -188,7 +191,8 @@ class TextForgePlugin(BasePlugin):
         Order matters: nobr_emoticons (span wrapping) first, as before, then
         block-id anchors. Anchors are applied ONLY to pages under books/ — the
         book note-books are the only pages that carry Obsidian `^quote_N` ids,
-        and a chapter's bytes must not change at build time.
+        and a chapter's bytes must not change at build time. Video markers come
+        last: they expand to a block of HTML and nothing else looks inside it.
         """
         if (
             self.config["nobr_emoticons_enabled"]
@@ -201,6 +205,9 @@ class TextForgePlugin(BasePlugin):
             from text_forge.anchor_ids import convert_block_ids
 
             markdown = convert_block_ids(markdown)
+
+        if self.config["video_embeds"]:
+            markdown = render_markers(markdown)
         return markdown
 
     def on_env(self, env, config, files):

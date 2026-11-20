@@ -10,6 +10,8 @@ from pathlib import Path
 
 import yaml
 
+from text_forge.epub_check import validate_epub
+
 
 def _get_data_path(relative_path: str) -> Path:
     """
@@ -305,6 +307,9 @@ def build_epub_pipeline(
             epub_file,
             docs_dir,
         )
+
+        # Step 5: refuse to ship a book whose XHTML cannot be parsed
+        validate_epub(epub_file)
 
         print(f"\n✓ EPUB build complete: {epub_file}")
         return epub_file

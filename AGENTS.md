@@ -156,3 +156,7 @@ Copilot rules (from `.github/copilot-instructions.md`):
   - `pyproject.toml` installs `mkdocs/overrides` + `mkdocs/hooks` into
     `sys.prefix/share/text-forge/...`
   - `TextForgePlugin` looks there first and falls back to repo-relative paths for development
+  - Consequence: after editing anything under `scripts/`, `mkdocs/`, or `epub/`, the
+    installed copy is stale and tests keep using the old file. Refresh it with
+    `uv sync --offline --reinstall-package sg-text-forge` before running the pipeline
+    tests — a silently unchanged lua filter looks exactly like a broken rule.

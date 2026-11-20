@@ -80,7 +80,23 @@ The same source can become an EPUB:
 - PyMdown syntax is normalized for Pandoc;
 - assets are bundled;
 - metadata can include Git-derived dates/versioning;
-- output is compatible with normal e-readers.
+- output is compatible with normal e-readers;
+- every generated XHTML document is validated: a chapter that cannot be parsed
+  fails the build instead of shipping a book whose pages silently disappear.
+
+### Embed a video
+
+A video lives in the text as a marker, not as raw HTML:
+
+```markdown
+![type:video](https://www.youtube.com/embed/LN6jA_brXXs "Webzavod 1997")
+```
+
+On the site the marker becomes a responsive player (16:9, `loading="lazy"`, a proper
+referrer policy). In the EPUB it becomes a plain link — "▶ Webzavod 1997" — because
+e-readers ignore iframes and Pandoc would otherwise pull the page behind the URL
+into the book as a media file. The syntax is the one the `mkdocs-video` plugin uses,
+so the source stays portable. Switch it off with `video_embeds: false`.
 
 ### Edit text in Obsidian
 
@@ -334,6 +350,7 @@ plugins:
       # Editor
       editor_enabled: false
       nobr_emoticons_enabled: true
+      video_embeds: true
 
       # Downloads and AI-readable export
       downloads_enabled: false
