@@ -96,9 +96,7 @@ def test_truncated_quote_passes_when_words_follow_in_order(root):
 
 def test_quote_on_the_wrong_line_names_the_line_it_is_on(root):
     """Text edited after the run: the address drifts, the quote is intact."""
-    finding = Finding(
-        label="l", file="text/p1-a.md", line=1, quote="Исходный текст."
-    )
+    finding = Finding(label="l", file="text/p1-a.md", line=1, quote="Исходный текст.")
     result = check_findings(root, [finding])
     assert result.ok == 0
     assert result.mismatched[0].moved_to == 2
@@ -152,3 +150,53 @@ def test_address_check_is_a_value_not_a_workbench():
     result = AddressCheck()
     with pytest.raises(FrozenInstanceError):
         result.ok = 5  # type: ignore[misc]
+
+
+# --- форма цитаты: контракт, а не догадка -----------------------------------
+# Отчёт — не свободный текст: цитата обязана быть одной строкой, взятой из файла.
+# Две ошибки формы опаснее неверного адреса, потому что выглядят как «проверено».
+
+
+def test_parse_findings_keeps_every_quote_line():
+    finding = parse_findings(
+        "### 1 — x\n`text/p1-a.md:2`\n> первая строка\n> вторая строка\n"
+    )[0]
+    assert finding.quote == "первая строка\nвторая строка"
+
+
+def test_multiline_quote_is_a_contract_violation(root):
+    """Проверять только первую строку — значит пропустить выдумку во второй."""
+    finding = Finding(
+        label="l",
+        file="text/p1-a.md",
+        line=2,
+        quote="Исходный текст.\nЭТОЙ СТРОКИ В ФАЙЛЕ НЕТ",
+    )
+    result = check_findings(root, [finding])
+    assert result.ok == 0
+    assert result.mismatched[0].reason == "multi"
+    assert result.mismatched[0].quote_lines == 2
+
+
+def test_compound_quote_is_a_contract_violation(root):
+    """`A / B` — склейка разных мест; проверке нужно сказать, где каждое."""
+    finding = Finding(
+        label="l",
+        file="text/p1-a.md",
+        line=2,
+        quote="Исходный текст. / Бежим по ссылке дальше. / Выдуманный кусок",
+    )
+    result = check_findings(root, [finding])
+    assert result.ok == 0
+    assert result.mismatched[0].reason == "compound"
+    assert result.mismatched[0].fragments == (
+        ("Исходный текст.", 2),
+        ("Бежим по ссылке дальше.", 4),
+        ("Выдуманный кусок", None),
+    )
+
+
+def test_single_line_quote_is_still_fine(root):
+    """Правило не должно ломать нормальный отчёт."""
+    finding = Finding(label="l", file="text/p1-a.md", line=2, quote="Исходный текст.")
+    assert check_findings(root, [finding]).mismatched == ()

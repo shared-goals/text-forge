@@ -27,6 +27,9 @@ _LINK = re.compile(r"\]\([^)]*\)")
 _NOISE = re.compile(r"[*_`\[\]]")
 _ADDRESS = re.compile(r"^`([^`:]+\.md):(\d+)`", re.MULTILINE)
 _QUOTE = re.compile(r"^>\s?(.*)$", re.MULTILINE)
+# A quote glued from several places: `A / B`. The report contract allows one
+# line, so this is a form error, and the checker can say where each piece lives.
+_COMPOUND = re.compile(r"\s+/\s+")
 _FINDING_SPLIT = re.compile(r"\n(?=### )")
 
 
@@ -62,6 +65,11 @@ class Mismatch:
     finding: Finding
     actual: str
     moved_to: int | None = None
+    #: ``quote`` — the words are not on the line; ``multi`` — the finding quotes
+    #: several lines; ``compound`` — the quote glues separate places with ``/``.
+    reason: str = "quote"
+    quote_lines: int = 0
+    fragments: tuple[tuple[str, int | None], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -94,13 +102,15 @@ def parse_findings(report: str) -> list[Finding]:
             continue
         label = block.splitlines()[0].strip()
         address = _ADDRESS.search(block)
-        quote = _QUOTE.search(block)
+        # every quote line, not the first: a finding that quotes two lines must
+        # be a violation, not a finding verified by its first line alone
+        quote = "\n".join(_QUOTE.findall(block))
         findings.append(
             Finding(
                 label=label,
                 file=address.group(1).strip() if address else "",
                 line=int(address.group(2)) if address else 0,
-                quote=quote.group(1) if quote else "",
+                quote=quote,
             )
         )
     return findings
@@ -156,6 +166,29 @@ def check_findings(root: Path, findings: Sequence[Finding]) -> AddressCheck:
             out_of_range.append((finding.file, finding.line))
             continue
         actual = lines[finding.line - 1]
+        if "\n" in finding.quote:
+            mismatched.append(
+                Mismatch(
+                    finding=finding,
+                    actual=actual,
+                    reason="multi",
+                    quote_lines=finding.quote.count("\n") + 1,
+                )
+            )
+            continue
+        if _COMPOUND.search(finding.quote):
+            pieces = [p.strip() for p in _COMPOUND.split(finding.quote) if p.strip()]
+            mismatched.append(
+                Mismatch(
+                    finding=finding,
+                    actual=actual,
+                    reason="compound",
+                    fragments=tuple(
+                        (piece, _find_quote(lines, piece)) for piece in pieces
+                    ),
+                )
+            )
+            continue
         if _quote_matches(finding.quote, actual):
             ok += 1
         else:

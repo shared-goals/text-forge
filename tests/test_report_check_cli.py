@@ -101,3 +101,46 @@ def test_missing_report_exits_one(tmp_path):
     proc = _run(str(tmp_path / "nope.md"), str(tmp_path))
     assert proc.returncode == 1
     assert "report not found" in proc.stderr
+
+
+# --- форма цитаты ------------------------------------------------------------
+
+MULTI_REPORT = """# Отчёт
+
+### 1 — настоящая ошибка · high
+`text/p1-a.md:2`
+> Исходный текст.
+> ЭТОЙ СТРОКИ В ФАЙЛЕ НЕТ
+"""
+
+COMPOUND_REPORT = """# Отчёт
+
+### 1 — тяжёлая фраза · high
+`text/p1-a.md:2`
+> Исходный текст. / Бежим дальше.
+"""
+
+
+def _wide_root(tmp_path: pathlib.Path) -> pathlib.Path:
+    chapter = tmp_path / "text" / "p1-a.md"
+    chapter.parent.mkdir(parents=True)
+    chapter.write_text("## Глава\nИсходный текст.\n\nБежим дальше.\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_multiline_quote_exits_one_and_names_the_contract(tmp_path):
+    report = tmp_path / "report.md"
+    report.write_text(MULTI_REPORT, encoding="utf-8")
+    proc = _run(str(report), str(_wide_root(tmp_path)))
+    assert proc.returncode == 1
+    assert "multi-line quote" in proc.stderr
+    assert "2 quote lines" in proc.stderr
+
+
+def test_compound_quote_exits_one_and_says_where_the_pieces_are(tmp_path):
+    report = tmp_path / "report.md"
+    report.write_text(COMPOUND_REPORT, encoding="utf-8")
+    proc = _run(str(report), str(_wide_root(tmp_path)))
+    assert proc.returncode == 1
+    assert "compound quote" in proc.stderr
+    assert "line 4" in proc.stderr  # the second piece really is there

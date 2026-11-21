@@ -87,7 +87,26 @@ def main(argv: list[str] | None = None) -> int:
         console.fail(f"line past the end: {name}:{line}")
     for mismatch in result.mismatched:
         finding = mismatch.finding
-        if mismatch.moved_to is not None:
+        if mismatch.reason == "multi":
+            # Checking only the first quote line would pass an invented second
+            # one, so the form itself is the failure.
+            console.fail(
+                f"multi-line quote: {finding.file}:{finding.line} — "
+                f"{mismatch.quote_lines} quote lines; one per finding"
+            )
+        elif mismatch.reason == "compound":
+            console.fail(
+                f"compound quote: {finding.file}:{finding.line} — "
+                f"one line per finding, not pieces joined with '/'"
+            )
+            console.detail(
+                "fragments",
+                " · ".join(
+                    f"{number}) {text[:40]} — line {line or 'not found'}"
+                    for number, (text, line) in enumerate(mismatch.fragments, 1)
+                ),
+            )
+        elif mismatch.moved_to is not None:
             # The quote exists, some lines away: the text changed after the run.
             # The report is stale, not wrong -- name the line it moved to.
             console.fail(
@@ -96,7 +115,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             console.fail(f"quote not in this file: {finding.file}:{finding.line}")
-        console.detail("report", finding.quote[:110] or "(empty)")
+        console.detail(
+            "report", finding.quote[:110].replace(chr(10), " ⏎ ") or "(empty)"
+        )
         console.detail("actual", mismatch.actual[:110])
     if result.no_address:
         console.warn(f"{result.no_address} finding(s) carry no address")
