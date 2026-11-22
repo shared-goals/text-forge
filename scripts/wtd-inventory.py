@@ -21,14 +21,22 @@ from typing import Any
 
 import yaml
 from mkdocs_common import flatten_nav_files, load_yaml_config
-from wtd_sections_common import CODE_FENCE_RE, anchored_headings
+from wtd_sections_common import (
+    CODE_FENCE_RE,
+    HEADING_RE,
+    ID_ATTR_RE,
+    anchored_headings,
+)
 
 # Books live in a dedicated docs_dir subfolder; their chapters are reviews,
 # not anchor-addressed articles, so they get a synthetic `review` section.
 BOOKS_DIR_PREFIX = "books/"
 REVIEW_HEADING = "Рецензия"
+REVIEW_SECTION_UID = "review"
 SHELF_LINE_RE = re.compile(r"^Полка:\s*(.+?)\s*$", re.MULTILINE)
 REVIEW_HEADING_RE = re.compile(r"^##\s+" + REVIEW_HEADING + r"\s*$")
+#: the new shape: any H2 carrying the `review` id attribute, whatever its text
+REVIEW_ANCHOR_HEADING_RE = re.compile(r"^##\s+.+?\s*\{[^}]*\}\s*$")
 NEXT_H2_RE = re.compile(r"^##\s")
 
 
@@ -335,6 +343,43 @@ def book_prefix(frontmatter: dict[str, Any], shelf: str | None) -> str:
     return " ".join(parts)
 
 
+def find_review_heading(
+    lines: list[str],
+) -> tuple[int, str, str | None] | None:
+    """Return (line_number, heading_text, anchor) of the book's review heading.
+
+    Both shapes of the note are accepted, and the first one in file order wins
+    so a file can never yield two `review` sections:
+
+    - the new shape, `## <review title> {#review}` — the anchor mirrors the
+      attribute the way a regular chapter section mirrors its own;
+    - the legacy shape, a bare `## Рецензия` with no attributes — a note not
+      rebuilt yet, so no anchor exists to mirror.
+
+    Headings inside code fences are sample text and never match.
+    """
+    in_fence = False
+    for line_no, line in enumerate(lines, start=1):
+        if CODE_FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = HEADING_RE.match(line)
+        if match and REVIEW_ANCHOR_HEADING_RE.match(line):
+            _hashes, raw_heading, attrs = match.groups()
+            id_match = ID_ATTR_RE.search(attrs.strip("{}"))
+            if id_match and id_match.group(1) == REVIEW_SECTION_UID:
+                return (
+                    line_no,
+                    re.sub(r"\s+", " ", raw_heading).strip(),
+                    id_match.group(1),
+                )
+        if REVIEW_HEADING_RE.match(line):
+            return line_no, REVIEW_HEADING, None
+    return None
+
+
 def book_sections(
     *,
     lines: list[str],
@@ -348,14 +393,15 @@ def book_sections(
     changed: str | None,
     line_offset: int,
 ) -> list[Section]:
-    """Book files yield at most one `review` section (## Рецензия only).
+    """Book files yield at most one `review` section (see find_review_heading).
 
     `## Цитаты` and the shelf/preamble lines are deliberately never sections,
     so books without a review never enter the ingest.
     """
-    start = find_heading_line(lines, REVIEW_HEADING_RE)
-    if start is None:
+    found = find_review_heading(lines)
+    if found is None:
         return []
+    start, heading_text, anchor = found
 
     end = len(lines)
     for line_no in range(start + 1, len(lines) + 1):
@@ -373,9 +419,9 @@ def book_sections(
     return [
         Section(
             section_uid="review",
-            anchor=None,
+            anchor=anchor,
             heading_level=2,
-            heading=REVIEW_HEADING,
+            heading=heading_text,
             url=base_url,
             github_url=repo_blob_url(repo_url, commit, source_path, start, end_line),
             changed=git_range_commit_date(

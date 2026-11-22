@@ -99,6 +99,106 @@ A review of a book whose frontmatter has no author.
 """
 
 
+BOOK_TITLED_REVIEW_MD = """---
+title: "Сказать жизни «Да»: психолог в концлагере"
+author: Виктор Франкл
+my_mark: 5
+status: read
+---
+
+Полка: Прочтённые
+
+## Важность ответа на вопрос о Смысле Жизни {#review}
+
+Review paragraph one about the book.
+
+Review paragraph two with more thoughts.
+
+## Цитаты
+
+A quote that must never be ingested: QUOTE-MARKER-TITLED.
+"""
+
+BOOK_TITLED_REVIEW_WITH_AUTHOR_MD = """---
+title: "Тяжёлый песок"
+author: Анатолий Рыбаков
+status: read
+---
+
+Полка: Прочтённые
+
+## Человек ищет опору {#review}
+
+Review body of the titled-note book.
+"""
+
+BOOK_BOTH_SHAPES_MD = """---
+title: "Две формы"
+author: Автор Двойной
+status: read
+---
+
+Полка: Прочтённые
+
+## Первая форма заголовка {#review}
+
+Text of the anchored review.
+
+## Рецензия
+
+Text of the legacy review that must not become a second document.
+"""
+
+BOOK_ANCHORED_ELSEWHERE_MD = """---
+title: "Якорь не здесь"
+author: Автор Другой
+status: read
+---
+
+Полка: Прочтённые
+
+## Введение {#intro}
+
+An anchored heading that is not the review.
+
+## Цитаты
+
+Only quotes: QUOTE-MARKER-OTHER.
+"""
+
+BOOK_FENCED_HEADING_MD = """---
+title: "Заголовок в коде"
+author: Автор В коде
+status: read
+---
+
+Полка: Прочтённые
+
+```markdown
+## Заголовок внутри код-блока {#review}
+```
+
+## Рецензия
+
+The real review sits after the fence.
+"""
+
+BOOK_FENCED_LEGACY_MD = """---
+title: "Только в коде"
+author: Автор Вне кода
+status: read
+---
+
+Полка: Прочтённые
+
+```markdown
+## Рецензия
+```
+
+No real review here at all.
+"""
+
+
 def make_project(tmp_path: Path) -> Path:
     """Minimal MkDocs project: docs_dir `text`, nav with index.md only."""
     config = tmp_path / "mkdocs.yml"
@@ -120,6 +220,24 @@ def make_project(tmp_path: Path) -> Path:
     (docs / "books" / "no-review.md").write_text(BOOK_NO_REVIEW_MD, encoding="utf-8")
     (docs / "books" / "no-mark.md").write_text(BOOK_NO_MARK_MD, encoding="utf-8")
     (docs / "books" / "title-only.md").write_text(BOOK_TITLE_ONLY_MD, encoding="utf-8")
+    (docs / "books" / "titled-review.md").write_text(
+        BOOK_TITLED_REVIEW_MD, encoding="utf-8"
+    )
+    (docs / "books" / "titled-review-author.md").write_text(
+        BOOK_TITLED_REVIEW_WITH_AUTHOR_MD, encoding="utf-8"
+    )
+    (docs / "books" / "both-shapes.md").write_text(
+        BOOK_BOTH_SHAPES_MD, encoding="utf-8"
+    )
+    (docs / "books" / "anchored-elsewhere.md").write_text(
+        BOOK_ANCHORED_ELSEWHERE_MD, encoding="utf-8"
+    )
+    (docs / "books" / "fenced-heading.md").write_text(
+        BOOK_FENCED_HEADING_MD, encoding="utf-8"
+    )
+    (docs / "books" / "fenced-legacy.md").write_text(
+        BOOK_FENCED_LEGACY_MD, encoding="utf-8"
+    )
     return config
 
 
@@ -212,6 +330,118 @@ def test_review_prefix_closes_quote_when_frontmatter_has_no_author(tmp_path: Pat
     assert "A review of a book whose frontmatter has no author." in text
 
 
+def test_titled_review_heading_is_a_review_section(tmp_path: Path):
+    """New shape: `## <review title> {#review}` -> the same stable identity."""
+    chapters = build_chapters(tmp_path)
+    book = chapters["books/titled-review"]
+    assert len(book["sections"]) == 1
+    section = book["sections"][0]
+    assert section["section_uid"] == "review"
+    # the anchor mirrors the real attribute, the way regular chapters do
+    assert section["anchor"] == "review"
+    # heading is the title text alone, without the {...} attribute
+    assert section["heading"] == "Важность ответа на вопрос о Смысле Жизни"
+    assert section["heading_level"] == 2
+
+
+def test_titled_review_section_text_prefix_heading_and_excluded_quotes(
+    tmp_path: Path,
+):
+    chapters = build_chapters(tmp_path)
+    section = chapters["books/titled-review"]["sections"][0]
+    text = section["text"]
+    assert text.startswith(
+        "Книга: «Сказать жизни «Да»: психолог в концлагере» — Виктор Франкл."
+    )
+    assert "Оценка: 5." in text
+    assert "Полка: Прочтённые." in text
+    lines = text.splitlines()
+    assert "## Важность ответа на вопрос о Смысле Жизни {#review}" in lines
+    assert "Review paragraph one about the book." in text
+    assert "Review paragraph two with more thoughts." in text
+    assert "## Цитаты" not in text
+    assert "QUOTE-MARKER-TITLED" not in text
+
+
+def test_titled_review_section_keeps_the_page_url(tmp_path: Path):
+    """The pinned contract: a book section's url is the note's page url — the
+    one hindsight-ingest writes into metadata['url']. A per-section anchor is
+    carried in the `anchor` field (and so in the `anchor:` tag), not by
+    rewriting the url, which is how every existing book section works."""
+    chapters = build_chapters(tmp_path)
+    legacy = chapters["books/with-review"]["sections"][0]
+    titled = chapters["books/titled-review"]["sections"][0]
+    assert titled["url"] == "https://example.org/books/titled-review/"
+    assert legacy["url"] == "https://example.org/books/with-review/"
+    assert titled["anchor"] == "review"
+
+
+def test_titled_review_heading_text_is_not_assumed_to_be_review_word(tmp_path: Path):
+    """The heading text comes from the file, not from the constant."""
+    chapters = build_chapters(tmp_path)
+    section = chapters["books/titled-review-author"]["sections"][0]
+    assert section["heading"] == "Человек ищет опору"
+    assert section["section_uid"] == "review"
+    assert "Review body of the titled-note book." in section["text"]
+
+
+def test_legacy_heading_still_works_with_new_writer_present(tmp_path: Path):
+    """Not-yet-rebuilt files keep their legacy identity: uid review, no anchor."""
+    chapters = build_chapters(tmp_path)
+    legacy = chapters["books/with-review"]["sections"][0]
+    titled = chapters["books/titled-review"]["sections"][0]
+    assert legacy["section_uid"] == "review" and legacy["anchor"] is None
+    assert titled["section_uid"] == "review" and titled["anchor"] == "review"
+    assert legacy["heading"] == "Рецензия"
+
+
+def test_file_with_both_shapes_yields_one_review_section(tmp_path: Path):
+    """Synthetic double: the first matching heading wins, no duplicate keys."""
+    chapters = build_chapters(tmp_path)
+    book = chapters["books/both-shapes"]
+    assert len(book["sections"]) == 1
+    section = book["sections"][0]
+    assert section["section_uid"] == "review"
+    assert section["anchor"] == "review"
+    assert section["heading"] == "Первая форма заголовка"
+    assert "Text of the anchored review." in section["text"]
+    assert "Text of the legacy review" not in section["text"]
+    # a second `review` section in the same chapter would surface as a
+    # duplicate document key here
+    assert (
+        wtd_inventory.validate_inventory(
+            wtd_inventory.build_inventory(
+                tmp_path / "mkdocs.yml", include_drafts=True
+            ).chapters
+        )
+        == []
+    )
+
+
+def test_anchored_heading_other_than_review_is_not_a_book_section(tmp_path: Path):
+    """Books are review-only: a `{#intro}` anchor names no review section."""
+    chapters = build_chapters(tmp_path)
+    assert chapters["books/anchored-elsewhere"]["sections"] == []
+
+
+def test_anchored_review_inside_code_fence_is_not_a_section(tmp_path: Path):
+    """Code-fence safety applies to the new shape too: the fence is sample text."""
+    chapters = build_chapters(tmp_path)
+    book = chapters["books/fenced-heading"]
+    assert len(book["sections"]) == 1
+    section = book["sections"][0]
+    # the fenced `{#review}` is skipped, the legacy heading below is found
+    assert section["anchor"] is None
+    assert section["heading"] == "Рецензия"
+    assert "The real review sits after the fence." in section["text"]
+    assert "## Заголовок внутри код-блока" not in section["text"]
+
+
+def test_legacy_heading_inside_code_fence_only_yields_no_section(tmp_path: Path):
+    chapters = build_chapters(tmp_path)
+    assert chapters["books/fenced-legacy"]["sections"] == []
+
+
 def test_regular_chapter_sections_unchanged(tmp_path: Path):
     chapters = build_chapters(tmp_path)
     index = chapters["index"]
@@ -243,4 +473,18 @@ def test_cli_json_output_reports_no_warnings(tmp_path: Path):
     assert inv["warnings"] == []
     assert inv["docs_dir"] == "text"
     slugs = {ch["chapter"] for ch in inv["chapters"]}
-    assert {"index", "books/with-review", "books/no-review", "books/no-mark"} <= slugs
+    assert {
+        "index",
+        "books/with-review",
+        "books/no-review",
+        "books/no-mark",
+        "books/titled-review",
+        "books/both-shapes",
+    } <= slugs
+    review_uids = {
+        f"{ch['chapter']}#{s['section_uid']}"
+        for ch in inv["chapters"]
+        for s in ch["sections"]
+    }
+    assert "books/titled-review#review" in review_uids
+    assert "books/both-shapes#review" in review_uids

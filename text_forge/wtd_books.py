@@ -102,6 +102,11 @@ def _edition_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
+#: the review section: its stable address, and the heading text used when the
+#: export review carries no title of its own
+REVIEW_ANCHOR = "review"
+REVIEW_HEADING = "Рецензия"
+
 #: the curation keys an entry may carry, and how each value reads
 CURATION_INT_KEYS = ("weight",)
 CURATION_TEXT_KEYS = ("author", "status")
@@ -787,8 +792,13 @@ def render_note(entry: dict) -> str:
         body += ["\n\n".join(props), ""]
 
     if entry["review"]:
+        # the review's own title is the heading (it says what the section
+        # argues); the {#review} attribute keeps the section address stable
+        # while titles change — the design wtd_books promised since 2026-10-19
+        review_title = (entry["review"].get("title") or "").strip()
+        heading = review_title if review_title else REVIEW_HEADING
         body += [
-            "## Рецензия",
+            f"## {heading} {{#{REVIEW_ANCHOR}}}",
             "",
             _strip_html(entry["review"]["text"]),
             "",
