@@ -56,7 +56,11 @@ def latest_document(
     tags: tuple[str, ...] = WTD_BASE_TAGS,
     page_size: int = 100,
 ) -> dict[str, Any] | None:
-    """Return the most recently updated document carrying all given tags."""
+    """Return the most recently updated document carrying all given tags.
+
+    The documents API treats repeated `tags` query params as OR, not AND,
+    so results are filtered client-side to require every tag.
+    """
     newest: dict[str, Any] | None = None
     offset = 0
     while True:
@@ -71,6 +75,8 @@ def latest_document(
         if not items:
             return newest
         for item in items:
+            if not set(tags).issubset(set(item.get("tags") or [])):
+                continue
             if newest is None or str(item.get("updated_at", "")) > str(
                 newest.get("updated_at", "")
             ):
