@@ -60,6 +60,13 @@ P3_FRONTMATTER = (
     "и успешно применяемых на практике.\n"
     "search:\n"
     "  exclude: true\n"
+    # This page is a projection, not prose: its theses are the book notes' own
+    # review titles. Hindsight already holds them via the notes, so ingesting
+    # the page would duplicate 45 theses and re-ingest the whole page on every
+    # regeneration — the generator opts it out declaratively, and wtd-inventory
+    # honors the flag by leaving the chapter out of the inventory entirely.
+    "hindsight:\n"
+    "  exclude: true\n"
     "---\n"
 )
 P3_TITLE = "Книги как фундамент"

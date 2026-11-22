@@ -199,45 +199,142 @@ No real review here at all.
 """
 
 
-def make_project(tmp_path: Path) -> Path:
-    """Minimal MkDocs project: docs_dir `text`, nav with index.md only."""
+# --- Hindsight opt-out -------------------------------------------------------
+#
+# A generated projection page (p3-references) carries `hindsight: exclude: true`
+# in its own frontmatter: its content is a copy of the book notes' review
+# titles, so ingesting it would duplicate theses and re-ingest the whole page on
+# every regeneration. The inventory is the place the flag must be honored: omit
+# the chapter there and every downstream consumer (the ingest wrapper's
+# filter_targets, hindsight-ingest) stops seeing it without knowing the name.
+
+EXCLUDED_PUBLISHED_MD = """---
+title: "Книги как фундамент"
+search:
+  exclude: true
+hindsight:
+  exclude: true
+---
+
+# Книги как фундамент
+
+## Ссылки {#links}
+
+A projected list that must never reach memory.
+"""
+
+EXCLUDED_DRAFT_MD = """---
+title: "Draft projection"
+hindsight:
+  exclude: true
+---
+
+# Draft projection
+
+## Body {#body}
+
+Draft text that must never reach memory either.
+"""
+
+HINDSIGHT_KEY_WITHOUT_EXCLUDE_MD = """---
+title: "Empty mapping"
+hindsight:
+---
+
+# Empty mapping
+
+## Body {#body}
+
+A `hindsight:` key with no value excludes nothing.
+"""
+
+HINDSIGHT_EXCLUDE_FALSE_MD = """---
+title: "Explicit opt-in"
+hindsight:
+  exclude: false
+---
+
+# Explicit opt-in
+
+## Body {#body}
+
+`exclude: false` means include.
+"""
+
+HINDSIGHT_EXCLUDE_STRING_TRUE_MD = """---
+title: "Quoted flag"
+hindsight:
+  exclude: "true"
+---
+
+# Quoted flag
+
+## Body {#body}
+
+A quoted `"true"` is the same decision as a bare one.
+"""
+
+HINDSIGHT_NOT_A_MAPPING_MD = """---
+title: "Bad shape"
+hindsight: true
+---
+
+# Bad shape
+
+## Body {#body}
+
+A scalar `hindsight:` is not a mapping: not an exclusion.
+"""
+
+BOOK_FIXTURES = {
+    "with-review.md": BOOK_WITH_REVIEW_MD,
+    "no-review.md": BOOK_NO_REVIEW_MD,
+    "no-mark.md": BOOK_NO_MARK_MD,
+    "title-only.md": BOOK_TITLE_ONLY_MD,
+    "titled-review.md": BOOK_TITLED_REVIEW_MD,
+    "titled-review-author.md": BOOK_TITLED_REVIEW_WITH_AUTHOR_MD,
+    "both-shapes.md": BOOK_BOTH_SHAPES_MD,
+    "anchored-elsewhere.md": BOOK_ANCHORED_ELSEWHERE_MD,
+    "fenced-heading.md": BOOK_FENCED_HEADING_MD,
+    "fenced-legacy.md": BOOK_FENCED_LEGACY_MD,
+}
+
+# Non-book pages exercising the `hindsight.exclude` frontmatter flag. None of
+# them are in nav by default, so they arrive as drafts; tests that need a
+# published one pass it via `make_project(nav_extra=[...])`.
+EXTRA_PAGE_FIXTURES = {
+    "p3-references.md": EXCLUDED_PUBLISHED_MD,
+    "draft-excluded.md": EXCLUDED_DRAFT_MD,
+    "hindsight-empty.md": HINDSIGHT_KEY_WITHOUT_EXCLUDE_MD,
+    "hindsight-false.md": HINDSIGHT_EXCLUDE_FALSE_MD,
+    "hindsight-quoted.md": HINDSIGHT_EXCLUDE_STRING_TRUE_MD,
+    "hindsight-scalar.md": HINDSIGHT_NOT_A_MAPPING_MD,
+}
+
+
+def make_project(tmp_path: Path, nav_extra: list[str] = ()) -> Path:
+    """Minimal MkDocs project: docs_dir `text`, nav with index.md only.
+
+    `nav_extra` publishes extra docs-relative paths, so a test can make a
+    fixture chapter published instead of draft.
+    """
     config = tmp_path / "mkdocs.yml"
+    nav = ["  - index.md\n"] + [f"  - {entry}\n" for entry in nav_extra]
     config.write_text(
         "site_name: Test\n"
         "site_url: https://example.org/\n"
         "repo_url: https://github.com/example/repo\n"
         "docs_dir: text\n"
-        "nav:\n"
-        "  - index.md\n",
+        "nav:\n" + "".join(nav),
         encoding="utf-8",
     )
     docs = tmp_path / "text"
     (docs / "books").mkdir(parents=True)
     (docs / "index.md").write_text(INDEX_MD, encoding="utf-8")
-    (docs / "books" / "with-review.md").write_text(
-        BOOK_WITH_REVIEW_MD, encoding="utf-8"
-    )
-    (docs / "books" / "no-review.md").write_text(BOOK_NO_REVIEW_MD, encoding="utf-8")
-    (docs / "books" / "no-mark.md").write_text(BOOK_NO_MARK_MD, encoding="utf-8")
-    (docs / "books" / "title-only.md").write_text(BOOK_TITLE_ONLY_MD, encoding="utf-8")
-    (docs / "books" / "titled-review.md").write_text(
-        BOOK_TITLED_REVIEW_MD, encoding="utf-8"
-    )
-    (docs / "books" / "titled-review-author.md").write_text(
-        BOOK_TITLED_REVIEW_WITH_AUTHOR_MD, encoding="utf-8"
-    )
-    (docs / "books" / "both-shapes.md").write_text(
-        BOOK_BOTH_SHAPES_MD, encoding="utf-8"
-    )
-    (docs / "books" / "anchored-elsewhere.md").write_text(
-        BOOK_ANCHORED_ELSEWHERE_MD, encoding="utf-8"
-    )
-    (docs / "books" / "fenced-heading.md").write_text(
-        BOOK_FENCED_HEADING_MD, encoding="utf-8"
-    )
-    (docs / "books" / "fenced-legacy.md").write_text(
-        BOOK_FENCED_LEGACY_MD, encoding="utf-8"
-    )
+    for name, content in BOOK_FIXTURES.items():
+        (docs / "books" / name).write_text(content, encoding="utf-8")
+    for name, content in EXTRA_PAGE_FIXTURES.items():
+        (docs / name).write_text(content, encoding="utf-8")
     return config
 
 
@@ -488,3 +585,119 @@ def test_cli_json_output_reports_no_warnings(tmp_path: Path):
     }
     assert "books/titled-review#review" in review_uids
     assert "books/both-shapes#review" in review_uids
+
+
+# --- hindsight.exclude: the inventory is where the flag is honored ----------
+
+
+def slugs(tmp_path: Path, nav_extra: list[str] = ()) -> set[str]:
+    """Chapter slugs of the fixture project, extra paths published via nav."""
+    inv = wtd_inventory.build_inventory(
+        make_project(tmp_path, nav_extra=list(nav_extra)), include_drafts=True
+    )
+    return {ch["chapter"] for ch in asdict(inv)["chapters"]}
+
+
+def test_excluded_published_chapter_is_absent_from_inventory(tmp_path: Path):
+    """`hindsight.exclude: true` removes the chapter entirely, not just its sections.
+
+    The flag is a nav-published chapter here: status does not rescue it. Omitting
+    the Chapter object (instead of emitting one with empty sections) is what makes
+    the ingest wrapper report "chapter missing from inv" rather than ingest an
+    empty document.
+    """
+    inv = wtd_inventory.build_inventory(
+        make_project(tmp_path, nav_extra=["p3-references.md"]), include_drafts=True
+    )
+    by_slug = {ch["chapter"]: ch for ch in asdict(inv)["chapters"]}
+    assert "p3-references" not in by_slug
+    assert "index" in by_slug
+    # the exclusion is total: no chapter entry means no sections, no url, no
+    # document key for anything the page contains
+    assert all(ch["chapter"] != "p3-references" for ch in asdict(inv)["chapters"])
+    # the nav still lists it: the exclusion is memory-only, the page stays on the site
+    assert "  - p3-references.md\n" in (tmp_path / "mkdocs.yml").read_text(
+        encoding="utf-8"
+    )
+    # and the chapter really was published before being skipped (not a phantom)
+    assert (tmp_path / "text" / "p3-references.md").exists()
+    assert inv.warnings == []
+
+
+def test_excluded_draft_chapter_is_absent_from_inventory(tmp_path: Path):
+    """The draft path honors the flag too — same rule, both loops."""
+    slugs_ = slugs(tmp_path)
+    assert "draft-excluded" not in slugs_
+    assert "index" in slugs_
+
+
+def test_excluded_chapter_absent_without_include_drafts(tmp_path: Path):
+    """Published-only run: the excluded nav chapter is still skipped."""
+    config = make_project(tmp_path, nav_extra=["p3-references.md"])
+    inv = wtd_inventory.build_inventory(config, include_drafts=False)
+    assert {ch["chapter"] for ch in asdict(inv)["chapters"]} == {"index"}
+
+
+def test_hindsight_key_without_exclude_key_is_included(tmp_path: Path):
+    """Sub-case 1: `hindsight:` with no `exclude` key is not an opt-out."""
+    assert "hindsight-empty" in slugs(tmp_path)
+
+
+def test_hindsight_exclude_false_is_included(tmp_path: Path):
+    """Sub-case 2: `exclude: false` is an explicit opt-in."""
+    assert "hindsight-false" in slugs(tmp_path)
+
+
+def test_chapter_without_hindsight_key_is_included(tmp_path: Path):
+    """Sub-case 3: no `hindsight` key at all — the default, included."""
+    chapters = slugs(tmp_path)
+    assert "index" in chapters
+    assert "books/with-review" in chapters
+    # none of the pre-existing fixtures gained the flag
+    assert {"hindsight-empty", "hindsight-false", "hindsight-scalar"} <= chapters
+    # and the only exclusions are exactly the two flagged pages
+    assert "p3-references" not in chapters
+    assert "draft-excluded" not in chapters
+    assert "hindsight-quoted" not in chapters
+
+
+def test_existing_chapters_unaffected_by_the_flag_rule(tmp_path: Path):
+    """The flag rule changes nothing for pages that do not carry it."""
+    chapters = build_chapters(tmp_path)
+    assert chapters["index"]["title"] == "Intro page"
+    assert [s["section_uid"] for s in chapters["index"]["sections"]] == [
+        "intro",
+        "second",
+    ]
+    assert len(chapters["books/with-review"]["sections"]) == 1
+    assert chapters["books/no-review"]["sections"] == []
+
+
+def test_hindsight_exclude_quoted_true_is_excluded(tmp_path: Path):
+    """`exclude: "true"` (a string) is the same decision as the bare bool."""
+    assert "hindsight-quoted" not in slugs(tmp_path)
+
+
+def test_hindsight_scalar_is_not_an_exclusion(tmp_path: Path):
+    """`hindsight: true` is not the documented shape — treated as no opt-out.
+
+    The helper requires a mapping, so a scalar cannot silently exclude a chapter
+    through a malformed frontmatter edit.
+    """
+    assert "hindsight-scalar" in slugs(tmp_path)
+
+
+def test_exclusion_helper_reads_frontmatter_dict():
+    """The helper is exported and works on a plain frontmatter dict."""
+    assert hasattr(wtd_inventory, "excluded_from_memory")
+    assert wtd_inventory.excluded_from_memory({"hindsight": {"exclude": True}}) is True
+    assert (
+        wtd_inventory.excluded_from_memory({"hindsight": {"exclude": "true"}}) is True
+    )
+    assert (
+        wtd_inventory.excluded_from_memory({"hindsight": {"exclude": False}}) is False
+    )
+    assert wtd_inventory.excluded_from_memory({"hindsight": {}}) is False
+    assert wtd_inventory.excluded_from_memory({"hindsight": None}) is False
+    assert wtd_inventory.excluded_from_memory({"hindsight": "true"}) is False
+    assert wtd_inventory.excluded_from_memory({}) is False

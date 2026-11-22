@@ -281,11 +281,44 @@ def split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     return frontmatter, body
 
 
+def read_frontmatter(source_file: Path) -> dict[str, Any]:
+    """Frontmatter of a file on disk, as a dict ({} when absent/unparsable).
+
+    Lets a caller check a frontmatter flag without building the whole Chapter.
+    """
+    frontmatter, _ = split_frontmatter(source_file.read_text(encoding="utf-8"))
+    return frontmatter
+
+
 def frontmatter_value(frontmatter: dict[str, Any], key: str) -> str | None:
     value = frontmatter.get(key)
     if value is None:
         return None
     return str(value)
+
+
+def excluded_from_memory(frontmatter: dict[str, Any]) -> bool:
+    """True when frontmatter opts the page out of Hindsight ingestion.
+
+    Shape (nested, mirroring `search: {exclude: true}`):
+
+        hindsight:
+          exclude: true
+
+    A bare `true` and the string `"true"` both count, because page authors and
+    generators differ on quoting. Anything else — no key, an empty or null
+    mapping, `exclude: false`, or a scalar `hindsight:` value — is not an
+    exclusion: a malformed flag must never silently drop a chapter from memory.
+    """
+    block = frontmatter.get("hindsight")
+    if not isinstance(block, dict):
+        return False
+    value = block.get("exclude")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return False
 
 
 def is_book_path(filepath: str) -> bool:
@@ -594,6 +627,8 @@ def build_inventory(config_path: Path, include_drafts: bool) -> Inventory:
     chapters: list[Chapter] = []
     for filepath in nav_files:
         if (docs_dir / filepath).exists():
+            if excluded_from_memory(read_frontmatter(docs_dir / filepath)):
+                continue
             chapters.append(
                 build_chapter(
                     docs_dir=docs_dir,
@@ -608,6 +643,8 @@ def build_inventory(config_path: Path, include_drafts: bool) -> Inventory:
 
     if include_drafts:
         for filepath in draft_files:
+            if excluded_from_memory(read_frontmatter(docs_dir / filepath)):
+                continue
             chapters.append(
                 build_chapter(
                     docs_dir=docs_dir,

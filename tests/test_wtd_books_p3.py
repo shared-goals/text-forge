@@ -57,6 +57,39 @@ def test_p3_module_exports_expected_symbols():
     assert "\nsearch:\n  exclude: true\n" in P3_FRONTMATTER
 
 
+def test_p3_header_declares_hindsight_exclusion():
+    """The projection opts out of Hindsight ingestion in its own frontmatter.
+
+    p3-references is generated, not authored: its theses are the book notes'
+    own review titles, so ingesting the page would duplicate them and re-ingest
+    the whole page on every `make books`. The opt-out is declarative — a
+    `hindsight.exclude` flag the inventory honors — so it lands in the page
+    itself and survives any downstream tool that only reads frontmatter.
+    """
+    header = p3_header()
+    # the flag lives INSIDE the frontmatter block, not in the prose below
+    fm = header.split("---")[1]
+    assert "hindsight:\n  exclude: true\n" in fm
+    assert "hindsight:\n  exclude: true\n" in P3_FRONTMATTER
+    # nothing else gained the key: the flag is one block, on this page only
+    assert P3_FRONTMATTER.count("hindsight:") == 1
+
+
+def test_p3_hindsight_flag_sits_after_the_search_block():
+    """Pin the relative order: `search:` first, `hindsight:` second.
+
+    Both keys are exclusion flags for different consumers (site search, memory
+    ingestion); pinning their order keeps the diff of the constant reviewable
+    and stops a future edit from interleaving the two nested mappings.
+    """
+    fm = p3_header().split("---")[1]
+    lines = [line for line in fm.split("\n") if line]
+    assert lines.index("search:") < lines.index("hindsight:")
+    # hindsight is the last key of the block, and its flag is the last line:
+    # the key, its nested `exclude` and the closing `---` cannot drift apart
+    assert lines[-2:] == ["hindsight:", "  exclude: true"]
+
+
 def test_p3_module_dropped_the_read_back_surface():
     """The parser the read-back needed is gone — from the module AND its re-export.
 
