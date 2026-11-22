@@ -9,6 +9,15 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "hindsight-ingest.py"
 # needs the scripts dir on the path explicitly.
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
+common_spec = importlib.util.spec_from_file_location(
+    "hindsight_common", REPO_ROOT / "scripts" / "hindsight_common.py"
+)
+assert common_spec is not None and common_spec.loader is not None
+hindsight_common = importlib.util.module_from_spec(common_spec)
+sys.modules.setdefault("hindsight_common", hindsight_common)
+common_spec.loader.exec_module(hindsight_common)
+common = hindsight_common
+
 spec = importlib.util.spec_from_file_location("hindsight_ingest", SCRIPT_PATH)
 assert spec is not None
 hindsight_ingest = importlib.util.module_from_spec(spec)
@@ -73,6 +82,36 @@ def sample_inventory():
             },
         ],
     }
+
+
+def test_section_matches_lives_in_hindsight_common():
+    # The section filter predicate is shared with the WTD ingest wrapper, so it
+    # must be importable from hindsight_common (not only defined locally in
+    # hindsight-ingest.py).
+    assert callable(common.section_matches)
+
+
+def test_section_matches_none_filter_matches_every_section():
+    section = {"section_uid": "intro", "anchor": "intro"}
+    assert common.section_matches(section, None) is True
+
+
+def test_section_matches_strips_leading_hash():
+    section = {"section_uid": "digital_format_freedom", "anchor": "cff"}
+    assert common.section_matches(section, "#digital_format_freedom") is True
+    assert common.section_matches(section, "#cff") is True
+
+
+def test_section_matches_accepts_section_uid_and_anchor():
+    by_uid = {"section_uid": "word", "anchor": "slovo-ozhidaniya"}
+    assert common.section_matches(by_uid, "word") is True
+    assert common.section_matches(by_uid, "slovo-ozhidaniya") is True
+    assert common.section_matches(by_uid, "something-else") is False
+
+
+def test_section_matches_missing_fields_do_not_match_nonempty_filter():
+    assert common.section_matches({}, "word") is False
+    assert common.section_matches({}, None) is True
 
 
 def test_iter_documents_filters_by_section_uid_globally():

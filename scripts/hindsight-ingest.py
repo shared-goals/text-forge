@@ -22,7 +22,12 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
-from hindsight_common import WTD_BASE_TAGS, ensure_no_proxy, request_json
+from hindsight_common import (
+    WTD_BASE_TAGS,
+    ensure_no_proxy,
+    request_json,
+    section_matches,
+)
 
 DEFAULT_CHUNK_SIZE = 8000
 DEFAULT_DELAY = 0.5
@@ -53,16 +58,8 @@ def load_inventory(path: str) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def section_matches(section: dict[str, Any], section_filter: str | None) -> bool:
-    if not section_filter:
-        return True
-    wanted = section_filter.removeprefix("#")
-    return wanted in {
-        str(section.get("section_uid", "")),
-        str(section.get("anchor", "")),
-    }
-
-
+# `section_matches` lives in hindsight_common so the WTD ingest wrapper can
+# filter targets with exactly the predicate used here for chunk selection.
 def iter_documents(
     inv: dict[str, Any],
     chapter_filter: str | None,

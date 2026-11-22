@@ -50,6 +50,23 @@ def request_json(
     return json.loads(body)
 
 
+def section_matches(section: dict[str, Any], section_filter: str | None) -> bool:
+    """Whether a inventory section is selected by a section filter.
+
+    Shared by `hindsight-ingest.py` (chunk selection) and the WTD ingest
+    wrapper (empty-target filtering), so both agree on what a filter matches.
+    A `None`/empty filter selects every section; otherwise the filter matches
+    `section_uid` or `anchor`, with a leading `#` stripped.
+    """
+    if not section_filter:
+        return True
+    wanted = section_filter.removeprefix("#")
+    return wanted in {
+        str(section.get("section_uid", "")),
+        str(section.get("anchor", "")),
+    }
+
+
 def latest_document(
     api_url: str,
     bank_id: str,

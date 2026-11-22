@@ -20,8 +20,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import Any
 
-from hindsight_common import WTD_BASE_TAGS, ensure_no_proxy, latest_document
+from hindsight_common import (
+    WTD_BASE_TAGS,
+    ensure_no_proxy,
+    latest_document,
+    section_matches,
+)
 from wtd_sections_common import anchored_headings
 
 DEFAULT_TEXT_FORGE = pathlib.Path(__file__).resolve().parents[1]
@@ -125,6 +131,50 @@ def section_ranges(lines: list[str]) -> list[tuple[str, int, int]]:
 
 def ranges_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start <= b_end and b_start <= a_end
+
+
+def target_has_content(
+    inv: dict[str, object], chapter: str, section: str | None
+) -> bool:
+    """Whether one (chapter, section) target would yield at least one chunk.
+
+    Mirrors the selection logic of `hindsight-ingest.py`: the chapter must exist
+    in the inventory, a section filter must match a section by `section_uid` or
+    `anchor` (`section_matches`), and that section's text must be non-empty
+    (`chunk_text` drops blank text). Uses `Any` for the inventory dict to keep
+    the nested dynamic access readable.
+    """
+    chapters: Any = inv.get("chapters") or []
+    for chapter_entry in chapters:
+        if str(chapter_entry.get("chapter", "")) != chapter:
+            continue
+        for sec in chapter_entry.get("sections") or []:
+            if not section_matches(sec, section):
+                continue
+            if str(sec.get("text", "")).strip():
+                return True
+        return False
+    return False
+
+
+def filter_targets(
+    inv: dict[str, object], targets: list[tuple[str, str | None]]
+) -> tuple[list[tuple[str, str | None]], int]:
+    """Split planned ingest targets into (kept, dropped_count).
+
+    Targets that cannot produce any chunk (unknown chapter, chapter without
+    sections, section filter matching nothing, blank section text) are dropped
+    so the ingest loop does not spawn a subprocess per empty target. Order of
+    the kept targets is preserved.
+    """
+    kept: list[tuple[str, str | None]] = []
+    dropped = 0
+    for chapter, section in targets:
+        if target_has_content(inv, chapter, section):
+            kept.append((chapter, section))
+        else:
+            dropped += 1
+    return kept, dropped
 
 
 def build_diff_plan(
@@ -462,6 +512,18 @@ def main() -> int:
                 quiet=brief,
             )
 
+        inv: dict[str, Any] = {}
+        dropped_empty = 0
+        if targets:
+            # Both the diff-plan targets and the explicit --chapter/--section
+            # targets go through the same empty-target filter.
+            inv = json.loads(inventory_path.read_text(encoding="utf-8"))
+            filtered_targets, dropped_empty = filter_targets(inv, targets)
+            if not filtered_targets:
+                print("No targets with content; nothing to do.")
+                return 0
+            targets = filtered_targets
+
         base_ingest_cmd = [
             *py_cmd,
             str(ingest_script),
@@ -489,13 +551,17 @@ def main() -> int:
             run(base_ingest_cmd, cwd=text_forge)
         else:
             if brief:
-                inv = json.loads(inventory_path.read_text(encoding="utf-8"))
                 print(
                     f"\nInventory commit: {inv.get('commit')} ({inv.get('commit_date')})"
                 )
                 print(f"API: {args.api_url}, bank: {args.bank}")
                 print(f"Mode: {'live ingest' if args.yes else 'preview'}")
-                print(f"\nTargets ({len(targets)}):")
+                if dropped_empty:
+                    print(
+                        f"\nTargets ({len(targets)} shown, {dropped_empty} empty filtered):"
+                    )
+                else:
+                    print(f"\nTargets ({len(targets)}):")
                 for chapter, section in targets[:20]:
                     print(f"  {chapter}" + (f" #{section}" if section else ""))
                 if len(targets) > 20:
