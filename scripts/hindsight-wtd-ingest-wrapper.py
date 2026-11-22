@@ -36,9 +36,14 @@ HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
 def chapter_from_text_path(path: str) -> str | None:
+    """Map a repo-relative `text/...*.md` path to its inventory chapter slug.
+
+    Must agree with `slug_for_path()` in wtd-inventory.py: the slug is the
+    docs-relative path minus `.md`, so subfolders are kept (`books/abe-x`).
+    """
     if not path.startswith("text/") or not path.endswith(".md"):
         return None
-    return pathlib.Path(path).stem
+    return path.removeprefix("text/").removesuffix(".md")
 
 
 def last_ingest_document(

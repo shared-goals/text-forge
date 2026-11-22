@@ -23,6 +23,14 @@ import yaml
 from mkdocs_common import flatten_nav_files, load_yaml_config
 from wtd_sections_common import CODE_FENCE_RE, anchored_headings
 
+# Books live in a dedicated docs_dir subfolder; their chapters are reviews,
+# not anchor-addressed articles, so they get a synthetic `review` section.
+BOOKS_DIR_PREFIX = "books/"
+REVIEW_HEADING = "Рецензия"
+SHELF_LINE_RE = re.compile(r"^Полка:\s*(.+?)\s*$", re.MULTILINE)
+REVIEW_HEADING_RE = re.compile(r"^##\s+" + REVIEW_HEADING + r"\s*$")
+NEXT_H2_RE = re.compile(r"^##\s")
+
 
 @dataclass
 class Section:
@@ -272,6 +280,115 @@ def frontmatter_value(frontmatter: dict[str, Any], key: str) -> str | None:
     return str(value)
 
 
+def is_book_path(filepath: str) -> bool:
+    """True when a docs-relative filepath points into the books folder."""
+    return filepath.replace("\\", "/").startswith(BOOKS_DIR_PREFIX)
+
+
+def find_heading_line(lines: list[str], heading_re: re.Pattern[str]) -> int | None:
+    """Return 1-based line number of the first matching heading outside fences."""
+    in_fence = False
+    for line_no, line in enumerate(lines, start=1):
+        if CODE_FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if heading_re.match(line):
+            return line_no
+    return None
+
+
+def find_shelf_line(body: str) -> str | None:
+    """Return the value of the body-level `Полка: <shelf>` line, if any."""
+    match = SHELF_LINE_RE.search(body)
+    return match.group(1).strip() if match else None
+
+
+def book_title(frontmatter: dict[str, Any], fallback: str) -> str:
+    title = (frontmatter_value(frontmatter, "title") or "").strip()
+    author = (frontmatter_value(frontmatter, "author") or "").strip()
+    if title and author:
+        return f"{title} — {author}"
+    return fallback
+
+
+def book_prefix(frontmatter: dict[str, Any], shelf: str | None) -> str:
+    """One-line provenance prefix for a book review chunk.
+
+    Parts are appended only when present: title/author, my_mark, shelf.
+    """
+    title = (frontmatter_value(frontmatter, "title") or "").strip()
+    author = (frontmatter_value(frontmatter, "author") or "").strip()
+    parts: list[str] = []
+    if title and author:
+        parts.append(f"Книга: «{title}» — {author}.")
+    elif title:
+        parts.append(f"Книга: «{title}».")
+    elif author:
+        parts.append(f"Книга: {author}.")
+    mark = frontmatter_value(frontmatter, "my_mark")
+    if mark and mark.strip():
+        parts.append(f"Оценка: {mark.strip()}.")
+    if shelf:
+        parts.append(f"Полка: {shelf}.")
+    return " ".join(parts)
+
+
+def book_sections(
+    *,
+    lines: list[str],
+    body: str,
+    frontmatter: dict[str, Any],
+    repo_root: Path,
+    base_url: str | None,
+    repo_url: str | None,
+    commit: str | None,
+    source_path: str,
+    changed: str | None,
+    line_offset: int,
+) -> list[Section]:
+    """Book files yield at most one `review` section (## Рецензия only).
+
+    `## Цитаты` and the shelf/preamble lines are deliberately never sections,
+    so books without a review never enter the ingest.
+    """
+    start = find_heading_line(lines, REVIEW_HEADING_RE)
+    if start is None:
+        return []
+
+    end = len(lines)
+    for line_no in range(start + 1, len(lines) + 1):
+        if line_no > len(lines):
+            break
+        if NEXT_H2_RE.match(lines[line_no - 1]):
+            end = line_no - 1
+            break
+    end_line = max(start, end)
+
+    raw = section_text(lines, start, end_line)
+    prefix = book_prefix(frontmatter, find_shelf_line(body))
+    text = f"{prefix}\n\n{raw}" if prefix else raw
+
+    return [
+        Section(
+            section_uid="review",
+            anchor=None,
+            heading_level=2,
+            heading=REVIEW_HEADING,
+            url=base_url,
+            github_url=repo_blob_url(repo_url, commit, source_path, start, end_line),
+            changed=git_range_commit_date(
+                repo_root, source_path, line_offset + start, line_offset + end_line
+            )
+            or changed,
+            start_line=start,
+            end_line=end_line,
+            text=text,
+        )
+    ]
+
+
 def build_chapter(
     *,
     docs_dir: Path,
@@ -296,6 +413,37 @@ def build_chapter(
         repo_url, commit, source_path, 1, max(1, len(lines))
     )
     title = first_heading(content, chapter_slug)
+    book = is_book_path(filepath)
+    if book:
+        title = book_title(frontmatter, title)
+
+    if book:
+        # Books are review-only: no review heading -> no sections -> never ingested.
+        sections = book_sections(
+            lines=lines,
+            body=body,
+            frontmatter=frontmatter,
+            repo_root=repo_root,
+            base_url=base_url,
+            repo_url=repo_url,
+            commit=commit,
+            source_path=source_path,
+            changed=changed,
+            line_offset=line_offset,
+        )
+        return Chapter(
+            chapter=chapter_slug,
+            status=status,
+            title=title,
+            nav_path=filepath if status == "published" else None,
+            source_path=source_path,
+            url=base_url,
+            github_url=chapter_github_url,
+            created=frontmatter_value(frontmatter, "created"),
+            published=frontmatter_value(frontmatter, "published"),
+            changed=changed,
+            sections=sections,
+        )
 
     headings = anchored_headings(lines)
     sections: list[Section] = []
