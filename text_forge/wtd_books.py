@@ -690,7 +690,7 @@ def _strip_html(text: str) -> str:
 
 
 def _blockquote(text: str) -> str:
-    """Quote as blockquote, carrying no block id — the id rides the `### Цитата N`
+    """Quote as blockquote, carrying no block id — the id rides the `### N`
     heading above it, so the site anchors the quote via that section."""
     return "\n".join(f"> {line}".rstrip() for line in text.split("\n"))
 
@@ -816,7 +816,7 @@ def render_note(entry: dict) -> str:
         # the quote opens under its own header, which carries the block id: the
         # site renders `#quote_N` as the section's permalink, which is the anchor
         # chapter author signatures point at
-        block = [f"### Цитата {n} ^quote_{n}", "", _blockquote(_strip_html(q["text"])), ""]
+        block = [f"### {n} ^quote_{n}", "", _blockquote(_strip_html(q["text"])), ""]
         if qurl:
             block.append(f"— [LiveLib](https://www.livelib.ru{qurl})")
             block.append("")

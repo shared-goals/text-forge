@@ -365,8 +365,8 @@ class TestRenderNote:
         """Per-quote header: the block id rides the heading, so Material's toc
         permalink gives a copyable `#quote_N` anchor for chapter signatures."""
         md = render_note(self.make_entry())
-        assert "### Цитата 1 ^quote_1\n\n> Вторая цитата, более ранняя\n\n" in md
-        assert "### Цитата 2 ^quote_2\n\n> Текст первой цитаты\n\n" in md
+        assert "### 1 ^quote_1\n\n> Вторая цитата, более ранняя\n\n" in md
+        assert "### 2 ^quote_2\n\n> Текст первой цитаты\n\n" in md
 
     def test_blockquote_lines_carry_no_block_id(self):
         """The id left the blockquote: no `>` line ends with `^quote_N`."""
@@ -446,13 +446,13 @@ class TestRenderNote:
         }
         md = render_note(own_entry)
         assert "status: none" in md
-        assert "### Цитата 1 ^quote_1" in md
+        assert "### 1 ^quote_1" in md
 
     def test_quote_is_header_plus_blockquote(self):
-        """Every quote is `### Цитата N ^quote_N` + a blockquote of the quote text
+        """Every quote is `### N ^quote_N` + a blockquote of the quote text
         itself — no synthetic titles invented from the quote's content."""
         md = render_note(self.make_entry())
-        assert "### Цитата 1 ^quote_1" in md
+        assert "### 1 ^quote_1" in md
         assert "> Вторая цитата, более ранняя" in md
         # the block id sits on the heading, not on the blockquote line
         assert "> Вторая цитата, более ранняя ^quote_1" not in md
@@ -603,7 +603,7 @@ class TestRenderNote:
         )
         md = render_note(entry[0])
         assert "Вторая цитата, более ранняя" in md
-        assert "### Цитата 1 ^quote_1" in md
+        assert "### 1 ^quote_1" in md
         assert "livelib:" not in md
 
     def test_quote_source_is_markdown_link(self):

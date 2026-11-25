@@ -37,6 +37,10 @@ Usage:
   python3 mkdocs-combine.py mkdocs.yml --mode summary \\
     --exclude p3-summary.md --index-output build/heading_index.json \\
     > build/summary_source.md
+
+  # Mode 1, with the base URL used for books that are not in the appendix
+  python3 mkdocs-combine.py mkdocs.yml --site-url https://text.sharedgoals.ru/ \
+    > combined.md
 """
 
 import argparse
@@ -49,6 +53,382 @@ from typing import Any
 
 import yaml
 from mkdocs_common import flatten_nav_files, load_yaml_config, remove_frontmatter
+
+# --------------------------------------------------------------------------- #
+# Book citations -> EPUB appendix                                             #
+# --------------------------------------------------------------------------- #
+
+# The appendix heading. Level 1: a nav section is a level-1 heading too, so the
+# appendix reads as one more part of the book (and lands in `--toc-depth=2`).
+APPENDIX_HEADING = "Приложение: цитируемая литература"
+
+# Base URL for books that are not cited by a chapter — the site the content repo
+# publishes to. `mode_mkdocs` takes the same value as its `site_url` default.
+DEFAULT_SITE_URL = "https://text.sharedgoals.ru/"
+
+# A markdown link to a book note. `docs_dir` is `text/`, so a chapter reaches
+# its books as `books/<slug>.md`, and a link from a deeper page reaches them as
+# `../books/<slug>.md`. The `books/` segment is REQUIRED: a plain chapter link
+# (`index.md`, `p1-chapter.md#quotes`) is not a book citation, and treating it
+# as one would pull chapter files into the appendix. A scheme / leading `/` is
+# rejected in the replacer, so an absolute URL is never mistaken for a note.
+BOOK_LINK = re.compile(
+    r"(!?)\[([^\]]+)\]\(((?:\.\./|\./)?books/[^/)\s]+\.md)(?:#([A-Za-z0-9_-]+))?\)"
+)
+# the slug, out of the whole url captured by BOOK_LINK group 3 (`books/<slug>.md`)
+BOOK_SLUG = re.compile(r"books/([^/)\s]+)\.md$")
+# an Obsidian block id at the end of a line (`. ^quote_12`): the site turns it
+# into an anchor via text_forge/anchor_ids.py; pandoc does not know it at all
+BLOCK_ID = re.compile(r"(?<=[ \t])\^([A-Za-z0-9][A-Za-z0-9_-]*)[ \t]*$")
+# an explicit anchor span, the other way a document declares an id
+HTML_ANCHOR = re.compile(r'<a\s+id="([^"]+)"></a>')
+# an ATX heading line, with its optional explicit `{#id}` attribute
+HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*(?:\{#([^}]+)\})?\s*$")
+FENCE = re.compile(r"^[ \t]*(?:```|~~~)")
+
+# The citation set of the last mkdocs-mode run: every slug a nav chapter linked
+# to, whether or not its note exists on disk. Set by `mode_mkdocs`, read by
+# callers (and tests) that want to know what the appendix was built from.
+last_cited_slugs: set[str] = set()
+
+
+def scan_book_citations(content: str) -> set[str]:
+    """Every book slug cited by a markdown link in `content`.
+
+    Line-based, and link-shaped: a `books/<slug>.md` mention in prose or inside a
+    fenced code block is a mention, not a citation, so it does not pull a book
+    into the appendix.
+    """
+    slugs: set[str] = set()
+    in_code = False
+    for line in content.split("\n"):
+        if FENCE.match(line):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        for match in BOOK_LINK.finditer(line):
+            if match.group(1) == "!":  # an image, not a citation
+                continue
+            slug = _book_slug(match.group(3))
+            if slug:
+                slugs.add(slug)
+    return slugs
+
+
+def _book_slug(url: str) -> str | None:
+    """The slug of a book-note URL (`books/<slug>.md`), or None if it is not one."""
+    match = BOOK_SLUG.search(url)
+    return match.group(1) if match else None
+
+
+def book_slugs_in(content: str) -> set[str]:
+    """Every book slug linked anywhere in `content` (fences are scanned too).
+
+    This is the set `rewrite_book_links` acts on: a path link whose slug is here
+    has a target to rewrite — either an appendix anchor or the live site page.
+    It differs from the CITATION set (what the appendix is built from) by the
+    reference list and by the books cited but missing from `text/books/`.
+    """
+    return {
+        slug for m in BOOK_LINK.finditer(content) if (slug := _book_slug(m.group(3)))
+    }
+
+
+def assert_resolvable_book_links(content: str) -> None:
+    """Fail loudly when a `books/<slug>.md` link survived the rewrite.
+
+    A link that still says `books/<slug>.md` points at a file that is not in the
+    EPUB — the dead link the appendix exists to remove — and pandoc reports it at
+    most as a warning. So: every book link left in the document must already be an
+    absolute site URL, and its anchor must be one the document declares.
+    """
+    declared = set(collect_anchor_ids(content))
+    dead: list[str] = []
+    for m in BOOK_LINK.finditer(content):
+        url = m.group(3)
+        anchor = m.group(4)
+        slug = _book_slug(url)
+        if url.startswith(("http://", "https://", "//")):
+            # an absolute URL is fine, but its anchor has to exist somewhere
+            if anchor and anchor not in declared:
+                dead.append(f"{url} (anchor #{anchor} is not in the document)")
+        elif slug:
+            dead.append(url + (f"#{anchor}" if anchor else ""))
+    if dead:
+        detail = ", ".join(sorted(set(dead)))
+        raise ValueError(
+            f"Book links the appendix could not resolve: {detail}. "
+            "A `books/<slug>.md` link has no target in the combined document."
+        )
+
+
+def book_heading_title(content: str) -> str:
+    """The book's title: frontmatter `title`, else its first heading."""
+    title = extract_frontmatter(content).get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    return extract_first_heading(content)
+
+
+def _quote_anchor_map(body: str, slug: str) -> dict[str, str]:
+    """`^quote_N` block ids in a note -> the appendix anchor that carries them.
+
+    The note is walked the way the section is rendered (frontmatter and fenced
+    code left out, headings shifted), so the numbering here matches the output.
+
+    A quote whose id sits on a HEADING takes that heading's `{#<slug>-quote_N}`;
+    a quote whose id sits anywhere else (the shape most notes really have — the
+    id at the last line of a blockquote, `> … ^quote_7`) gets an explicit
+    `<a id="<slug>-quote_N"></a>` instead. Pandoc understands neither `^id`
+    syntax nor heading ids it has not seen, so without the span the chapter's
+    `#<slug>-quote_N` link would land nowhere.
+    """
+    anchors: dict[str, str] = {}
+    in_code = False
+    for line in remove_frontmatter(body).split("\n"):
+        if FENCE.match(line):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        heading = HEADING.match(line)
+        text = "" if heading else line
+        explicit = heading.group(3) if heading else None
+        for block_id in BLOCK_ID.finditer(text):
+            name = block_id.group(1)
+            if not name.startswith("quote_"):
+                continue
+            anchor = f"{slug}-{name}"
+            # a heading carries its id as `{#…}` — an extra span there is noise
+            if explicit == name:
+                continue
+            anchors.setdefault(name, anchor)
+    return anchors
+
+
+def _emit_quote_anchor(line: str, anchor: str, at_block_end: bool) -> str:
+    """Drop a rendered `<a id="…"></a>` for a quote whose id rode some other line.
+
+    `at_block_end` puts the span on its own line, after the block it anchors:
+    that is where a blockquote ends, and an anchor sitting at the end of a `>`
+    line reads as part of the quote. Elsewhere (a heading, for instance) the span
+    stays on the line that carried the id.
+    """
+    span = f'<a id="{anchor}"></a>'
+    stripped = BLOCK_ID.sub("", line).rstrip()
+    if at_block_end:
+        return f"{stripped}\n\n{span}"
+    return f"{stripped} {span}"
+
+
+def _shift_one_levels(chunk: str, slug: str, anchors: dict[str, str]) -> list[str]:
+    """One book note -> appendix lines, with every heading shifted one level.
+
+    Runs line by line, so a fenced code block keeps its content verbatim: only
+    real headings are rewritten.
+
+    - `## Title {#review}`   -> `### Title`   (the review is reached by `<slug>`)
+    - `### 1 ^quote_1`       -> `#### 1 {#<slug>-quote_1}`
+    - `## Anything {#other}` -> `### Anything {#<slug>-other}`
+
+    A quote heading may sit at level 2 (a note without a `## Цитаты` section) or
+    level 3 (the usual shape), and its id comes from the block id alone, so both
+    shapes land on the same `<slug>-quote_N` anchor.
+    """
+    raw_lines = remove_frontmatter(chunk).split("\n")
+    in_code = False
+    out: list[str] = []
+    for index, line in enumerate(raw_lines):
+        if FENCE.match(line):
+            in_code = not in_code
+            out.append(line)
+            continue
+        if in_code:
+            out.append(line)
+            continue
+
+        match = HEADING.match(line)
+        if not match:
+            # a quote id on a prose/blockquote line: the id cannot become a
+            # heading attribute, so the anchor is emitted as a span and the id
+            # itself disappears (pandoc would print it as text)
+            block_id = BLOCK_ID.search(line)
+            if block_id and block_id.group(1) in anchors:
+                next_line = raw_lines[index + 1] if index + 1 < len(raw_lines) else ""
+                out.append(
+                    _emit_quote_anchor(line, anchors[block_id.group(1)], not next_line)
+                )
+            else:
+                out.append(line)
+            continue
+
+        level = min(len(match.group(1)) + 1, 6)
+        title = match.group(2).strip()
+        anchor = match.group(3)
+
+        block_id = BLOCK_ID.search(title)
+        if anchor is None and block_id:
+            title = title[: block_id.start()].rstrip()
+            anchor = block_id.group(1)
+
+        # the review heading loses its id on purpose: `#<slug>` (the book
+        # section) is the documented review target, and a literal `{#review}`
+        # would collide across the ~60 books sharing this one document
+        if anchor == "review" or anchor is None:
+            out.append(f"{'#' * level} {title}")
+            continue
+
+        namespaced = f"{slug}-{anchor}" if anchor.startswith("quote_") else anchor
+        out.append(f"{'#' * level} {title} {{#{namespaced}}}")
+    return out
+
+
+def render_book_appendix_section(content: str, slug: str) -> str:
+    """One cited book as an appendix section (pandoc-native markdown).
+
+    Frontmatter is stripped, the note becomes a `## <title> {#<slug>}` section and
+    its own headings shift one level down, so a book reads as:
+
+        ## <title> {#<slug>}
+        ### <review title>          (was `## ... {#review}`)
+        ### Цитаты
+        #### 1 {#<slug>-quote_1}
+
+    A quote whose block id rode a blockquote instead of a heading keeps its text
+    byte-identical and gains an `<a id="<slug>-quote_N"></a>` after the block.
+    """
+    title = book_heading_title(content) or slug
+    body = remove_frontmatter(content).lstrip("\n")
+    anchors = _quote_anchor_map(body, slug)
+    lines = [f"## {title} {{#{slug}}}", ""]
+    lines += _shift_one_levels(body, slug, anchors)
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def collect_anchor_ids(content: str) -> list[str]:
+    """Every anchor the document declares: `{#id}` heading attributes and the
+    explicit `<a id="…"></a>` spans the appendix emits.
+
+    Line-based and fence-aware, like the appendix writer itself.
+    """
+    ids: list[str] = []
+    in_code = False
+    for line in content.split("\n"):
+        if FENCE.match(line):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        match = HEADING.match(line)
+        if match and match.group(3):
+            ids.append(match.group(3))
+            continue
+        ids.extend(HTML_ANCHOR.findall(line))
+    return ids
+
+
+def assert_unique_anchor_ids(content: str) -> None:
+    """Fail loudly when an anchor id appears twice in the combined document.
+
+    Pandoc does not warn about a duplicate id — it emits two elements with the
+    same anchor, and every link to it lands on whichever section the reader's
+    viewer resolves first. So a collision is a build error, and renaming in
+    silence is not an option: chapters already point at those anchors.
+    """
+    seen: dict[str, int] = {}
+    for anchor_id in collect_anchor_ids(content):
+        seen[anchor_id] = seen.get(anchor_id, 0) + 1
+    duplicates = {name: n for name, n in seen.items() if n > 1}
+    if duplicates:
+        detail = ", ".join(f"{name} ({n}x)" for name, n in sorted(duplicates.items()))
+        raise ValueError(
+            f"Duplicate heading anchor ids in combined document: {detail}. "
+            "An anchor must be unique — a link cannot say which section it means."
+        )
+
+
+def rewrite_book_links(content: str, appendix_slugs: set[str], site_url: str) -> str:
+    """Point book links at the appendix, or at the live site.
+
+    - `books/<slug>.md` and `books/<slug>.md#review` -> `#<slug>`
+    - `books/<slug>.md#quote_N`                      -> `#<slug>-quote_N`
+    - a book that is not in the appendix             -> `<site_url>books/<slug>/`,
+      with any anchor carried over (`#quote_N`) — the live page really has it
+    - an image link, or any link whose URL is not a book note, is left verbatim
+
+    Nothing that reads as a book link survives this function unless it became a
+    target: `mode_mkdocs` checks that with `assert_resolvable_book_links`.
+    """
+    base = site_url.rstrip("/") + "/"
+
+    def replace(match: "re.Match[str]") -> str:
+        marker, text, url, anchor = match.groups()
+        if marker == "!":
+            return match.group(0)
+        slug = _book_slug(url)
+        if not slug:
+            return match.group(0)
+        already_absolute = url.startswith(("http://", "https://", "//", "mailto:"))
+        if already_absolute and anchor is None:
+            # an external link to a live book page, with no anchor of ours in it
+            return match.group(0)
+
+        if slug in appendix_slugs:
+            # the book section carries `{#slug}`, so a link with no anchor — or
+            # with `#review`, the review target — lands on the book itself
+            return (
+                f"[{text}](#{slug})"
+                if anchor in (None, "review")
+                else (f"[{text}](#{slug}-{anchor})")
+            )
+
+        # not in the appendix: the live site page owns that target
+        return f"[{text}]({base}books/{slug}/" + (f"#{anchor})" if anchor else ")")
+
+    return BOOK_LINK.sub(replace, content)
+
+
+def _defer_book_links(content: str) -> int:
+    """How many book links in `content` the appendix pass will have to handle.
+
+    Logging only — it counts the links that `fix_internal_links` is asked to
+    leave alone, so a run can be read as "the appendix pass had work to do".
+    """
+    return len(BOOK_LINK.findall(content))
+
+
+def build_books_appendix(docs_dir: Path, cited_slugs: set[str]) -> tuple[str, set[str]]:
+    """The appendix section for cited books that have a note on disk.
+
+    Returns (appendix markdown, slugs actually written). A missing note is
+    skipped with a warning: the book stays as dead as it was, instead of taking
+    the reader to an empty section.
+    """
+    books_dir = docs_dir / "books"
+    sections: list[str] = []
+    written: set[str] = set()
+
+    for slug in sorted(cited_slugs):
+        note = books_dir / f"{slug}.md"
+        if not note.exists():
+            print(f"[WARN] Cited book note not found, skipped: {note}", file=sys.stderr)
+            continue
+        try:
+            content = note.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as e:
+            print(f"[ERROR] Reading book note {note}: {e}", file=sys.stderr)
+            continue
+        print(f"[INFO] Appendix book: {slug}", file=sys.stderr)
+        sections.append(render_book_appendix_section(content, slug))
+        written.add(slug)
+
+    if not written:
+        # a text project with no cited books gets no appendix chapter at all —
+        # an empty "Приложение" heading would be a chapter with nothing in it
+        return "", written
+
+    return f"# {APPENDIX_HEADING}\n\n" + "\n".join(sections).rstrip("\n") + "\n", written
 
 
 def extract_nav_items(
@@ -69,10 +449,18 @@ def extract_nav_items(
                 items.append(("", item, level))
         elif isinstance(item, dict):
             for section_title, section_items in item.items():
-                if isinstance(section_items, str) and "://" in section_items:
-                    # External link
-                    items.append((section_title, section_items, level))
-                    continue
+                if isinstance(section_items, str):
+                    # A single entry under its title: either an external link
+                    # (`'Shared Goals PRD': https://…`) or one file
+                    # (`p3-references.md`). The file form used to fall through to
+                    # the section branch below, so the nav heading was emitted and
+                    # the file itself silently disappeared from the book.
+                    if "://" in section_items:
+                        items.append((section_title, section_items, level))
+                        continue
+                    if section_items.endswith(".md"):
+                        items.append((section_title, section_items, level))
+                        continue
 
                 # Section header
                 items.append((section_title, "", level))
@@ -291,7 +679,9 @@ def add_anchor_to_first_h1(content: str, anchor_id: str) -> str:
     return content
 
 
-def fix_internal_links(content: str, current_file: str) -> str:
+def fix_internal_links(
+    content: str, current_file: str, skip_book_links: bool = False
+) -> str:
     """
     Fix internal markdown links for combined documents.
 
@@ -299,6 +689,10 @@ def fix_internal_links(content: str, current_file: str) -> str:
     - [text](file.md) -> [text](#file-md)
     - [text](file.md#anchor) -> [text](#anchor)
     - [text](#anchor) -> [text](#anchor) (unchanged)
+
+    With `skip_book_links`, links to book notes (`books/<slug>.md[#anchor]`) are
+    left verbatim for `rewrite_book_links` — the appendix pass that knows whether
+    the book landed in the appendix, was skipped, or belongs to the live site.
     """
 
     def replace_link(match: "re.Match[str]") -> str:
@@ -308,6 +702,10 @@ def fix_internal_links(content: str, current_file: str) -> str:
 
         # Skip image links and external links
         if is_image or url.startswith(("http://", "https://", "//", "mailto:")):
+            return match.group(0)
+
+        # Skip book notes when the appendix pass is going to handle them
+        if skip_book_links and BOOK_LINK.fullmatch(match.group(0)):
             return match.group(0)
 
         # Handle internal links
@@ -398,7 +796,7 @@ def replace_details_with_source_link(
     )
 
 
-def mode_mkdocs(config_path: str) -> str:
+def mode_mkdocs(config_path: str, site_url: str = DEFAULT_SITE_URL) -> str:
     """
     Mode 1: Process mkdocs.yml configuration.
 
@@ -406,7 +804,12 @@ def mode_mkdocs(config_path: str) -> str:
     - Reads files one by one
     - Shifts headings according to level
     - Fixes links
+    - Appends an appendix with the books the chapters cite
     - Returns combined content
+
+    `site_url` is the base URL used for links to books that are NOT cited by a
+    chapter (the p3-references list): they point at the live site instead of an
+    appendix section that does not exist. Defaults to `site_url:` in mkdocs.yml.
     """
     config = load_yaml_config(config_path)
 
@@ -424,6 +827,39 @@ def mode_mkdocs(config_path: str) -> str:
         raise FileNotFoundError(f"Docs directory not found: {docs_dir}")
 
     nav_items = extract_nav_items(config["nav"])
+
+    # Which books the text actually cites. Only the nav files are scanned, and
+    # only for citations: the reference list (p3-*) enumerates the whole shelf,
+    # so including it would turn the appendix into a second copy of the corpus.
+    # A nav file whose name says 'reference' is therefore not scanned, and links
+    # it makes to books that no chapter cited become external (see below).
+    nav_files = flatten_nav_files(config["nav"])
+    cited_slugs: set[str] = set()
+    for filepath in nav_files:
+        # the reference list enumerates the whole shelf, so it is not a citation
+        # source — including it would turn the appendix into a second corpus.
+        # `reference` in the file name is how content repos spell that file
+        # (p3-references.md), and the nav is the only place it is declared.
+        if "reference" in Path(filepath).stem.lower():
+            continue
+        file_path = docs_dir / filepath
+        if not file_path.exists():
+            continue
+        try:
+            cited_slugs |= scan_book_citations(
+                remove_frontmatter(file_path.read_text(encoding="utf-8"))
+            )
+        except (OSError, UnicodeError) as e:
+            print(f"[ERROR] Scanning citations in {file_path}: {e}", file=sys.stderr)
+            continue
+    # the side channel: what the appendix was built from (see module docstring)
+    global last_cited_slugs
+    last_cited_slugs = set(cited_slugs)
+    print(
+        f"[INFO] Cited books: {len(cited_slugs)} (from {len(nav_files)} nav files)",
+        file=sys.stderr,
+    )
+
     combined: list[str] = []
     first_content = True
 
@@ -480,7 +916,17 @@ def mode_mkdocs(config_path: str) -> str:
             content = replace_details_with_source_link(
                 content, config["site_url"], filepath, headings
             )
-            content = fix_internal_links(content, filepath)
+            # Book links are left to the appendix pass at the end of the
+            # document: `fix_internal_links` throws the file part away, and the
+            # appendix rewrite needs that part to know WHICH book a `#quote_N`
+            # belongs to. The order is load-bearing.
+            deferred = _defer_book_links(content)
+            if deferred:
+                print(
+                    f"[INFO]   Book links deferred to appendix pass: {deferred}",
+                    file=sys.stderr,
+                )
+            content = fix_internal_links(content, filepath, skip_book_links=True)
 
             # Combine with dates
             # First content section has no leading newline; subsequent ones do
@@ -500,8 +946,30 @@ def mode_mkdocs(config_path: str) -> str:
             print(f"[ERROR] Processing {filepath}: {e}", file=sys.stderr)
             continue
 
-    # Combine all sections
+    # Combine all sections, then rewrite the book links against the appendix
+    # that was actually written. This runs on the ASSEMBLED document and AFTER
+    # `fix_internal_links` per file, so a book link is still recognisable by its
+    # path (`books/<slug>.md#quote_1`) instead of being a bare `#quote_1` that no
+    # longer says which book it means.
     result = "".join(combined)
+    appendix, appendix_slugs = build_books_appendix(docs_dir, cited_slugs)
+    # the rewrite covers the WHOLE document — chapters and the reference list
+    # alike — and it keys on the slugs actually linked, so a reference-list link
+    # to a book no chapter cited still becomes a live-site URL
+    linked_slugs = book_slugs_in(result)
+    print(
+        f"[INFO] Book links rewritten: {len(linked_slugs)} linked, "
+        f"{len(appendix_slugs)} with an appendix section",
+        file=sys.stderr,
+    )
+    result = rewrite_book_links(result, appendix_slugs, site_url)
+    if appendix:
+        result = result.rstrip("\n") + "\n\n" + appendix
+
+    # two sections with the same anchor would silently mislead every link to it
+    assert_unique_anchor_ids(result)
+    # and no book link may survive without a target
+    assert_resolvable_book_links(result)
 
     return result
 
@@ -654,6 +1122,14 @@ def main():
         help="Heading level shift for single file mode (default: 0)",
     )
 
+    # Optional: base URL for books that are not cited (appendix links)
+    parser.add_argument(
+        "--site-url",
+        default=DEFAULT_SITE_URL,
+        help="Base URL used for links to books that are NOT cited by a chapter "
+        f"(default: {DEFAULT_SITE_URL})",
+    )
+
     # Optional: exclude files for summary mode
     parser.add_argument(
         "--exclude",
@@ -682,7 +1158,7 @@ def main():
     try:
         if mode == "mkdocs":
             print("[INFO] Mode: mkdocs (EPUB combine)", file=sys.stderr)
-            output = mode_mkdocs(args.input)
+            output = mode_mkdocs(args.input, site_url=args.site_url)
         elif mode == "summary":
             print("[INFO] Mode: summary (AI summarization source)", file=sys.stderr)
             output = mode_summary(args.input, args.exclude, args.index_output)
