@@ -1,3 +1,6 @@
+// заголовок цитаты с блок-id: `### Цитата 1 ^quote_1` — id берётся из заголовка
+const QUOTE_HEADING = /^#{1,6}\s+Цитата\s+\d+[ \t]+\^(quote_\d+)[ \t]*$/;
+
 module.exports = async function (tp) {
   
   const blockTypes = [
@@ -88,7 +91,8 @@ module.exports = async function (tp) {
 };
 
 // цитата из корпуса: выбрать книгу (title — author из frontmatter),
-// затем цитату (блоки `> … ^quote_N`) — текст берётся из корпуса как есть,
+// затем цитату (заголовки `### Цитата N ^quote_N` с блокцитатой под ними) —
+// текст берётся из корпуса как есть,
 // подпись ведёт на локальный анкор books/<slug>.md#quote_N
 async function _corpusQuote(tp) {
   const files = app.vault
@@ -136,25 +140,71 @@ function _frontmatter(content, key) {
   return m[1].trim().replace(/^"(.*)"$/, '$1');
 }
 
-// группы блокцитат `> …`, чья последняя строка кончается блок-id `^quote_N`;
-// абзацы внутри одной цитаты разделяет «голый» `>` — он часть группы;
-// id становится анкором ссылки — в вставляемый текст он НЕ попадает
-function _quotes(content) {
+// цитата страницы: заголовок `### Цитата N ^quote_N` открывает цитату, её текст —
+// следующая группа строк `> …`; абзацы внутри одной цитаты разделяет «голый» `>`
+// — он часть группы; id уходит в анкор ссылки и в вставляемый текст НЕ попадает
+function _quotes(page) {
+  const quotes = [];
+  let id = null;
+  let lines = [];
+  let sawHeading = false; // хоть один заголовок цитаты -> страница нового формата
+  for (const line of page.split('\n')) {
+    const h = line.match(QUOTE_HEADING);
+    if (h) {
+      // новый заголовок закрывает предыдущую цитату (подпись между ними — не строка `>`)
+      _collectHeading(id, lines, quotes);
+      id = h[1];
+      lines = [];
+      sawHeading = true;
+      // the heading is not the end of the quote it just opened — without this
+      // `continue` the fall-through below would close it with an empty body
+      continue;
+    }
+    if (line.startsWith('>')) {
+      if (id) lines.push(line.replace(/^>\s?/, ''));
+      continue;
+    }
+    if (!line.trim()) continue; // пустая строка внутри цитаты — не граница
+    _collectHeading(id, lines, quotes);
+    id = null;
+    lines = [];
+  }
+  _collectHeading(id, lines, quotes);
+  // совместимость со страницами старого формата (id на последней строке самой
+  // блокцитаты, заголовков нет) — corpus до перегенерации
+  return sawHeading ? quotes : _legacyQuotes(page);
+}
+
+// цитата нового формата: id с заголовка + тело-блокцитата
+function _collectHeading(id, lines, quotes) {
+  const body = lines.join('\n').trim();
+  if (!id || !body) return;
+  const preview = body.replace(/\n/g, ' ');
+  quotes.push({
+    id: id,
+    n: id.split('_')[1],
+    text: body,
+    preview: preview.length > 80 ? preview.slice(0, 80) + '…' : preview,
+  });
+}
+
+// старый формат: id на последней строке группы `> …` (page без заголовков цитат)
+function _legacyQuotes(content) {
   const quotes = [];
   let lines = [];
   for (const line of content.split('\n')) {
     if (line.startsWith('>')) {
       lines.push(line.replace(/^>\s?/, ''));
     } else if (lines.length) {
-      _collect(lines, quotes);
+      _legacyCollect(lines, quotes);
       lines = [];
     }
   }
-  _collect(lines, quotes);
+  _legacyCollect(lines, quotes);
   return quotes;
 }
 
-function _collect(lines, quotes) {
+function _legacyCollect(lines, quotes) {
   const text = lines.join('\n').trim();
   const m = text.match(/ \^(quote_\d+)$/);
   if (!m) return;

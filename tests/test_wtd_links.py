@@ -91,6 +91,33 @@ class TestBuildLinkMap:
         assert m["quote/42572258"] == {"slug": "abe", "anchor": "quote_1"}
         assert m["quote/49559677"] == {"slug": "abe", "anchor": "quote_2"}
 
+    def test_quote_anchor_recognised_on_the_heading_above_the_blockquote(self, tmp_path):
+        """CHARACTERIZATION PIN (new corpus shape, v0.7.4 generation).
+
+        The generator moved the block id off the blockquote's last line onto a
+        per-quote heading:
+
+            ### Цитата 1 ^quote_1
+
+            > Текст цитаты
+
+            — [LiveLib](https://www.livelib.ru/quote/42572258)
+
+        `build_link_map` reads the id from the line above the attribution, not
+        from inside the block, so the heading form maps to the SAME anchor —
+        the public `#quote_N` contract that chapter signatures and the picker
+        depend on. This test pins that behaviour; it asks for no change here.
+        """
+        md = (
+            '---\ntitle: "Четвертый ледниковый период"\n'
+            'livelib_book: "https://www.livelib.ru/book/1001616054"\n---\n\n'
+            "## Цитаты\n\n### Цитата 1 ^quote_1\n\n> Текст цитаты\n\n"
+            "— [LiveLib](https://www.livelib.ru/quote/42572258)\n"
+        )
+        books = write_books(tmp_path, abe=md)
+        m = build_link_map(books)
+        assert m["quote/42572258"] == {"slug": "abe", "anchor": "quote_1"}
+
     def test_attribution_without_preceding_anchor(self, tmp_path):
         """No block id on the quote above the attribution -> anchor None."""
         books = write_books(tmp_path, abe=note("Т", book="1", quotes=[("42572258",)]))

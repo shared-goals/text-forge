@@ -12,6 +12,11 @@ itself needs, while the site gets a real anchor.
 
 Only a trailing id converts: `^text^` (pymdownx superscript) and a caret with no
 text before it on the line are left verbatim, so no prose is eaten.
+
+A HEADING carrying the id converts differently — `## Title <a id="x"></a>` puts
+the span INSIDE the heading text, where the toc does not see it as the section
+anchor — so a heading gets the attr_list form `## Title {#x}`, which is a real
+section id (`attr_list` is enabled in the site's mkdocs.yml).
 """
 
 import re
@@ -20,6 +25,9 @@ import re
 # whitespace. The leading whitespace is required — a caret that starts a line is
 # not an id — and it is what makes a mid-line caret (`^text^`) survive.
 BLOCK_ID = re.compile(r"[ \t]+\^([A-Za-z0-9][A-Za-z0-9_-]*)[ \t]*$")
+# an ATX heading, with optional leading spaces; `#` must be followed by whitespace
+# or end-of-line, so `#tag` is not a heading
+HEADING = re.compile(r"^[ \t]*#{1,6}(?:\s|$)")
 FENCE = re.compile(r"^[ \t]*(?:```|~~~)")
 FM_FENCE = "---"
 
@@ -51,5 +59,14 @@ def convert_block_ids(markdown: str) -> str:
             else:
                 out.append(line)  # still inside frontmatter
             continue
-        out.append(BLOCK_ID.sub(lambda m: f' <a id="{m.group(1)}"></a>', line))
+        out.append(_convert_line(line))
     return "\n".join(out)
+
+
+def _convert_line(line: str) -> str:
+    """One prose line: heading -> `{#id}`, anything else -> `<a id="..."></a>`."""
+    # the braces are spelled outside the f-string: the attr_list shape would
+    # need `{{#…}}` escapes, and plain concatenations keep both shapes readable
+    if HEADING.match(line):
+        return BLOCK_ID.sub(lambda m: " {#" + m.group(1) + "}", line)
+    return BLOCK_ID.sub(lambda m: ' <a id="' + m.group(1) + '"></a>', line)

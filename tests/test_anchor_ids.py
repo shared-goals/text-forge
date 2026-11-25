@@ -60,6 +60,31 @@ class TestConvertBlockIds:
         md = "```\ntext ^quote_1\n```\n"
         assert convert_block_ids(md) == md
 
+    def test_heading_id_becomes_attr_list_id(self):
+        """A heading carries its id as `{#id}`: Markdown gives the section that
+        real anchor, so Material's toc permalink is copyable (unlike a `<a>` span,
+        which sits under the heading and is not a section target)."""
+        out = convert_block_ids("### Цитата 1 ^quote_1\n")
+        assert out == "### Цитата 1 {#quote_1}\n"
+
+    def test_heading_with_leading_spaces_still_takes_the_attr_form(self):
+        out = convert_block_ids("   ## Цитата 1 ^quote_1\n")
+        assert out == "   ## Цитата 1 {#quote_1}\n"
+
+    def test_bookquote_last_line_converts_to_anchor_span(self):
+        """A non-heading line keeps the `<a id>` conversion — a block has no
+        heading of its own to attach an attribute to."""
+        md = "> Текст ^quote_1\n"
+        assert convert_block_ids(md) == '> Текст <a id="quote_1"></a>\n'
+
+    def test_heading_id_respects_frontmatter_and_code_fences(self):
+        """Frontmatter and code fences stay verbatim; only the prose heading converts."""
+        md = "---\ntitle: \"T ^quote_9\"\n---\n\n### Цитата 1 ^quote_1\n\n```\n# not ^q\n```\n"
+        out = convert_block_ids(md)
+        assert 'title: "T ^quote_9"' in out
+        assert "### Цитата 1 {#quote_1}" in out
+        assert "# not ^q" in out
+
     def test_line_without_id_unchanged(self):
         md = "Обычная строка текста.\n"
         assert convert_block_ids(md) == md

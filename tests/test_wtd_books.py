@@ -358,8 +358,21 @@ class TestRenderNote:
     def test_quotes_header_when_quotes_exist(self):
         """`## Цитаты` opens the quote section, on its own line, blank after."""
         md = render_note(self.make_entry())
-        assert "## Цитаты\n\n> " in md
+        assert "## Цитаты\n\n### " in md
         assert md.count("## Цитаты") == 1
+
+    def test_every_quote_opens_with_a_header_carrying_the_block_id(self):
+        """Per-quote header: the block id rides the heading, so Material's toc
+        permalink gives a copyable `#quote_N` anchor for chapter signatures."""
+        md = render_note(self.make_entry())
+        assert "### Цитата 1 ^quote_1\n\n> Вторая цитата, более ранняя\n\n" in md
+        assert "### Цитата 2 ^quote_2\n\n> Текст первой цитаты\n\n" in md
+
+    def test_blockquote_lines_carry_no_block_id(self):
+        """The id left the blockquote: no `>` line ends with `^quote_N`."""
+        md = render_note(self.make_entry())
+        for line in md.split("\n"):
+            assert not line.startswith(">") or "^quote_" not in line, line
 
     def test_no_quotes_header_without_quotes(self):
         """No quotes, no header: an empty section is never written."""
@@ -433,15 +446,16 @@ class TestRenderNote:
         }
         md = render_note(own_entry)
         assert "status: none" in md
-        assert "^quote_1" in md
+        assert "### Цитата 1 ^quote_1" in md
 
-    def test_quote_is_blockquote_without_heading(self):
-        """No synthetic quote titles: the quote text itself, as blockquote with block-id."""
+    def test_quote_is_header_plus_blockquote(self):
+        """Every quote is `### Цитата N ^quote_N` + a blockquote of the quote text
+        itself — no synthetic titles invented from the quote's content."""
         md = render_note(self.make_entry())
-        assert "###" not in md
+        assert "### Цитата 1 ^quote_1" in md
         assert "> Вторая цитата, более ранняя" in md
-        # block-id sits on the blockquote line (Obsidian anchors the quote block)
-        assert "> Вторая цитата, более ранняя ^quote_1" in md
+        # the block id sits on the heading, not on the blockquote line
+        assert "> Вторая цитата, более ранняя ^quote_1" not in md
 
     def test_book_attr_uses_short_url(self):
         """Book attribute is the short stable form /book/<id>, like quotes."""
@@ -589,7 +603,7 @@ class TestRenderNote:
         )
         md = render_note(entry[0])
         assert "Вторая цитата, более ранняя" in md
-        assert "^quote_1" in md
+        assert "### Цитата 1 ^quote_1" in md
         assert "livelib:" not in md
 
     def test_quote_source_is_markdown_link(self):

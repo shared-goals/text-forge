@@ -689,11 +689,10 @@ def _strip_html(text: str) -> str:
     return text.strip()
 
 
-def _blockquote(text: str, n: int) -> str:
-    """Quote as blockquote, block-id on the last line (Obsidian anchors the block)."""
-    lines = [f"> {line}".rstrip() for line in text.split("\n")]
-    lines[-1] += f" ^quote_{n}"
-    return "\n".join(lines)
+def _blockquote(text: str) -> str:
+    """Quote as blockquote, carrying no block id — the id rides the `### Цитата N`
+    heading above it, so the site anchors the quote via that section."""
+    return "\n".join(f"> {line}".rstrip() for line in text.split("\n"))
 
 
 def _author_valid(author: str) -> bool:
@@ -814,7 +813,10 @@ def render_note(entry: dict) -> str:
         meta = q.get("quote") or {}
         qid = meta.get("quote_id") or (meta.get("url") or "").split("/quote/")[-1].split("-")[0]
         qurl = f"/quote/{qid}" if str(qid).isdigit() else None
-        block = [_blockquote(_strip_html(q["text"]), n), ""]
+        # the quote opens under its own header, which carries the block id: the
+        # site renders `#quote_N` as the section's permalink, which is the anchor
+        # chapter author signatures point at
+        block = [f"### Цитата {n} ^quote_{n}", "", _blockquote(_strip_html(q["text"])), ""]
         if qurl:
             block.append(f"— [LiveLib](https://www.livelib.ru{qurl})")
             block.append("")
