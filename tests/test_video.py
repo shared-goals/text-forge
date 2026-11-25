@@ -5,12 +5,15 @@ import pytest
 from text_forge.video import (
     player_block,
     render_markers,
+    replace_markers_with_links,
+    unrendered_markers,
     youtube_embed_url,
     youtube_id,
     youtube_watch_url,
 )
 
 VIDEO = "LN6jA_brXXs"
+VIDEO_EMBED = f"https://www.youtube.com/embed/{VIDEO}"
 
 
 class TestYoutubeUrls:
@@ -118,3 +121,66 @@ class TestRenderMarkers:
         # a marker inside a sentence cannot become a block without eating the prose
         src = f"Смотрите ![type:video](https://youtu.be/{VIDEO}) тут."
         assert render_markers(src) == src
+
+    @pytest.mark.parametrize(
+        "title_markup",
+        [
+            '"What is SoDA?"',        # straight pair
+            '"What is SoDA?”',        # straight open, typographic close (the bug)
+            "“What is SoDA?”",        # typographic pair, as Obsidian writes them
+            "«What is SoDA?»",        # guillemets
+            '"What is SoDA?"  ',      # trailing spaces
+        ],
+    )
+    def test_title_quotes_of_any_shape(self, title_markup):
+        src = f"![type:video](https://www.youtube.com/embed/{VIDEO} {title_markup})"
+        out = render_markers(src)
+        assert 'title="What is SoDA?"' in out, out
+        assert "type:video" not in out
+
+    def test_title_containing_a_quote_mark_is_kept(self):
+        src = f'![type:video](https://youtu.be/{VIDEO} "He said «no»")'
+        assert 'title="He said «no»"' in render_markers(src)
+
+
+class TestUnrenderedMarkers:
+    def test_no_leftovers_after_rendering(self):
+        src = f'![type:video](https://youtu.be/{VIDEO} "Reel")'
+        assert unrendered_markers(render_markers(src)) == []
+
+    def test_broken_marker_is_reported_with_its_line(self):
+        src = f"Перед.\n\n![type:video](https://youtu.be/{VIDEO}\n\nПосле."
+        assert render_markers(src) == src  # nothing to render
+        found = unrendered_markers(src)
+        assert found and found[0][0] == 3
+        assert "type:video" in found[0][1]
+
+
+class TestMarkersToLinks:
+    """The book side: a marker must become a link before pandoc sees it."""
+
+    def test_marker_becomes_a_link(self):
+        src = f'![type:video](https://www.youtube.com/embed/{VIDEO} "Webzavod 1997")'
+        assert replace_markers_with_links(src) == f"[▶ Webzavod 1997](https://youtu.be/{VIDEO})"
+
+    @pytest.mark.parametrize(
+        "title_markup",
+        ['"What is SoDA?”', "“What is SoDA?”", "«What is SoDA?»"],
+    )
+    def test_typographic_title_still_becomes_a_link(self, title_markup):
+        src = f"![type:video](https://www.youtube.com/embed/{VIDEO} {title_markup})"
+        out = replace_markers_with_links(src)
+        assert "![type:video]" not in out  # pandoc would keep it as literal text
+        assert f"[▶ What is SoDA?](https://youtu.be/{VIDEO})" in out
+
+    def test_title_fallback_and_local_file(self):
+        assert replace_markers_with_links(f"![type:video]({VIDEO_EMBED})") == (
+            f"[▶ Watch on YouTube](https://youtu.be/{VIDEO})"
+        )
+        assert replace_markers_with_links("![type:video](assets/clip.mp4)") == (
+            "[▶ Watch on YouTube](assets/clip.mp4)"
+        )
+
+    def test_text_without_markers_is_untouched(self):
+        text = "# Глава\n\nОбычный [текст](https://example.com).\n"
+        assert replace_markers_with_links(text) == text

@@ -37,10 +37,36 @@ _IFRAME_STYLE = "width:100%;aspect-ratio:16/9;height:auto;border:0;"
 MARKER_LINE = re.compile(
     r'^[ \t]*!\[type:video\]\('
     r'(?:<(?P<angle>[^>]+)>|(?P<url>[^)\s]+))'
-    r'(?:\s+"(?P<title>[^"]*)")?'
-    r'[ \t]*\)[ \t]*$',
+    r'(?P<rest>[^)\n]*)\)[ \t]*$',
     re.MULTILINE,
 )
+
+# Titles are hand-written, and Obsidian "smart punctuation" turns straight quotes
+# into typographic ones — including mixed pairs like `"What is SoDA?”`. Stripping
+# any of these from both ends is cheaper than teaching authors which quote to type.
+_TITLE_QUOTES = "\"'“”„«»"
+
+LEFTOVER = re.compile(r"!\[type:video\]\(")
+
+
+def _title_from(rest: str) -> str:
+    title = rest.strip()
+    if len(title) >= 2 and title[0] in _TITLE_QUOTES and title[-1] in _TITLE_QUOTES:
+        title = title[1:-1]
+    return title.strip()
+
+
+def unrendered_markers(markdown: str) -> list[tuple[int, str]]:
+    """Markers that survived rendering: (line number, line) for each.
+
+    A marker left in place becomes a broken image on the site, so the build warns
+    instead of shipping it silently. Call it after `render_markers`.
+    """
+    return [
+        (number, line.strip())
+        for number, line in enumerate(markdown.splitlines(), 1)
+        if LEFTOVER.search(line)
+    ]
 
 
 def youtube_id(src: str) -> str | None:
@@ -117,7 +143,27 @@ def render_markers(markdown: str) -> str:
 
     def replace(match: re.Match[str]) -> str:
         src = match.group("angle") or match.group("url")
-        title = (match.group("title") or "").strip()
+        title = _title_from(match.group("rest") or "")
         return player_block(src, title)
 
     return MARKER_LINE.sub(replace, markdown)
+
+
+def replace_markers_with_links(markdown: str) -> str:
+    """Replace every whole-line marker with a plain markdown link.
+
+    This is the book side, applied before pandoc: it must run first because pandoc
+    refuses to parse a marker whose title uses a typographic quote — the line then
+    survives as literal `![type:video](...)` text inside the ebook.
+    """
+    return MARKER_LINE.sub(lambda m: marker_link(
+        m.group("angle") or m.group("url"),
+        _title_from(m.group("rest") or ""),
+    ), markdown)
+
+
+def marker_link(src: str, title: str = "") -> str:
+    """`[▶ Title](href)` — what a marker becomes in the ebook."""
+    text = title or "Watch on YouTube"
+    href = youtube_watch_url(src) or src
+    return f"[▶ {text}]({href})"

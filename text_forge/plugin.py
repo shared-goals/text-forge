@@ -5,6 +5,7 @@ Automatically configures Material theme overrides, editor, and build pipeline.
 """
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -13,7 +14,9 @@ from mkdocs.config import config_options
 from mkdocs.config.defaults import MkDocsConfig
 from mkdocs.plugins import BasePlugin
 
-from text_forge.video import render_markers
+from text_forge.video import render_markers, unrendered_markers
+
+log = logging.getLogger("mkdocs.plugins.text-forge")
 
 
 def _is_book_page(page) -> bool:
@@ -208,6 +211,11 @@ class TextForgePlugin(BasePlugin):
 
         if self.config["video_embeds"]:
             markdown = render_markers(markdown)
+            for line_number, line in unrendered_markers(markdown):
+                log.warning(
+                    f"text-forge: unrendered video marker in {page.file.src_uri}:"
+                    f"{line_number}: {line[:120]}"
+                )
         return markdown
 
     def on_env(self, env, config, files):
