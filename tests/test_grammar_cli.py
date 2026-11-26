@@ -184,6 +184,7 @@ class TestBuildPayload:
             "files",
             "dropped",
             "typography",
+            "heavy",
         }
         assert payload["base"] == base
         assert payload["head"] == head
@@ -484,3 +485,37 @@ class TestFileMode:
 def proc_out(proc) -> str:
     """stdout+stderr of a CLI run, for assertion messages."""
     return f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+
+
+class TestHeavySentencesInMarkdown:
+    """The Dovlatov candidates ride along in the input, pre-counted."""
+
+    def setup_method(self):
+        self.added = {
+            "text/p1-a.md": [
+                AddedLine(
+                    file="text/p1-a.md",
+                    line=5,
+                    text="Однажды, в студёную, зимнюю, пору я пошёл.",
+                    commit="abc",
+                ),
+                AddedLine(file="text/p1-a.md", line=6, text="Коротко.", commit="abc"),
+            ]
+        }
+        self.issues = []
+        self.meta = {"base": "b", "scope": "wtd", "dropped": {}}
+
+    def test_section_names_the_candidates_with_their_counts(self):
+        out = render_markdown(self.added, self.issues, self.meta)
+        assert "## Heavy sentences (1)" in out
+        assert "text/p1-a.md:5" in out.split("## Heavy sentences", 1)[1]
+        assert "commas 3" in out
+        assert "words 7" in out
+
+    def test_empty_section_says_so(self):
+        out = render_markdown(
+            {**self.added, "text/p1-a.md": self.added["text/p1-a.md"][1:]},
+            [],
+            self.meta,
+        )
+        assert "_No candidates._" in out

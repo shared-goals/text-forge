@@ -496,6 +496,11 @@ def _payload(
     """Assemble the payload from kept rows and drop counters."""
     kept_rows = [row for rows in kept_by_file.values() for row in rows]
     issues = typography_issues(kept_rows) if with_typography else []
+    # heavy imports normalize_link_targets from this module, so the import
+    # goes through a cycle — take it lazily, after the module is complete
+    from text_forge.heavy import find_heavy
+
+    heavy = find_heavy(kept_rows)
     return {
         "base": base,
         "head": head,
@@ -509,6 +514,16 @@ def _payload(
         "typography": [
             {"file": i.file, "line": i.line, "kind": i.kind, "fragment": i.fragment}
             for i in _sorted_issues(issues)
+        ],
+        "heavy": [
+            {
+                "file": h.file,
+                "line": h.line,
+                "text": h.text,
+                "commas": h.commas,
+                "words": h.words,
+            }
+            for h in heavy
         ],
     }
 
@@ -606,6 +621,21 @@ def render_markdown(
             lines.append(f"{row.file}:{row.line} | {row.text.strip()}")
         lines.append("")
 
+    from text_forge.heavy import find_heavy
+
+    heavy = find_heavy([row for rows in added.values() for row in rows])
+    lines.append(
+        f"## Heavy sentences ({len(heavy)}) — split candidates, counted not judged"
+    )
+    lines.append("")
+    if not heavy:
+        lines.extend(["_No candidates._", ""])
+    else:
+        for h in heavy:
+            lines.append(
+                f"{h.file}:{h.line} | commas {h.commas} · words {h.words} | {h.text}"
+            )
+        lines.append("")
     lines.append(f"## Typography ({len(typography)})")
     lines.append("")
     if not typography:

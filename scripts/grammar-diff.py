@@ -122,14 +122,13 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _report(
-    payload: dict[str, Any], json_path: Path, md_path: Path, note: str
-) -> None:
+def _report(payload: dict[str, Any], json_path: Path, md_path: Path, note: str) -> None:
     """What was kept, what was dropped and where the artifacts went."""
     files = payload["files"]
     kept = sum(len(rows) for rows in files.values())
     dropped = payload["dropped"]
     typography = Counter(item["kind"] for item in payload["typography"])
+    heavy = len(payload["heavy"])
     console.title("grammar input", note=note)
     console.detail("kept", f"{kept} lines · {len(files)} file(s)")
     console.counts("dropped", [(r, dropped.get(r, 0)) for r in DROP_REASONS])
@@ -137,6 +136,7 @@ def _report(
         console.counts("typography", sorted(typography.items()))
     else:
         console.detail("typography", "none")
+    console.detail("heavy", f"{heavy} sentence(s) to split" if heavy else "none")
     console.detail("json", console.rel(json_path))
     console.detail("md", console.rel(md_path))
 
