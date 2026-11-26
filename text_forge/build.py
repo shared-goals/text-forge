@@ -295,7 +295,9 @@ def build_epub_pipeline(
 
         # Report markers the ebook side could not turn into a link (usually a
         # title quoted with typographic quotes) instead of leaking them silently.
-        for line_number, line in unrendered_markers(combined_md.read_text(encoding="utf-8")):
+        for line_number, line in unrendered_markers(
+            combined_md.read_text(encoding="utf-8")
+        ):
             print(
                 f"⚠ unrendered video marker at line {line_number}: {line[:120]}",
                 file=sys.stderr,
@@ -329,6 +331,13 @@ def build_epub_pipeline(
             print(e.stderr, file=sys.stderr)
         raise
     except FileNotFoundError as e:
+        print(f"✗ Build failed: {e}", file=sys.stderr)
+        raise
+    except ValueError as e:
+        # a guard that came from inside the combiner subprocess (a stale
+        # quote-id corpus, a duplicate anchor) is reported by that process on
+        # stderr, which `combine_chapters` captures — so the parent prints it
+        # here, otherwise a failing build shows only the CalledProcessError text
         print(f"✗ Build failed: {e}", file=sys.stderr)
         raise
 

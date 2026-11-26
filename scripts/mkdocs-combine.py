@@ -41,6 +41,24 @@ Usage:
   # Mode 1, with the base URL used for books that are not in the appendix
   python3 mkdocs-combine.py mkdocs.yml --site-url https://text.sharedgoals.ru/ \
     > combined.md
+
+Corpus format for quote ids
+--------------------------
+
+A book note (`text/books/<slug>.md`) carries its quote anchors on HEADINGS:
+
+    ## Цитаты
+
+    ### 1 ^quote_1
+
+    > Кобо Абэ, фраза.
+
+The heading TEXT is free (`### 1`, `### Цитата 1`, anything else): the trailing
+block id `^quote_N` is the whole contract, and it becomes `{#<slug>-quote_N}` in
+the appendix. The pre-0.7.4 shape — the id at the end of a blockquote line
+(`> … ^quote_7`) — is NOT supported: no heading can carry it, so a cited book
+whose ids sit on non-heading lines is a STALE corpus and the combine fails loudly
+naming the file and the ids, rather than emitting a dangling `#<slug>-quote_N`.
 """
 
 import argparse
@@ -81,6 +99,7 @@ BOOK_SLUG = re.compile(r"books/([^/)\s]+)\.md$")
 # into an anchor via text_forge/anchor_ids.py; pandoc does not know it at all
 BLOCK_ID = re.compile(r"(?<=[ \t])\^([A-Za-z0-9][A-Za-z0-9_-]*)[ \t]*$")
 # an explicit anchor span, the other way a document declares an id
+# (only the site plugin emits those any more — the appendix does not)
 HTML_ANCHOR = re.compile(r'<a\s+id="([^"]+)"></a>')
 # an ATX heading line, with its optional explicit `{#id}` attribute
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*(?:\{#([^}]+)\})?\s*$")
@@ -90,6 +109,72 @@ FENCE = re.compile(r"^[ \t]*(?:```|~~~)")
 # to, whether or not its note exists on disk. Set by `mode_mkdocs`, read by
 # callers (and tests) that want to know what the appendix was built from.
 last_cited_slugs: set[str] = set()
+
+# Quote ids that ride a line no heading can carry, per book slug. Set by
+# `scan_stale_quote_ids` (the citation scan of `mode_mkdocs`) and read by
+# `assert_quote_anchors_declared`, which turns the report into a build error.
+# Empty for a corpus that is all new-format.
+unsupported_quote_ids: dict[str, set[str]] = {}
+
+
+def scan_stale_quote_ids(content: str, slug: str) -> set[str]:
+    """The `^quote_N` ids in a book note that sit on a NON-heading line.
+
+    The supported corpus format is one shape: the id trails a quote heading
+    (`### 1 ^quote_1`, heading text free — the id is the contract) and becomes
+    `{#<slug>-quote_1}`. An id at the end of a blockquote line (the pre-0.7.4
+    shape) has no heading to carry it, so the chapter's `#<slug>-quote_N` link
+    would dangle; `build_books_appendix` refuses such a note.
+
+    Frontmatter and fenced code are skipped, like every other walk here, and ids
+    that are not `quote_*` are none of this guard's business.
+    """
+    stale: set[str] = set()
+    in_code = False
+    for line in remove_frontmatter(content).split("\n"):
+        if FENCE.match(line):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        if HEADING.match(line):
+            continue
+        block_id = BLOCK_ID.search(line)
+        if block_id and block_id.group(1).startswith("quote_"):
+            stale.add(block_id.group(1))
+    if stale:
+        unsupported_quote_ids.setdefault(slug, set()).update(stale)
+        print(
+            f"[ERROR] Quote ids off the headings (old corpus format): "
+            f"books/{slug}.md ({', '.join(sorted(stale))})",
+            file=sys.stderr,
+        )
+    return stale
+
+
+def assert_quote_anchors_declared() -> None:
+    """Fail loudly when a cited book note carries `^quote_N` ids off its headings.
+
+    The corpus format is one shape: an id trailing a quote heading
+    (`### N ^quote_N`), which the appendix turns into `{#<slug>-quote_N}`. A note
+    whose ids sit on blockquote/prose lines is a STALE (pre-0.7.4) corpus: no
+    heading can carry the id, so the chapters' `#<slug>-quote_N` links would land
+    nowhere. Emitting a substitute anchor would fabricate an anchor the site does
+    not have, so the build stops and names the file and the ids instead.
+    """
+    if not unsupported_quote_ids:
+        return
+    detail = ", ".join(
+        f"books/{slug}.md ({', '.join(sorted(names))})"
+        for slug, names in sorted(unsupported_quote_ids.items())
+    )
+    raise ValueError(
+        f"Quote ids that no heading carries: {detail}. The supported corpus "
+        "format is `### N ^quote_N` (heading text is free, the id is the "
+        "contract); an id at the end of a blockquote line is the unsupported "
+        "old form. Regenerate the book notes, or move each id onto the heading "
+        "of the quote it names — a chapter link to it would dangle."
+    )
 
 
 def scan_book_citations(content: str) -> set[str]:
@@ -172,17 +257,14 @@ def book_heading_title(content: str) -> str:
 
 
 def _quote_anchor_map(body: str, slug: str) -> dict[str, str]:
-    """`^quote_N` block ids in a note -> the appendix anchor that carries them.
+    """The quote ids a note carries on its HEADINGS, as `<slug>-quote_N`.
 
     The note is walked the way the section is rendered (frontmatter and fenced
     code left out, headings shifted), so the numbering here matches the output.
 
-    A quote whose id sits on a HEADING takes that heading's `{#<slug>-quote_N}`;
-    a quote whose id sits anywhere else (the shape most notes really have — the
-    id at the last line of a blockquote, `> … ^quote_7`) gets an explicit
-    `<a id="<slug>-quote_N"></a>` instead. Pandoc understands neither `^id`
-    syntax nor heading ids it has not seen, so without the span the chapter's
-    `#<slug>-quote_N` link would land nowhere.
+    Only the supported shape is collected: an id trailing a heading
+    (`### 1 ^quote_1` -> `#### 1 {#<slug>-quote_1}`). An id that no heading
+    carries is reported by `scan_stale_quote_ids`, not picked up here.
     """
     anchors: dict[str, str] = {}
     in_code = False
@@ -193,33 +275,19 @@ def _quote_anchor_map(body: str, slug: str) -> dict[str, str]:
         if in_code:
             continue
         heading = HEADING.match(line)
-        text = "" if heading else line
-        explicit = heading.group(3) if heading else None
+        if not heading:
+            continue
+        text = heading.group(2)
+        explicit = heading.group(3)
         for block_id in BLOCK_ID.finditer(text):
             name = block_id.group(1)
             if not name.startswith("quote_"):
                 continue
-            anchor = f"{slug}-{name}"
-            # a heading carries its id as `{#…}` — an extra span there is noise
-            if explicit == name:
+            # the id is the heading's own unless an explicit `{#…}` says otherwise
+            if explicit is not None and explicit != name:
                 continue
-            anchors.setdefault(name, anchor)
+            anchors.setdefault(name, f"{slug}-{name}")
     return anchors
-
-
-def _emit_quote_anchor(line: str, anchor: str, at_block_end: bool) -> str:
-    """Drop a rendered `<a id="…"></a>` for a quote whose id rode some other line.
-
-    `at_block_end` puts the span on its own line, after the block it anchors:
-    that is where a blockquote ends, and an anchor sitting at the end of a `>`
-    line reads as part of the quote. Elsewhere (a heading, for instance) the span
-    stays on the line that carried the id.
-    """
-    span = f'<a id="{anchor}"></a>'
-    stripped = BLOCK_ID.sub("", line).rstrip()
-    if at_block_end:
-        return f"{stripped}\n\n{span}"
-    return f"{stripped} {span}"
 
 
 def _shift_one_levels(chunk: str, slug: str, anchors: dict[str, str]) -> list[str]:
@@ -234,12 +302,14 @@ def _shift_one_levels(chunk: str, slug: str, anchors: dict[str, str]) -> list[st
 
     A quote heading may sit at level 2 (a note without a `## Цитаты` section) or
     level 3 (the usual shape), and its id comes from the block id alone, so both
-    shapes land on the same `<slug>-quote_N` anchor.
+    shapes land on the same `<slug>-quote_N` anchor. A `^quote_N` id on a
+    NON-heading line cannot become a heading attribute: such a note is stale
+    old-format, and `build_books_appendix` refuses to render it.
     """
     raw_lines = remove_frontmatter(chunk).split("\n")
     in_code = False
     out: list[str] = []
-    for index, line in enumerate(raw_lines):
+    for line in raw_lines:
         if FENCE.match(line):
             in_code = not in_code
             out.append(line)
@@ -250,17 +320,7 @@ def _shift_one_levels(chunk: str, slug: str, anchors: dict[str, str]) -> list[st
 
         match = HEADING.match(line)
         if not match:
-            # a quote id on a prose/blockquote line: the id cannot become a
-            # heading attribute, so the anchor is emitted as a span and the id
-            # itself disappears (pandoc would print it as text)
-            block_id = BLOCK_ID.search(line)
-            if block_id and block_id.group(1) in anchors:
-                next_line = raw_lines[index + 1] if index + 1 < len(raw_lines) else ""
-                out.append(
-                    _emit_quote_anchor(line, anchors[block_id.group(1)], not next_line)
-                )
-            else:
-                out.append(line)
+            out.append(line)
             continue
 
         level = min(len(match.group(1)) + 1, 6)
@@ -295,8 +355,8 @@ def render_book_appendix_section(content: str, slug: str) -> str:
         ### Цитаты
         #### 1 {#<slug>-quote_1}
 
-    A quote whose block id rode a blockquote instead of a heading keeps its text
-    byte-identical and gains an `<a id="<slug>-quote_N"></a>` after the block.
+    A quote whose block id rode a blockquote instead of a heading is NOT
+    supported: `build_books_appendix` refuses such a note before calling this.
     """
     title = book_heading_title(content) or slug
     body = remove_frontmatter(content).lstrip("\n")
@@ -307,10 +367,13 @@ def render_book_appendix_section(content: str, slug: str) -> str:
 
 
 def collect_anchor_ids(content: str) -> list[str]:
-    """Every anchor the document declares: `{#id}` heading attributes and the
-    explicit `<a id="…"></a>` spans the appendix emits.
+    """Every anchor the document declares: a `{#id}` heading attribute, or an
+    explicit `<a id="…"></a>` span.
 
-    Line-based and fence-aware, like the appendix writer itself.
+    Line-based and fence-aware, like the appendix writer itself. The span shape is
+    no longer produced by the appendix — it belongs to the site side, which turns
+    a block id into a span via `text_forge/anchor_ids.py` — but a document may
+    carry one, so the collectors keep reading it.
     """
     ids: list[str] = []
     in_code = False
@@ -404,6 +467,12 @@ def build_books_appendix(docs_dir: Path, cited_slugs: set[str]) -> tuple[str, se
     Returns (appendix markdown, slugs actually written). A missing note is
     skipped with a warning: the book stays as dead as it was, instead of taking
     the reader to an empty section.
+
+    A note whose `^quote_N` ids ride blockquote lines instead of headings was
+    already recorded in `unsupported_quote_ids` by the citation scan; such a note
+    is left out of the appendix, and the build fails on it at
+    `assert_quote_anchors_declared` — naming every stale file at once instead of
+    stopping at the first.
     """
     books_dir = docs_dir / "books"
     sections: list[str] = []
@@ -419,6 +488,10 @@ def build_books_appendix(docs_dir: Path, cited_slugs: set[str]) -> tuple[str, se
         except (OSError, UnicodeError) as e:
             print(f"[ERROR] Reading book note {note}: {e}", file=sys.stderr)
             continue
+        if slug in unsupported_quote_ids:
+            # stale quote-id format: rendering it would drop the ids and leave the
+            # chapters' links pointing at nothing
+            continue
         print(f"[INFO] Appendix book: {slug}", file=sys.stderr)
         sections.append(render_book_appendix_section(content, slug))
         written.add(slug)
@@ -428,7 +501,8 @@ def build_books_appendix(docs_dir: Path, cited_slugs: set[str]) -> tuple[str, se
         # an empty "Приложение" heading would be a chapter with nothing in it
         return "", written
 
-    return f"# {APPENDIX_HEADING}\n\n" + "\n".join(sections).rstrip("\n") + "\n", written
+    appendix = f"# {APPENDIX_HEADING}\n\n" + "\n".join(sections).rstrip("\n") + "\n"
+    return appendix, written
 
 
 def extract_nav_items(
@@ -834,6 +908,9 @@ def mode_mkdocs(config_path: str, site_url: str = DEFAULT_SITE_URL) -> str:
     # A nav file whose name says 'reference' is therefore not scanned, and links
     # it makes to books that no chapter cited become external (see below).
     nav_files = flatten_nav_files(config["nav"])
+    # a fresh report per run: one left over from a previous build would fail it
+    global unsupported_quote_ids
+    unsupported_quote_ids = {}
     cited_slugs: set[str] = set()
     for filepath in nav_files:
         # the reference list enumerates the whole shelf, so it is not a citation
@@ -846,9 +923,14 @@ def mode_mkdocs(config_path: str, site_url: str = DEFAULT_SITE_URL) -> str:
         if not file_path.exists():
             continue
         try:
-            cited_slugs |= scan_book_citations(
-                remove_frontmatter(file_path.read_text(encoding="utf-8"))
-            )
+            chapter = remove_frontmatter(file_path.read_text(encoding="utf-8"))
+            cited_slugs |= scan_book_citations(chapter)
+            # every book this chapter cites is checked for ids that no heading
+            # carries (stale pre-0.7.4 corpus) — see `scan_stale_quote_ids`
+            for slug in scan_book_citations(chapter):
+                note = docs_dir / "books" / f"{slug}.md"
+                if note.exists():
+                    scan_stale_quote_ids(note.read_text(encoding="utf-8"), slug)
         except (OSError, UnicodeError) as e:
             print(f"[ERROR] Scanning citations in {file_path}: {e}", file=sys.stderr)
             continue
@@ -952,6 +1034,10 @@ def mode_mkdocs(config_path: str, site_url: str = DEFAULT_SITE_URL) -> str:
     # path (`books/<slug>.md#quote_1`) instead of being a bare `#quote_1` that no
     # longer says which book it means.
     result = "".join(combined)
+    # the appendix is written BEFORE the links are rewritten, so the rewrite knows
+    # which cited books really got a section: a book that did not (no note on
+    # disk, or a stale quote-id format) is one the appendix cannot answer, and its
+    # links go to the live site page that does
     appendix, appendix_slugs = build_books_appendix(docs_dir, cited_slugs)
     # the rewrite covers the WHOLE document — chapters and the reference list
     # alike — and it keys on the slugs actually linked, so a reference-list link
@@ -968,6 +1054,9 @@ def mode_mkdocs(config_path: str, site_url: str = DEFAULT_SITE_URL) -> str:
 
     # two sections with the same anchor would silently mislead every link to it
     assert_unique_anchor_ids(result)
+    # a stale quote-id corpus (ids off the headings) is reported as itself, not as
+    # an unresolvable link — the defect is in the note, not in the chapter
+    assert_quote_anchors_declared()
     # and no book link may survive without a target
     assert_resolvable_book_links(result)
 

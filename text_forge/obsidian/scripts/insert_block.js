@@ -143,12 +143,15 @@ function _frontmatter(content, key) {
 
 // цитата страницы: заголовок `### Цитата N ^quote_N` открывает цитату, её текст —
 // следующая группа строк `> …`; абзацы внутри одной цитаты разделяет «голый» `>`
-// — он часть группы; id уходит в анкор ссылки и в вставляемый текст НЕ попадает
+// — он часть группы; id уходит в анкор ссылки и в вставляемый текст НЕ попадает.
+// Формат корпуса один: id стоит на заголовке (текст заголовка свободен).
+// Старая форма (id на последней строке самой блокцитаты, заголовков нет) не
+// поддерживается: такая страница даёт пустой список, а сборку ломает combiner
+// (см. scan_stale_quote_ids в scripts/mkdocs-combine.py)
 function _quotes(page) {
   const quotes = [];
   let id = null;
   let lines = [];
-  let sawHeading = false; // хоть один заголовок цитаты -> страница нового формата
   for (const line of page.split('\n')) {
     const h = line.match(QUOTE_HEADING);
     if (h) {
@@ -156,7 +159,6 @@ function _quotes(page) {
       _collectHeading(id, lines, quotes);
       id = h[1];
       lines = [];
-      sawHeading = true;
       // the heading is not the end of the quote it just opened — without this
       // `continue` the fall-through below would close it with an empty body
       continue;
@@ -171,12 +173,10 @@ function _quotes(page) {
     lines = [];
   }
   _collectHeading(id, lines, quotes);
-  // совместимость со страницами старого формата (id на последней строке самой
-  // блокцитаты, заголовков нет) — corpus до перегенерации
-  return sawHeading ? quotes : _legacyQuotes(page);
+  return quotes;
 }
 
-// цитата нового формата: id с заголовка + тело-блокцитата
+// цитата: id с заголовка + тело-блокцитата
 function _collectHeading(id, lines, quotes) {
   const body = lines.join('\n').trim();
   if (!id || !body) return;
@@ -184,36 +184,6 @@ function _collectHeading(id, lines, quotes) {
   quotes.push({
     id: id,
     n: id.split('_')[1],
-    text: body,
-    preview: preview.length > 80 ? preview.slice(0, 80) + '…' : preview,
-  });
-}
-
-// старый формат: id на последней строке группы `> …` (page без заголовков цитат)
-function _legacyQuotes(content) {
-  const quotes = [];
-  let lines = [];
-  for (const line of content.split('\n')) {
-    if (line.startsWith('>')) {
-      lines.push(line.replace(/^>\s?/, ''));
-    } else if (lines.length) {
-      _legacyCollect(lines, quotes);
-      lines = [];
-    }
-  }
-  _legacyCollect(lines, quotes);
-  return quotes;
-}
-
-function _legacyCollect(lines, quotes) {
-  const text = lines.join('\n').trim();
-  const m = text.match(/ \^(quote_\d+)$/);
-  if (!m) return;
-  const body = text.slice(0, -m[0].length).trim();
-  const preview = body.replace(/\n/g, ' ');
-  quotes.push({
-    id: m[1],
-    n: m[1].split('_')[1],
     text: body,
     preview: preview.length > 80 ? preview.slice(0, 80) + '…' : preview,
   });

@@ -138,17 +138,19 @@ livelib_review: "https://www.livelib.ru/review/3575245"
 
 Странно, что рецензия только одна
 
-Первая же история сильно тянет вниз - туда, куда не хочется.
-
 ## Цитаты
+
+### 1 ^quote_1
 
 > Одна история про счастье.
 >
-> Конец первой цитаты. ^quote_1
+> Конец первой цитаты.
 
 — [LiveLib](https://www.livelib.ru/quote/47123888)
 
-> Вторая история про счастье. ^quote_2
+### Цитата 2 ^quote_2
+
+> Вторая история про счастье.
 
 — [LiveLib](https://www.livelib.ru/quote/47123889)
 """
@@ -295,46 +297,61 @@ class TestAppendixSection:
     def test_note_headings_shift_one_level(self, tmp_path):
         config = write_project(tmp_path)
         text, _, _ = combine(config)
-        section = book_section(text, "dubas-momenty-schastya")
         # `## Цитаты` arrived as `###`, the quote heading as `####`
         vayl = book_section(text, "vayl-rodnaya-rech")
         assert [len(m.group(1)) for m in BOOK_HEADER.finditer(vayl)] == [2, 3, 4]
-        # the other note: its quotes are blockquote-shaped, so its headings are
-        # the book section (`##`), the review (`###`) and the quotes section (`###`)
-        assert [len(m.group(1)) for m in BOOK_HEADER.finditer(section)] == [2, 3, 3]
 
     def test_quote_text_and_attribution_are_kept(self, tmp_path):
         config = write_project(tmp_path)
         text, _, _ = combine(config)
-        section = book_section(text, "dubas-momenty-schastya")
-        assert "> Одна история про счастье." in section
-        # the blockquote keeps its shape; only the block id leaves the last line
-        assert ">\n> Конец первой цитаты." in section
-        assert "> Вторая история про счастье." in section
+        vayl = book_section(text, "vayl-rodnaya-rech")
+        assert "> Радищев родил декабристов." in vayl
         # livelib is an external site: the attribution link stays as it is
-        assert "— [LiveLib](https://www.livelib.ru/quote/47123888)" in section
+        assert "— [LiveLib](https://www.livelib.ru/quote/180475)" in vayl
 
-    def test_quote_id_on_a_blockquote_line_becomes_an_anchor_span(self, tmp_path):
-        """The shape most real notes have: the id rides the last line of the
-        blockquote, so no heading can carry it — an explicit span does, and the
-        link from a chapter still lands."""
+    def test_blockquote_carried_id_is_not_a_link_target(self, tmp_path):
+        """The pre-0.7.4 shape — the id at the end of a blockquote line — is not
+        supported: no heading can carry it, and a silent `<a id>` span would leave
+        an anchor the corpus does not actually have. So the stale note gets no
+        section at all, its chapter link falls back to the live site page, and the
+        build stops — see `TestStaleCorpusGuard`."""
+        stale = DUBAS_MD.replace(
+            # one id moves onto the blockquote line (old shape), the other stays
+            # on its heading (supported shape): the note is mixed
+            "### 1 ^quote_1\n\n> Одна история про счастье.\n>\n> Конец первой цитаты.",
+            "> Одна история про счастье.\n>\n> Конец первой цитаты. ^quote_1",
+        )
+        config = write_project(tmp_path, books={"dubas-momenty-schastya": stale})
+        with pytest.raises(ValueError) as excinfo:
+            combine(config)
+        # no `#<slug>-quote_N` was fabricated for it: the guard reports it instead
+        assert "dubas-momenty-schastya-quote_" not in str(excinfo.value)
+        assert "dubas-momenty-schastya.md" in str(excinfo.value)
+
+    def test_heading_id_is_the_only_anchor_shape(self, tmp_path):
+        """`### N ^quote_N` -> `#### N {#<slug>-quote_N}`; the id leaves the
+        heading text but survives as the heading attribute. The heading TEXT is
+        free — `### 1` and `### Цитата 2` land on the same kind of anchor."""
         config = write_project(tmp_path)
         text, _, _ = combine(config)
-        section = book_section(text, "dubas-momenty-schastya")
-        assert '<a id="dubas-momenty-schastya-quote_1"></a>' in section
-        assert '<a id="dubas-momenty-schastya-quote_2"></a>' in section
-        assert "^quote_" not in section
-        # the span for a blockquote sits after the block, not inside its `>` lines
-        for line in section.split("\n"):
-            assert not line.startswith(">") or 'id="' not in line
+        vayl = book_section(text, "vayl-rodnaya-rech")
+        assert "#### 1 {#vayl-rodnaya-rech-quote_1}" in vayl
+        assert "^quote_" not in vayl
+        dubas = book_section(text, "dubas-momenty-schastya")
+        assert "#### 1 {#dubas-momenty-schastya-quote_1}" in dubas
+        # a worded heading keeps its text and still carries the namespaced id
+        assert "#### Цитата 2 {#dubas-momenty-schastya-quote_2}" in dubas
 
     def test_quote_heading_numbering_is_not_invented(self, tmp_path):
         """A quote that carries no id gets no header — nothing is invented for it."""
-        config = write_project(tmp_path)
+        unnumbered = DUBAS_MD.replace("### 1 ^quote_1\n\n", "")
+        config = write_project(tmp_path, books={"dubas-momenty-schastya": unnumbered})
         text, _, _ = combine(config)
         section = book_section(text, "dubas-momenty-schastya")
-        # both quotes of this note are blockquote-shaped, so no `#### N` appears
-        assert "#### " not in section
+        # the quote that lost its heading got no `#### N` in its place
+        assert "#### 1 " not in section
+        # the other one, which kept its heading, still has its anchor
+        assert "#### Цитата 2 {#dubas-momenty-schastya-quote_2}" in section
 
     def test_review_id_is_dropped(self, tmp_path):
         """`{#review}` would collide between books; the book's own `<slug>` is
@@ -437,21 +454,14 @@ class TestIdCollisionGuard:
             combine(config)
 
     def test_duplicate_quote_id_fails_loudly(self, tmp_path):
-        """One note declaring the same block id twice would emit it twice."""
+        """One note declaring the same quote id on two headings would emit it
+        twice."""
         stolen = VAYL_MD.replace(
-            "### 1 ^quote_1", "### 1 ^quote_1\n\n> Ещё цитата. ^quote_1\n"
+            "### 1 ^quote_1",
+            "### 1 ^quote_1\n\n### 1 again ^quote_1\n\n> Ещё цитата.\n",
         )
         config = write_project(tmp_path, books={"vayl-rodnaya-rech": stolen})
         with pytest.raises(ValueError, match="vayl-rodnaya-rech-quote_1"):
-            combine(config)
-
-    def test_duplicate_blockquote_anchor_fails_loudly(self, tmp_path):
-        """The span shape is guarded too: two identical ids in one document."""
-        stolen = DUBAS_MD.replace(
-            "> Конец первой цитаты. ^quote_1", "> Конец первой цитаты. ^quote_2"
-        )
-        config = write_project(tmp_path, books={"dubas-momenty-schastya": stolen})
-        with pytest.raises(ValueError, match="dubas-momenty-schastya-quote_2"):
             combine(config)
 
     def test_a_chapter_anchor_colliding_with_a_slug_fails_loudly(self, tmp_path):
@@ -465,10 +475,119 @@ class TestIdCollisionGuard:
     def test_the_plain_project_has_no_collision(self, tmp_path):
         config = write_project(tmp_path)
         text, _, _ = combine(config)
-        # ids arrive in two shapes: heading attributes and `<a id="…">` spans
-        ids = re.findall(r"\{#([^}]+)\}", text) + re.findall(r'id="([^"]+)"', text)
+        # ids arrive as heading attributes only — the `<a id="…">` span shape is gone
+        ids = re.findall(r"\{#([^}]+)\}", text)
         assert ids, "the appendix should declare anchors"
+        assert not re.findall(r'<a id="[^"]+"></a>', text)
         assert len(ids) == len(set(ids))
+
+
+# --------------------------------------------------------------------------- #
+# 4b. stale-corpus guard: a `^quote_N` id no heading carries                  #
+# --------------------------------------------------------------------------- #
+
+
+class TestStaleCorpusGuard:
+    """The one supported corpus shape is a quote id on a heading:
+    `### N ^quote_N` (the heading TEXT is free — the id is the contract).
+
+    The pre-0.7.4 shape — the id at the end of a blockquote line — cannot become
+    a heading attribute, and emitting a substitute anchor would fabricate an
+    anchor the corpus does not have. So the build STOPS instead, naming the file
+    and the ids: a silent dangling `#<slug>-quote_N` is what this prevents.
+    """
+
+    STALE_BOOK_MD = """---
+title: "Старая страница"
+author: Кобо Абэ
+---
+
+## Цитаты
+
+> Первая цитата.
+>
+> Конец первой. ^quote_1
+
+— [LiveLib](https://www.livelib.ru/quote/1)
+
+> Вторая цитата. ^quote_2
+
+— [LiveLib](https://www.livelib.ru/quote/2)
+"""
+
+    def cite_stale_book(self, tmp_path) -> pathlib.Path:
+        """Write the project, then make a chapter cite the stale note — the guard
+        watches the books the text really cites, and an uncited note is nobody's
+        anchor. `write_project` returns the config, so the chapter is rewritten
+        against its own `docs/` directory."""
+        config = write_project(tmp_path, books={"stale-book": self.STALE_BOOK_MD})
+        chapter = (
+            CHAPTER_MD + "\nСтарая страница: [Старая](books/stale-book.md#quote_1).\n"
+        )
+        (config.parent / "docs" / "p1-chapter.md").write_text(chapter, encoding="utf-8")
+        return config
+
+    def test_blockquote_carried_id_fails_the_combine(self, tmp_path):
+        config = self.cite_stale_book(tmp_path)
+        with pytest.raises(ValueError, match="quote_"):
+            combine(config)
+
+    def test_error_names_the_file_and_the_ids(self, tmp_path):
+        config = self.cite_stale_book(tmp_path)
+        with pytest.raises(ValueError) as excinfo:
+            combine(config)
+        message = str(excinfo.value)
+        # the ids are reported by their block id, which is what a human greps for
+        assert "quote_1" in message
+        assert "quote_2" in message
+        assert "stale-book.md" in message
+
+    def test_error_reaches_the_cli_with_a_nonzero_exit(self, tmp_path):
+        """The guard is a build error, not a warning: `text-forge epub` exits
+        non-zero and the message is in the log."""
+        if shutil.which("pandoc") is None:
+            pytest.skip("pandoc not installed")
+        project = self.cite_stale_book(tmp_path)
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "text_forge.cli",
+                "epub",
+                "--config",
+                str(project),
+                "--build-dir",
+                str(tmp_path / "build"),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            cwd=str(REPO_ROOT),
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        )
+        assert proc.returncode != 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        assert "stale-book.md" in proc.stdout + proc.stderr
+        assert "quote_1" in proc.stdout + proc.stderr
+
+    def test_heading_id_page_still_builds(self, tmp_path):
+        """The guard fires on the stale shape only — a new-format note (id on the
+        heading, any heading text) is unaffected."""
+        config = write_project(tmp_path)
+        text, cited, err = combine(config)
+        assert "vayl-rodnaya-rech" in cited
+        assert "#### 1 {#vayl-rodnaya-rech-quote_1}" in text
+        # the scan of a clean corpus says nothing
+        assert "[ERROR]" not in err
+
+    def test_a_non_quote_block_id_on_a_prose_line_is_not_a_quote(self, tmp_path):
+        """The guard watches `^quote_N` only: some other block id (`^note_1`) is
+        nobody's quote anchor and must not stop a build."""
+        prose = CHAPTER_MD + "\nПометка на строке. ^note_1\n"
+        config = write_project(tmp_path)
+        (config.parent / "docs" / "p1-chapter.md").write_text(prose, encoding="utf-8")
+        text, _, _ = combine(config)
+        assert "^note_1" in text
 
 
 # --------------------------------------------------------------------------- #
@@ -547,14 +666,12 @@ def test_epub_contains_the_appendix_anchors(tmp_path):
     assert "Приложение: цитируемая литература" in xhtml
     assert 'id="dubas-momenty-schastya"' in xhtml
     assert 'id="vayl-rodnaya-rech"' in xhtml
-    # a heading-shaped id arrives as a section id, a blockquote-shaped one as a
-    # span — both must survive the two pandoc passes
+    # the only quote anchor shape left is a HEADING id, and it survives the two
+    # pandoc passes as the section id pandoc gives that heading
     assert 'id="vayl-rodnaya-rech-quote_1"' in xhtml
     assert 'id="dubas-momenty-schastya-quote_1"' in xhtml
     assert 'id="dubas-momenty-schastya-quote_2"' in xhtml
-    # pandoc may re-emit a span as an element; either way the id is there
-    assert xhtml.count('id="dubas-momenty-schastya-quote_1"') >= 1
-    # no dangling book links left in the XHTML
+    # no `books/<slug>.md` path link survives anywhere in the XHTML
     assert "books/dubas-momenty-schastya.md" not in xhtml
     # external attribution survived
     assert "https://www.livelib.ru/quote/47123888" in xhtml
@@ -587,10 +704,11 @@ def test_cli_combine_writes_the_appendix(tmp_path):
     """`text-forge epub` drives the same script through build.py — the appendix
     must reach `build/text_combined.md`.
 
-    The installed copy under `sys.prefix/share/text-forge/scripts/` is what
-    `build.py` resolves, and it is a HARD link to `scripts/`, so an edited
-    script is live without a reinstall. The assertions below pin a book section,
-    which only the new code can produce.
+    The installed copy under `sys.prefix/share/text-forge/scripts/` is a separate
+    file from `scripts/` (uv copies the build artifacts), so it goes stale on every
+    edit: refresh it with `uv sync --offline --reinstall-package sg-text-forge`
+    before running this. The assertions below pin a quote heading anchor, which
+    only the current code can produce.
     """
     if shutil.which("pandoc") is None:
         pytest.skip("pandoc not installed")
@@ -619,3 +737,4 @@ def test_cli_combine_writes_the_appendix(tmp_path):
     combined = (build / "text_combined.md").read_text(encoding="utf-8")
     assert "# Приложение: цитируемая литература" in combined
     assert "## Много счастья без занудства {#dubas-momenty-schastya}" in combined
+    assert "### 1 {#vayl-rodnaya-rech-quote_1}" in combined

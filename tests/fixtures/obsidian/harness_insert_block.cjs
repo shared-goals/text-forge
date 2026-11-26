@@ -128,8 +128,7 @@ function skipRegexLiteral(src, i) {
 
 /** The picker source: the heading regex plus everything _corpusQuote reaches. */
 function loadPicker(src) {
-  const names = ['_corpusQuote', '_frontmatter', '_quotes', '_collectHeading',
-                 '_legacyQuotes', '_legacyCollect'];
+  const names = ['_corpusQuote', '_frontmatter', '_quotes', '_collectHeading'];
   const constLine = src.split('\n').find((l) => l.startsWith('const QUOTE_HEADING'));
   if (!constLine) throw new Error('insert_block.js has no QUOTE_HEADING const');
   return [constLine].concat(names.map((n) => sliceFunction(src, n))).join('\n\n');
@@ -267,12 +266,12 @@ check('6. authorless book signs with the title', async () => {
               'the title stands in for a missing author');
 });
 
-check('7. legacy page (id on the blockquote line) still parses', () => {
+check('7. old-format page (id on the blockquote line) yields nothing', () => {
+  // the legacy parser is gone: without a `### N ^quote_N` heading there is no
+  // quote to offer, and the combine-side guard refuses such a corpus outright
   const legacy = '---\ntitle: "Старая страница"\nauthor: Кобо Абэ\n---\n\n## Цитаты\n\n'
     + '> Первая.\n>\n> Конец. ^quote_1\n\n— [LiveLib](https://www.livelib.ru/quote/1)\n';
-  const quotes = picker._quotes(legacy);
-  assertDeep(quotes.map((q) => q.id), ['quote_1'], 'legacy ids are still collected');
-  assert(!quotes[0].text.includes('^'), 'legacy text is id-free too');
+  assertDeep(picker._quotes(legacy), [], 'no quote heading, no quote');
 });
 
 // ---------------------------------------------------------------------------
