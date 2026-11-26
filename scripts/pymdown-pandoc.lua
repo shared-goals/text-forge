@@ -193,10 +193,9 @@ local function default_title_for(block_type)
 end
 
 -- Video markers: `![type:video](url "Title")` is rendered as a player on the site
--- (text_forge.video). In the book the marker is already turned into a link by
--- build_epub_pipeline before pandoc runs; the rules below are the safety net for
--- markers pandoc parses on its own (a marker inside a list item, for instance).
--- A raw iframe left in an older text becomes the same link.
+-- (text_forge.video). In the book an iframe is useless — EPUB readers ignore it —
+-- and pandoc would otherwise fetch the URL and embed the fetched page as a media
+-- file. So the marker (and any raw iframe left in a text) becomes a plain link.
 local VIDEO_MARKER = 'type:video'
 local VIDEO_LINK_TEXT = 'Watch on YouTube'
 

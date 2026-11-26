@@ -102,32 +102,10 @@ class TestEpubPipeline:
         validate_epub(epub)  # no exception: the book is well-formed
         assert b"shtml" not in epub.read_bytes()  # nothing downloaded from the URL
 
-    def test_typographic_quote_in_title_does_not_leak_as_text(self, tmp_path):
-        # Regression: pandoc does not parse `!"…?”` as an image, so the marker used
-        # to survive into the ebook as literal text.
-        mkdocs_yml = write_project(
-            tmp_path / "quotes",
-            '# Глава\n\n![type:video](https://www.youtube.com/embed/'
-            f'{VIDEO} "What is SoDA?”)\n\nТекст.\n',
-        )
-        result = run_epub(mkdocs_yml, tmp_path / "quotes" / "build")
-        assert result.returncode == 0, result.stderr
-        epub = tmp_path / "quotes" / "build" / "text_book.epub"
-        validate_epub(epub)
-        with zipfile.ZipFile(epub) as book:
-            body = "".join(
-                book.read(name).decode() for name in book.namelist()
-                if name.endswith(".xhtml")
-            )
-        assert "![type:video]" not in body
-        assert f"youtu.be/{VIDEO}" in body
-        assert "What is SoDA?" in body
-
     def test_invalid_xhtml_fails_the_build_with_a_pointer(self, tmp_path, monkeypatch):
         # Pandoc normalises bare attributes on elements it parses natively, so the
         # broken book is injected where pandoc writes it: the point of the test is
         # that the pipeline refuses to finish when the output cannot be parsed.
-        import zipfile
 
         from text_forge import build as build_module
         from text_forge.epub_check import EpubValidationError

@@ -11,10 +11,7 @@ from pathlib import Path
 import yaml
 
 from text_forge.epub_check import validate_epub
-from text_forge.video import (
-    replace_markers_with_links,
-    unrendered_markers,
-)
+from text_forge.video import unrendered_markers
 
 
 def _get_data_path(relative_path: str) -> Path:
@@ -296,14 +293,9 @@ def build_epub_pipeline(
         # Step 1: Combine chapters
         combine_chapters(config_path, combined_md)
 
-        # Step 1b: video markers -> plain links, before pandoc. Pandoc would
-        # otherwise fetch the URL (or, with a typographic quote in the title, keep
-        # the marker as literal text in the book).
-        combined = combined_md.read_text(encoding="utf-8")
-        linked = replace_markers_with_links(combined)
-        if linked != combined:
-            combined_md.write_text(linked, encoding="utf-8")
-        for line_number, line in unrendered_markers(linked):
+        # Report markers the ebook side could not turn into a link (usually a
+        # title quoted with typographic quotes) instead of leaking them silently.
+        for line_number, line in unrendered_markers(combined_md.read_text(encoding="utf-8")):
             print(
                 f"⚠ unrendered video marker at line {line_number}: {line[:120]}",
                 file=sys.stderr,
