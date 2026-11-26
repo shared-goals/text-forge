@@ -224,8 +224,17 @@ check('3. page without quotes -> empty list', () => {
     + 'Полка: Прочтённые\n\nОбычный текст, блокцитат нет.\n';
   assertDeep(picker._quotes(noQuotes), [], 'no headings, no blockquotes');
   const headingWithoutBody = '---\ntitle: "Заголовок без тела"\n---\n\n## Цитаты\n\n'
-    + '### Цитата 1 ^quote_1\n\n— [LiveLib](https://www.livelib.ru/quote/1)\n';
+    + '### 1 ^quote_1\n\n— [LiveLib](https://www.livelib.ru/quote/1)\n';
   assertDeep(picker._quotes(headingWithoutBody), [], 'a heading with no blockquote below yields nothing');
+});
+
+check('3b. heading TEXT is not the contract — any wording parses', () => {
+  const worded = '## Цитаты\n\n### Цитата 7 ^quote_7\n\n> Фраза.\n';
+  assertDeep(picker._quotes(worded).map((q) => q.id), ['quote_7'],
+             'the old "Цитата N" wording still parses: the id is the contract');
+  const bare = '## Цитаты\n\n### 7 ^quote_7\n\n> Фраза.\n';
+  assertDeep(picker._quotes(bare).map((q) => q.id), ['quote_7'],
+             'the bare-number wording parses');
 });
 
 check('4. the block id never leaks into the inserted text', () => {
@@ -251,7 +260,7 @@ check('5. signature keeps books/<slug>.md#quote_N and the author name', async ()
 check('6. authorless book signs with the title', async () => {
   withVault({
     'bez-avtora.md': '---\ntitle: "Книга без автора"\n---\n\n## Цитаты\n\n'
-      + '### Цитата 1 ^quote_1\n\n> Фраза.\n\n— [LiveLib](https://www.livelib.ru/quote/9)\n',
+      + '### 1 ^quote_1\n\n> Фраза.\n\n— [LiveLib](https://www.livelib.ru/quote/9)\n',
   });
   const out = await picker._corpusQuote(makeTp([0, 0]));
   assertEqual(out.signature, '[Книга без автора](books/bez-avtora.md#quote_1){ .author }',

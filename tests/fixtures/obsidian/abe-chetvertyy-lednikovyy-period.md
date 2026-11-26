@@ -21,7 +21,7 @@ livelib_review: "https://www.livelib.ru/review/6413194"
 
 ## Цитаты
 
-### Цитата 1 ^quote_1
+### 1 ^quote_1
 
 > Это было страшное возбуждение. Наконец-то начинается настоящая работа...
 >
@@ -29,7 +29,7 @@ livelib_review: "https://www.livelib.ru/review/6413194"
 
 — [LiveLib](https://www.livelib.ru/quote/42572258)
 
-### Цитата 2 ^quote_2
+### 2 ^quote_2
 
 > Сейчас я всего-навсего одна из ее деталей.
 
