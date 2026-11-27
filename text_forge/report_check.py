@@ -94,6 +94,17 @@ class AddressCheck:
         return strict and bool(self.no_address)
 
 
+#: What a deliberately clean report says in its итог. The checker refuses to
+#: guess: no findings AND no marker means the contract was broken, not that
+#: the text was clean.
+CLEAN_MARKER = "находок нет"
+
+
+def report_declares_clean(report: str) -> bool:
+    """True when the report itself says there was nothing to find."""
+    return CLEAN_MARKER in report.lower()
+
+
 def parse_findings(report: str) -> list[Finding]:
     """Every `### ` block of the report, with its address and quote if present."""
     findings: list[Finding] = []

@@ -144,3 +144,29 @@ def test_compound_quote_exits_one_and_says_where_the_pieces_are(tmp_path):
     assert proc.returncode == 1
     assert "compound quote" in proc.stderr
     assert "line 4" in proc.stderr  # the second piece really is there
+
+
+# --- чистый прогон: ноль находок — это успех, а не поломка ---------------------
+
+NO_FINDINGS_REPORT = """# Отчёт
+
+Проверено 1 строка, заголовок шапки.
+
+## Итог
+
+Находок нет. Разбивок нет. Типографики нет.
+"""
+
+def test_clean_report_with_marker_exits_zero(tmp_path):
+    report = tmp_path / "report.md"
+    report.write_text(NO_FINDINGS_REPORT, encoding="utf-8")
+    proc = _run(str(report), str(_root(tmp_path)))
+    assert proc.returncode == 0
+    assert "clean" in proc.stderr
+
+
+def test_report_without_findings_or_marker_still_fails(tmp_path):
+    report = tmp_path / "report.md"
+    report.write_text("# Отчёт\n\nВсякое, но контракта нет.\n", encoding="utf-8")
+    proc = _run(str(report), str(_root(tmp_path)))
+    assert proc.returncode == 2

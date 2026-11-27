@@ -14,7 +14,8 @@ Exit codes
     1  a finding names a missing file, a line past the end, or a quote that is
        not on that line (all printed; a quote that merely moved says which line
        it is on now)
-    2  the report has no `### ` findings at all —  nothing was verified
+    2  the report has no findings and no clean marker («Находок нет»)
+       — the report contract was not followed
 
 `--strict` also fails on findings with no address. The default tolerates them:
 the report format allows a finding addressed to a section, and one of those is
@@ -34,7 +35,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from text_forge import console
-from text_forge.report_check import check_report, parse_findings
+from text_forge.report_check import check_report, parse_findings, report_declares_clean
 
 EXIT_CLEAN = 0
 EXIT_BAD = 1
@@ -70,10 +71,19 @@ def main(argv: list[str] | None = None) -> int:
         console.fail(f"not a directory: {root}")
         return EXIT_BAD
 
-    findings = parse_findings(report_path.read_text(encoding="utf-8"))
+    report_text = report_path.read_text(encoding="utf-8")
+    findings = parse_findings(report_text)
+    if not findings and report_declares_clean(report_text):
+        # the model wrote a full report and found nothing: the run is clean,
+        # and there is simply nothing for this gate to verify
+        console.title("report check", "clean")
+        console.detail("report", console.rel(report_path))
+        console.done("no findings — nothing to verify")
+        return EXIT_CLEAN
     if not findings:
         console.fail(
-            f"no `### ` findings in {console.rel(report_path)} — nothing verified"
+            f"no `### ` findings in {console.rel(report_path)} and no clean marker — "
+            f"the contract was not followed"
         )
         return EXIT_EMPTY
 
